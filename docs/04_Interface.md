@@ -9,14 +9,23 @@ pip install -r requirements.txt
 python interface/stm32_opt_inmmp_novo.py
 ```
 
-**Executável (opcional)**. O código já trata o modo empacotado: sem console, e a pasta `Medidas/` fica ao lado do `.exe`.
+**Executável para Windows**. Cada [Release](https://github.com/mbelancon/SOI/releases) traz o executável pronto, sem precisar instalar Python:
+
+- `SOI_Controller_vX.Y.Z.exe`: arquivo único. Basta baixar e abrir. A cada abertura ele se descompacta numa pasta temporária, por isso leva alguns segundos para aparecer.
+- `SOI_Controller_vX.Y.Z_pasta.zip`: a mesma interface em pasta. Descompacte e abra `SOI_Controller.exe`. Abre mais rápido.
+
+Nos dois casos a pasta `Medidas/` é criada ao lado do `.exe`. Como o executável não é assinado, o Windows SmartScreen pode avisar na primeira vez: clique em "Mais informações" e "Executar assim mesmo".
+
+O executável é gerado pelo GitHub Actions ([`.github/workflows/executavel-windows.yml`](../.github/workflows/executavel-windows.yml)) sempre que uma Release é publicada, e também pode ser gerado à mão na aba Actions. Para gerar localmente no Windows, num venv limpo:
 
 ```powershell
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "SOI Controller" interface/stm32_opt_inmmp_novo.py
+python -m venv .venv
+.venv\Scripts\pip install -r packaging/requirements-build.txt
+.venv\Scripts\pyinstaller packaging/soi_controller.spec             # arquivo único em dist/
+.venv\Scripts\pyinstaller packaging/soi_controller.spec -- --onedir # pasta em dist/SOI_Controller/
 ```
 
-O executável sai em `dist/`.
+O spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) deixa de fora os módulos não usados do Qt, as traduções e o OpenGL por software, e comprime com o [UPX](https://upx.github.io/) se ele estiver no PATH (`-- --no-upx` desliga).
 
 ## Conexão com o STM32
 
