@@ -38,6 +38,8 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 
 ## Início rápido
 
+**Só quer usar a interface no Windows?** Baixe o `SOI_Controller_vX.Y.Z.exe` da última [Release](https://github.com/mbelancon/SOI/releases/latest) e abra. Não precisa instalar Python. Detalhes em [docs/04_Interface.md](docs/04_Interface.md#instalação-e-execução).
+
 1. Monte o hardware conforme [docs/02_Hardware_e_Ligacoes.md](docs/02_Hardware_e_Ligacoes.md).
 2. Grave o firmware da pasta [`firmware/`](firmware/) com o PlatformIO e um ST-Link:
    ```bash
@@ -75,6 +77,8 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 │   ├── platformio.ini
 │   └── src/main.cpp
 ├── docs/                         Documentação
+├── packaging/                    Spec e dependências do PyInstaller (executável Windows)
+├── .github/workflows/            Geração automática do executável nas Releases
 ├── CHANGELOG.md                  Histórico de versões
 ├── requirements.txt              Dependências Python
 └── LICENSE

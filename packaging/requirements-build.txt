@@ -1,0 +1,9 @@
+# Dependências para gerar o executável (venv limpo, só o necessário).
+# PySide6-Essentials em vez de PySide6: deixa de fora os módulos Addons do Qt
+# (WebEngine, 3D, Charts, Multimedia...), que a interface não usa.
+numpy==2.5.4
+scipy==1.18.1
+pyserial==3.5
+pyqtgraph==0.14.0
+PySide6-Essentials==6.12.0
+pyinstaller==6.22.3

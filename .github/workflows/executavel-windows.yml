@@ -1,0 +1,87 @@
+# Gera o executável da interface para Windows com o PyInstaller.
+# - Manual (aba Actions > "Executável Windows" > Run workflow): os arquivos ficam como artefatos da execução.
+# - Em pull requests que mexem na interface ou no empacotamento: testa a geração.
+# - Ao publicar uma Release no GitHub: os arquivos são anexados à Release.
+name: Executável Windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'interface/**'
+      - 'packaging/**'
+      - '.github/workflows/executavel-windows.yml'
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Instalar dependências (venv só com o necessário)
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\pip install -r packaging/requirements-build.txt
+
+      - name: Gerar executáveis
+        shell: pwsh
+        run: |
+          function Build([string]$out, [string[]]$extra) {
+            .venv\Scripts\pyinstaller --noconfirm --distpath "out\$out" --workpath "build\$out" packaging/soi_controller.spec @extra
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          # Sem UPX: o Controle Inteligente de Aplicativos do Windows 11 bloqueia DLLs comprimidas.
+          Build onefile @()                 # arquivo único (o que vai para os colaboradores)
+          Build onedir @('--', '--onedir')  # pasta (abre mais rápido; distribuída em .zip)
+
+      - name: Testar se os executáveis abrem
+        shell: pwsh
+        run: |
+          foreach ($exe in 'out\onefile\SOI_Controller.exe', 'out\onedir\SOI_Controller\SOI_Controller.exe') {
+            $p = Start-Process $exe -PassThru
+            Start-Sleep -Seconds 25
+            if ($p.HasExited) { Write-Error "$exe fechou sozinho (código $($p.ExitCode))"; exit 1 }
+            Stop-Process -Id $p.Id -Force
+            Write-Host "$exe abriu e continuou rodando"
+          }
+
+      - name: Empacotar e medir
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'dev' }
+          New-Item -ItemType Directory release | Out-Null
+          Copy-Item out\onefile\SOI_Controller.exe "release\SOI_Controller_$tag.exe"
+          Compress-Archive out\onedir\SOI_Controller "release\SOI_Controller_${tag}_pasta.zip" -CompressionLevel Optimal
+          function MB($bytes) { '{0:N1} MB' -f ($bytes / 1MB) }
+          $dir = (Get-ChildItem out\onedir\SOI_Controller -Recurse -File | Measure-Object Length -Sum).Sum
+          $lines = @(
+            '| Variante | Tamanho |', '|---|---|',
+            "| Arquivo único | $(MB (Get-Item out\onefile\SOI_Controller.exe).Length) |",
+            "| Pasta (descompactada) | $(MB $dir) |",
+            "| Pasta (.zip) | $(MB (Get-Item "release\SOI_Controller_${tag}_pasta.zip").Length) |"
+          )
+          $lines | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $lines | Write-Host
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SOI_Controller_windows
+          path: release/*
+
+      - name: Anexar à Release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:GITHUB_REF_NAME" (Get-ChildItem release\*).FullName --clobber
