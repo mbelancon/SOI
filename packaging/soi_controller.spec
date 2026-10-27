@@ -4,14 +4,15 @@
 # Uso (a partir da raiz do repositório, num venv só com requirements-build.txt):
 #   pyinstaller packaging/soi_controller.spec              -> dist/SOI_Controller.exe (arquivo único)
 #   pyinstaller packaging/soi_controller.spec -- --onedir  -> dist/SOI_Controller/ (pasta)
-#   pyinstaller packaging/soi_controller.spec -- --no-upx  -> sem compressão UPX
+#   pyinstaller packaging/soi_controller.spec -- --upx     -> comprime com UPX (não recomendado:
+#     o Controle Inteligente de Aplicativos do Windows 11 bloqueia as DLLs comprimidas)
 import argparse
 import os
 import re
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--onedir', action='store_true')
-parser.add_argument('--no-upx', action='store_true')
+parser.add_argument('--upx', action='store_true')
 opts = parser.parse_args()
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
@@ -67,13 +68,13 @@ common = dict(
     name=NAME,
     debug=False,
     strip=False,
-    upx=not opts.no_upx,
+    upx=opts.upx,
     console=False,
 )
 
 if opts.onedir:
     exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **common)
-    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=not opts.no_upx,
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=opts.upx,
                    upx_exclude=[], name=NAME)
 else:
     exe = EXE(pyz, a.scripts, a.binaries, a.datas, [],

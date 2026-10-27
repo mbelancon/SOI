@@ -20,8 +20,6 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      UPX_VERSION: 4.2.4
     steps:
       - uses: actions/checkout@v4
 
@@ -36,14 +34,6 @@ jobs:
           .venv\Scripts\python -m pip install --upgrade pip
           .venv\Scripts\pip install -r packaging/requirements-build.txt
 
-      - name: Baixar UPX
-        shell: pwsh
-        run: |
-          $url = "https://github.com/upx/upx/releases/download/v$env:UPX_VERSION/upx-$env:UPX_VERSION-win64.zip"
-          Invoke-WebRequest $url -OutFile upx.zip
-          Expand-Archive upx.zip -DestinationPath .
-          "$PWD\upx-$env:UPX_VERSION-win64" | Out-File -FilePath $env:GITHUB_PATH -Append
-
       - name: Gerar executáveis
         shell: pwsh
         run: |
@@ -51,14 +41,14 @@ jobs:
             .venv\Scripts\pyinstaller --noconfirm --distpath "out\$out" --workpath "build\$out" packaging/soi_controller.spec @extra
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
-          Build onefile @()                       # arquivo único com UPX (o que vai para os colaboradores)
-          Build onefile-noupx @('--', '--no-upx') # arquivo único sem UPX (só para comparar o tamanho)
-          Build onedir @('--', '--onedir')        # pasta com UPX (abre mais rápido; distribuída em .zip)
+          # Sem UPX: o Controle Inteligente de Aplicativos do Windows 11 bloqueia DLLs comprimidas.
+          Build onefile @()                 # arquivo único (o que vai para os colaboradores)
+          Build onedir @('--', '--onedir')  # pasta (abre mais rápido; distribuída em .zip)
 
       - name: Testar se os executáveis abrem
         shell: pwsh
         run: |
-          foreach ($exe in 'out\onefile\SOI_Controller.exe', 'out\onefile-noupx\SOI_Controller.exe', 'out\onedir\SOI_Controller\SOI_Controller.exe') {
+          foreach ($exe in 'out\onefile\SOI_Controller.exe', 'out\onedir\SOI_Controller\SOI_Controller.exe') {
             $p = Start-Process $exe -PassThru
             Start-Sleep -Seconds 25
             if ($p.HasExited) { Write-Error "$exe fechou sozinho (código $($p.ExitCode))"; exit 1 }
@@ -77,10 +67,9 @@ jobs:
           $dir = (Get-ChildItem out\onedir\SOI_Controller -Recurse -File | Measure-Object Length -Sum).Sum
           $lines = @(
             '| Variante | Tamanho |', '|---|---|',
-            "| Arquivo único, com UPX | $(MB (Get-Item out\onefile\SOI_Controller.exe).Length) |",
-            "| Arquivo único, sem UPX | $(MB (Get-Item out\onefile-noupx\SOI_Controller.exe).Length) |",
-            "| Pasta com UPX (descompactada) | $(MB $dir) |",
-            "| Pasta com UPX (.zip) | $(MB (Get-Item "release\SOI_Controller_${tag}_pasta.zip").Length) |"
+            "| Arquivo único | $(MB (Get-Item out\onefile\SOI_Controller.exe).Length) |",
+            "| Pasta (descompactada) | $(MB $dir) |",
+            "| Pasta (.zip) | $(MB (Get-Item "release\SOI_Controller_${tag}_pasta.zip").Length) |"
           )
           $lines | Out-File $env:GITHUB_STEP_SUMMARY -Append
           $lines | Write-Host

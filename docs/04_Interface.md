@@ -25,7 +25,7 @@ python -m venv .venv
 .venv\Scripts\pyinstaller packaging/soi_controller.spec -- --onedir # pasta em dist/SOI_Controller/
 ```
 
-O spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) deixa de fora os módulos não usados do Qt, as traduções e o OpenGL por software, e comprime com o [UPX](https://upx.github.io/) se ele estiver no PATH (`-- --no-upx` desliga).
+O spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) deixa de fora os módulos não usados do Qt, as traduções e o OpenGL por software. Não usa o [UPX](https://upx.github.io/): com ele o executável fica uns 14 MB menor, mas o Controle Inteligente de Aplicativos do Windows 11 bloqueia as DLLs comprimidas e a interface não abre (`-- --upx` liga, para testes).
 
 ## Conexão com o STM32
 
