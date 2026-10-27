@@ -14,6 +14,8 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
+__version__ = '1.0.0'      # versão do SOI Controller (ver CHANGELOG.md)
+
 import binascii
 import os
 import re
@@ -1620,7 +1622,7 @@ class StepThread(threading.Thread):
 class LockInWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('SOI Controller - LCTM')
+        self.setWindowTitle(f'SOI Controller {__version__} - LCTM')
         self.resize(1280, 1000)
 
         # --- Parâmetros ---

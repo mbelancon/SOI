@@ -74,9 +74,14 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 │   ├── platformio.ini
 │   └── src/main.cpp
 ├── docs/                         Documentação
+├── CHANGELOG.md                  Histórico de versões
 ├── requirements.txt              Dependências Python
 └── LICENSE
 ```
+
+## Versões
+
+Cada versão publicada tem uma tag `vX.Y.Z` e uma página em [Releases](https://github.com/mbelancon/SOI/releases). O que mudou em cada uma está no [CHANGELOG.md](CHANGELOG.md). O número aparece no título da janela da interface e na constante `FIRMWARE_VERSION` do firmware.
 
 ## Licença
 

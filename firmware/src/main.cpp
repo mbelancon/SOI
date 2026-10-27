@@ -17,6 +17,8 @@
 #include <math.h>
 #include <string.h>
 
+#define FIRMWARE_VERSION "1.0.0"         // versão do firmware (ver CHANGELOG.md)
+
 static const uint32_t LASER_PIN = PA8;    // TIM1_CH1
 #define LASER_PWM_HZ 5000UL              // portadora do PWM do laser
 
