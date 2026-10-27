@@ -64,6 +64,7 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 | [03_Firmware_STM32.md](docs/03_Firmware_STM32.md) | Relógios, timers, ADC, I2S, DMA, USB, protocolo serial e gravação |
 | [04_Interface.md](docs/04_Interface.md) | Instalação, funcionalidades e especificações da interface |
 | [05_Componentes.md](docs/05_Componentes.md) | Por que STM32, OPT101 e INMP441: características e papel de cada um |
+| [06_Desempenho_e_Aplicacoes.md](docs/06_Desempenho_e_Aplicacoes.md) | Velocidade e resolução das medidas ópticas no tempo; lente térmica, espelho térmico e luminescência |
 
 ## Estrutura do repositório
 
