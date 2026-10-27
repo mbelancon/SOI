@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# Medidas geradas pela interface (CSV, PNG, ZIP)
+Medidas/
+interface/Medidas/
+
+# PlatformIO
+.pio/
+firmware/.vscode/
+.vscode/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
