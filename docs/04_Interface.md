@@ -16,6 +16,14 @@ python interface/stm32_opt_inmmp_novo.py
 
 Nos dois casos a pasta `Medidas/` é criada ao lado do `.exe`. Como o executável não é assinado, o Windows SmartScreen pode avisar na primeira vez: clique em "Mais informações" e "Executar assim mesmo".
 
+**Processador necessário.** O executável e as versões atuais do numpy (2.4 ou mais nova) e do Qt (6.10 ou mais nova) exigem um processador x86-64 com as instruções SSSE3, SSE4.1, SSE4.2 e POPCNT, o nível chamado x86-64-v2. Qualquer Intel desde 2009 (Core i3/i5/i7 de 1ª geração em diante) ou AMD desde 2011 (FX/Bulldozer, Ryzen) atende. Em processadores mais antigos, como AMD Phenom II/Athlon II e Intel Core 2, o programa não abre e mostra:
+
+```
+ImportError: DLL load failed while importing _multiarray_umath: Uma rotina de inicialização da biblioteca de vínculo dinâmico (DLL) falhou.
+```
+
+Instalar driver ou o Visual C++ não resolve, porque faltam instruções no próprio processador. Nesses PCs é possível rodar com bibliotecas mais antigas (por exemplo, numpy 2.3 e PyQt5 5.15), mas num teste com um Phenom II o computador não deu conta da taxa de dados do INMP441, e o sinal ficou cortado. Use um PC mais novo.
+
 O executável é gerado pelo GitHub Actions ([`.github/workflows/executavel-windows.yml`](../.github/workflows/executavel-windows.yml)) sempre que uma Release é publicada, e também pode ser gerado à mão na aba Actions. Para gerar localmente no Windows, num venv limpo:
 
 ```powershell
