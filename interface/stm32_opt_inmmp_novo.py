@@ -113,9 +113,25 @@ OK_COLOR = '#e6ffe6'
 WARN_COLOR = '#fff3cd'
 
 
+# Valores de τ do passa-baixas do lock-in (sequência 1–3–10, como nos lock-ins comerciais).
+# As setas do campo τ andam por esta lista; um valor digitado fora dela também é aceito.
+TAU_STEPS = (0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
+TAU_MIN, TAU_MAX = TAU_STEPS[0], TAU_STEPS[-1]
+
+
+def auto_tau(f):
+    '''τ automático ao mudar a frequência: ~3,2 períodos da modulação (equivale ao antigo corte de 5 % de f),
+    limitado a 0,32–2 s e arredondado para o valor mais próximo de TAU_STEPS (escala log): 0,3 s acima de
+    ~5,8 Hz, 1 s de ~1,8 a 5,8 Hz e 3 s abaixo disso.'''
+    tau = float(np.clip(1.0 / (2.0 * np.pi * 0.05 * max(f, 1e-6)), 1.0 / (2.0 * np.pi * 0.5),
+                        1.0 / (2.0 * np.pi * 0.08)))
+    return min(TAU_STEPS, key=lambda v: abs(np.log(v / tau)))
+
+
 def get_effective_cutoffs(f):
-    '''Cortes adaptativos de filtro conforme a frequência de modulação.'''
-    lp = float(np.clip(f * 0.05, 0.08, 0.50))
+    '''Cortes adaptativos de filtro conforme a frequência de modulação: o passa-baixas vem do τ
+    automático (auto_tau) e o passa-altas fica em 2 % de f, entre 0,01 e 0,05 Hz.'''
+    lp = 1.0 / (2.0 * np.pi * auto_tau(f))
     hp = float(np.clip(f * 0.02, 0.01, 0.05))
     return lp, hp
 
@@ -125,6 +141,19 @@ def lp_tau(cutoff, fs):
     com a = 2*pi*fc/fs: tau = -1/(fs*ln(1-a)), que tende a 1/(2*pi*fc) quando fc << fs.'''
     a = 2.0 * np.pi * cutoff / fs
     return float('inf') if a >= 1.0 else -1.0 / (fs * np.log1p(-a))
+
+
+def tau_cutoff(tau, fs):
+    '''Inverso de lp_tau: corte (Hz) que dá exatamente a constante de tempo tau (s) por polo na taxa fs.'''
+    return fs * -np.expm1(-1.0 / (fs * tau)) / (2.0 * np.pi)
+
+
+def lp_info(tau):
+    '''Corte de -3 dB, banda equivalente de ruído (ENBW) e espera recomendada do passa-baixas do lock-in
+    (2 polos iguais em cascata, 12 dB/oitava) para um τ por polo.'''
+    f3 = np.sqrt(np.sqrt(2.0) - 1.0) / (2.0 * np.pi * tau)     # -3 dB de dois polos: 0,644/(2πτ)
+    enbw = 1.0 / (8.0 * tau)
+    return f3, enbw, 9.0 * tau
 
 
 def actual_mod_freq(f):
@@ -702,18 +731,36 @@ def fmt_tau(tau):
     return f'τ = {tau * 1e3:.3g} ms' if tau < 1.0 else f'τ = {tau:.3g} s'
 
 
-LP_TIP = ('Passa-baixas aplicado depois da demodulação (2 polos em cascata): define a banda do lock-in.\n'
-          'Corte menor = menos ruído e leitura mais estável, porém resposta mais lenta (τ maior).\n'
-          'Deve ficar bem abaixo de 2× a frequência de modulação, para rejeitar o resíduo em 2f.\n'
-          'Ao mudar a frequência, volta ao automático: 5 % da frequência, entre 0,08 e 0,5 Hz.')
+def fmt_hz(f):
+    return f'{f * 1e3:.3g} mHz' if f < 1.0 else f'{f:.3g} Hz'
+
+
+def fmt_seconds(s):
+    return f'{s * 1e3:.3g} ms' if s < 1.0 else f'{s:.3g} s'
+
+
+def fmt_lp_info(tau):
+    '''Texto curto mostrado ao lado do τ de cada lock-in.'''
+    f3, enbw, wait = lp_info(tau)
+    return f'−3 dB: {fmt_hz(f3)}   ENBW: {fmt_hz(enbw)}   espera: {fmt_seconds(wait)}'
+
+
+TAU_TIP = ('Constante de tempo de cada polo do passa-baixas aplicado depois da demodulação (2 polos em cascata).\n'
+           'τ maior = menos ruído e leitura mais estável, porém resposta mais lenta.\n'
+           'As setas andam na sequência 1–3–10: 1 ms, 3 ms, 10 ms … 30 s, 100 s. Também aceita um valor digitado\n'
+           '(ex.: 0,5 s ou 200 ms).\n'
+           'Use τ de pelo menos ~3 períodos da modulação (τ ≥ 3/f) para rejeitar o resíduo em 2f.\n'
+           'Ao mudar a frequência, volta ao automático: ~3 períodos, arredondado para 0,3 s, 1 s ou 3 s.')
 HP_TIP = ('Passa-altas de 1 polo antes da demodulação: estima e remove o nível DC do sinal\n'
           '(luz ambiente, offset do sensor), deixando só a parte modulada.\n'
           'Precisa ficar bem abaixo da frequência de modulação: corte alto atenua e adianta a fase do sinal.\n'
           'No OPT101 o DC estimado também é o usado em R/DC e na coluna DC_Offset das varreduras.\n'
           'Ao mudar a frequência, volta ao automático: 2 % da frequência, entre 0,01 e 0,05 Hz.')
-TAU_TIP = ('Constante de tempo de cada polo do passa-baixas, calculada a partir do corte (τ ≈ 1/(2π·corte)).\n'
-           'Após um degrau, a saída atinge ~95% em 4,7τ e ~99% em 6,6τ.\n'
-           'As varreduras esperam 9τ antes de medir cada ponto.')
+LP_INFO_TIP = ('Calculados a partir do τ (2 polos em cascata, 12 dB/oitava):\n'
+               '−3 dB: frequência de corte do filtro, 0,644/(2πτ).\n'
+               'ENBW: banda equivalente de ruído, 1/(8τ). O ruído na saída cresce com √ENBW.\n'
+               'espera: 9τ, tempo para a saída chegar a ~0,1 % do valor final após um degrau\n'
+               '(~95 % em 4,7τ e ~99 % em 6,6τ). É o que as varreduras esperam em cada ponto.')
 
 
 # ============================================================================
@@ -1597,6 +1644,51 @@ class RefreshComboBox(QtWidgets.QComboBox):
         super().showPopup()
 
 
+class TauSpinBox(QtWidgets.QDoubleSpinBox):
+    '''Campo de τ (s): mostra "300 ms" / "1 s", aceita valores digitados com ou sem unidade e as setas
+    andam pela sequência 1–3–10 de TAU_STEPS.'''
+
+    def __init__(self, value, slot=None, width=90):
+        super().__init__()
+        self.setDecimals(6)
+        self.setRange(TAU_MIN, TAU_MAX)
+        self.setValue(value)
+        self.setKeyboardTracking(False)   # só dispara ao confirmar (Enter/perder foco)
+        self.setFixedWidth(width)
+        if slot is not None:
+            self.valueChanged.connect(slot)
+
+    def textFromValue(self, v):
+        return f'{v * 1e3:.4g} ms' if v < 1.0 else f'{v:.4g} s'
+
+    @staticmethod
+    def _parse(text):
+        m = re.fullmatch(r'\s*([0-9]*[.,]?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*(ms|s)?\s*', text)
+        if not m:
+            return None
+        v = float(m.group(1).replace(',', '.'))
+        return v * 1e-3 if m.group(2) == 'ms' else v
+
+    def valueFromText(self, text):
+        v = self._parse(text)
+        return self.value() if v is None else v
+
+    def validate(self, text, pos):
+        v = self._parse(text)
+        if v is not None and TAU_MIN <= v <= TAU_MAX:
+            return QtGui.QValidator.Acceptable, text, pos
+        return QtGui.QValidator.Intermediate, text, pos
+
+    def stepBy(self, steps):
+        v = self.value()
+        for _ in range(abs(steps)):
+            if steps > 0:
+                v = next((s for s in TAU_STEPS if s > v * (1.0 + 1e-6)), TAU_MAX)
+            else:
+                v = next((s for s in reversed(TAU_STEPS) if s < v * (1.0 - 1e-6)), TAU_MIN)
+        self.setValue(v)
+
+
 class StepThread(threading.Thread):
     '''Chama step() repetidamente em thread própria até stop().'''
 
@@ -1628,7 +1720,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         # --- Parâmetros ---
         self.ref_freq = 5.0
         self.laser_power = 0.4
-        self.cutoff_lp, self.cutoff_hp = get_effective_cutoffs(self.ref_freq)
+        self.cutoff_hp = get_effective_cutoffs(self.ref_freq)[1]
+        self.cutoff_lp = tau_cutoff(auto_tau(self.ref_freq), FS)
         self.normalize_mode = False
 
         # --- DSP do OPT101 (PyLockIn, definido neste arquivo) ---
@@ -1645,7 +1738,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_snr_db = None              # SNR da janela mais recente (alerta de sinal baixo)
         self.audio_snr_alert = LOW_SIGNAL_SNR_DB
         # Filtros do lock-in do INMP441: começam iguais aos do OPT101, mas são independentes
-        self.audio_cutoff_lp = self.cutoff_lp
+        self.audio_cutoff_lp = tau_cutoff(auto_tau(self.ref_freq), AUDIO_FS_REAL)
         self.audio_cutoff_hp = self.cutoff_hp
         self.audio_mains = False
         self.audio_lock = threading.Lock()    # protege o estado do áudio (thread do INMP441)
@@ -1997,7 +2090,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         bottom.addLayout(side, 1)
         root.addLayout(bottom, 4)
 
-        self.sp_lp = self._dspin(0.0001, 500.0, self.cutoff_lp, 4, 0.01, self.on_lp)
+        self.sp_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_tau)
         self.sp_hp = self._dspin(0.0001, 500.0, self.cutoff_hp, 4, 0.01, self.on_hp)
 
         # Análise da curva (acessível apenas com o gráfico pausado no modo Valor Médio)
@@ -2182,7 +2275,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.li_group = QtWidgets.QWidget()
         li_lay = QtWidgets.QHBoxLayout(self.li_group)
         li_lay.setContentsMargins(0, 0, 0, 0)
-        self.lbl_tau = self._filter_row(li_lay, self.sp_lp, self.sp_hp)
+        self.lbl_tau = self._filter_row(li_lay, self.sp_tau, self.sp_hp)
         self.update_tau_labels()
         li_lay.addStretch(1)
         self.mode_params.addWidget(self.li_group)
@@ -2271,9 +2364,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_li_group = self._group('Lock-in')
         audio_params = QtWidgets.QHBoxLayout(self.audio_li_group)
         audio_params.setContentsMargins(6, 2, 6, 2)
-        self.sp_audio_lp = self._dspin(0.0001, 500.0, self.audio_cutoff_lp, 4, 0.01, self.on_audio_lp)
+        self.sp_audio_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_audio_tau)
         self.sp_audio_hp = self._dspin(0.0001, 500.0, self.audio_cutoff_hp, 4, 0.01, self.on_audio_hp)
-        self.lbl_audio_tau = self._filter_row(audio_params, self.sp_audio_lp, self.sp_audio_hp)
+        self.lbl_audio_tau = self._filter_row(audio_params, self.sp_audio_tau, self.sp_audio_hp)
         self.update_tau_labels()
         self.chk_audio_mains = QtWidgets.QCheckBox('Filtro 60 Hz')
         self.chk_audio_mains.setToolTip('Rejeita 60 Hz e múltiplos (até 1,5 kHz) no sinal do lock-in.\n'
@@ -2529,7 +2622,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 'Integração longa: durante a varredura os dois passa-baixas passam a ter o τ escolhido (restaurados no fim);\n'
                 'espera 9τ e faz a média por 1τ. Menos ruído por ponto, varredura mais lenta.')
             self.dual_mode_w[kind] = cmb
-            self.dual_tau_w[kind] = self._dspin(0.001, 100.0, 1.0, 3, 0.5, None, width=70)
+            self.dual_tau_w[kind] = TauSpinBox(1.0, None, width=80)
         # Nomes fixos: usados pelas preferências (QSettings)
         self.cmb_dual_mode_p, self.cmb_dual_mode_f = self.dual_mode_w['P'], self.dual_mode_w['F']
         self.sp_dual_tau_p, self.sp_dual_tau_f = self.dual_tau_w['P'], self.dual_tau_w['F']
@@ -2537,7 +2630,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         def sweep_box(title, fields, kind):
             box, btn, eta, bar = self._make_sweep_box(
                 title, fields, lambda _=False, k=kind: self.toggle_dual_sweep(k),
-                extra=(('Medida:', self.dual_mode_w[kind]), ('τ (s):', self.dual_tau_w[kind])))
+                extra=(('Medida:', self.dual_mode_w[kind]), ('τ:', self.dual_tau_w[kind])))
             self.dual_bars[kind] = bar
             return box, btn, eta
 
@@ -2948,9 +3041,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             lbl.setToolTip(f'{len(values)} pontos')
 
     def _dual_set_long_tau(self, kind=None):
-        fc = 1.0 / (2.0 * np.pi * self.dual_tau_w[kind or self.dual_kind].value())
-        self.sp_lp.setValue(fc)
-        self.sp_audio_lp.setValue(fc)
+        tau = self.dual_tau_w[kind or self.dual_kind].value()
+        self.sp_tau.setValue(tau)
+        self.sp_audio_tau.setValue(tau)
 
     def toggle_dual_sweep(self, kind):
         if self.dual_active:
@@ -2972,7 +3065,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_restore = self._excitation_snapshot() if kind == 'F' else None
         long_tau = self.dual_mode_w[kind].currentIndex() == 1
         if long_tau:
-            self.dual_saved_cutoffs = (self.cutoff_lp, self.audio_cutoff_lp)
+            self.dual_saved_cutoffs = (self.sp_tau.value(), self.sp_audio_tau.value())   # τ (s)
             self._dual_set_long_tau(kind)
         self.dual_kind = kind
         self.dual_values = values
@@ -2989,7 +3082,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         btn.setText('⏹ Cancelar')
         btn.setStyleSheet('background:#f8d7da;')
         self.dual_btns['F' if kind == 'P' else 'P'].setEnabled(False)
-        for w in ((self.sp_freq, self.sp_power, self.sp_lp, self.sp_audio_lp)
+        for w in ((self.sp_freq, self.sp_power, self.sp_tau, self.sp_audio_tau)
                   + tuple(self.dual_mode_w.values()) + tuple(self.dual_tau_w.values())):
             w.setEnabled(False)
         for b in list(self.btn_sweeps.values()) + list(self.btn_sweeps_aud.values()):
@@ -3023,8 +3116,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_state = 'IDLE'
         self.btn_dual_resave.setEnabled(bool(self.dual_results))
         if self.dual_saved_cutoffs is not None:
-            self.sp_lp.setValue(self.dual_saved_cutoffs[0])
-            self.sp_audio_lp.setValue(self.dual_saved_cutoffs[1])
+            self.sp_tau.setValue(self.dual_saved_cutoffs[0])
+            self.sp_audio_tau.setValue(self.dual_saved_cutoffs[1])
             self.dual_saved_cutoffs = None
         if getattr(self, 'dual_restore', None) is not None:     # varredura em frequência: volta ao início
             self._restore_excitation(self.dual_restore)
@@ -3033,7 +3126,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             btn.setText('▶ Varredura')
             btn.setStyleSheet('background:#cfe2ff;')
             btn.setEnabled(True)
-        for w in (self.sp_freq, self.sp_power, self.sp_lp, self.sp_audio_lp) + tuple(self.dual_mode_w.values()):
+        for w in (self.sp_freq, self.sp_power, self.sp_tau, self.sp_audio_tau) + tuple(self.dual_mode_w.values()):
             w.setEnabled(True)
         for kind, sp in self.dual_tau_w.items():
             sp.setEnabled(self.dual_mode_w[kind].currentIndex() == 1)
@@ -3769,7 +3862,9 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def apply_frequency(self, val):
         self.ref_freq = val
-        self.cutoff_lp, self.cutoff_hp = get_effective_cutoffs(val)
+        tau = auto_tau(val)
+        self.cutoff_hp = get_effective_cutoffs(val)[1]
+        self.cutoff_lp = tau_cutoff(tau, FS)
         self.link.write(f"F{val}\n")
         self.update_raw_window()
         with self.dsp_lock:
@@ -3777,11 +3872,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         # O lock-in do INMP441 segue a frequência de excitação comum
         with self.audio_lock:
             self.audio_freq = val
-            self.audio_cutoff_lp, self.audio_cutoff_hp = self.cutoff_lp, self.cutoff_hp
+            self.audio_cutoff_lp, self.audio_cutoff_hp = tau_cutoff(tau, AUDIO_FS_REAL), self.cutoff_hp
             self.audio_li.update_params(val, self.audio_cutoff_lp, self.audio_cutoff_hp)
-        self._set_spin(self.sp_audio_lp, self.audio_cutoff_lp)
+        self._set_spin(self.sp_audio_tau, tau)
         self._set_spin(self.sp_audio_hp, self.audio_cutoff_hp)
-        self._set_spin(self.sp_lp, self.cutoff_lp)
+        self._set_spin(self.sp_tau, tau)
         self._set_spin(self.sp_hp, self.cutoff_hp)
         self.update_tau_labels()
         self.update_audio_fft_range()
@@ -3841,18 +3936,19 @@ class LockInWindow(QtWidgets.QMainWindow):
         with self.dsp_lock:
             self.dsp.set_mains_filter(checked)
 
-    def on_lp(self, val):
-        self.cutoff_lp = val
+    def on_tau(self, tau):
+        self.cutoff_lp = tau_cutoff(tau, FS)
         with self.dsp_lock:
             self.dsp.update_params(self.ref_freq, self.cutoff_lp, self.cutoff_hp)
         self.update_tau_labels()
 
     @staticmethod
-    def _filter_row(lay, sp_lp, sp_hp):
-        '''Passa-baixas, τ (que depende só dele) e passa-altas de um lock-in, com dicas. Devolve o rótulo do τ.'''
+    def _filter_row(lay, sp_tau, sp_hp):
+        '''τ do passa-baixas, valores derivados dele (−3 dB, ENBW, espera) e passa-altas de um lock-in, com
+        dicas. Devolve o rótulo dos valores derivados.'''
         lbl_tau = QtWidgets.QLabel()
-        lbl_tau.setMinimumWidth(90)
-        for text, w, tip in (('Passa-Baixas (Hz):', sp_lp, LP_TIP), (None, lbl_tau, TAU_TIP),
+        lbl_tau.setMinimumWidth(250)
+        for text, w, tip in (('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
                              ('Passa-Altas (Hz):', sp_hp, HP_TIP)):
             if text:
                 lbl = QtWidgets.QLabel(text)
@@ -3860,14 +3956,16 @@ class LockInWindow(QtWidgets.QMainWindow):
                 lay.addWidget(lbl)
             w.setToolTip(tip)
             lay.addWidget(w)
+            if w is lbl_tau:
+                lay.addSpacing(12)
         return lbl_tau
 
     def update_tau_labels(self):
-        '''Atualiza o tau exibido ao lado dos parâmetros de cada lock-in.'''
+        '''Atualiza o corte −3 dB, a ENBW e a espera exibidos ao lado do τ de cada lock-in.'''
         if hasattr(self, 'lbl_tau'):
-            self.lbl_tau.setText(fmt_tau(lp_tau(self.cutoff_lp, FS)))
+            self.lbl_tau.setText(fmt_lp_info(lp_tau(self.cutoff_lp, FS)))
         if hasattr(self, 'lbl_audio_tau'):
-            self.lbl_audio_tau.setText(fmt_tau(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
+            self.lbl_audio_tau.setText(fmt_lp_info(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
 
     def on_hp(self, val):
         self.cutoff_hp = val
@@ -4122,7 +4220,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             _, ph = self.line_phase.getData()
             stem = self._stem(f"LockIn_{self.ref_freq:g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
             header = (f"# Lock-In no tempo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                      f"# Freq={self.ref_freq} Hz, LP={self.cutoff_lp} Hz, HP={self.cutoff_hp} Hz\n"
+                      f"# Freq={self.ref_freq} Hz, tau={lp_tau(self.cutoff_lp, FS):.6g} s, LP={self.cutoff_lp:.6g} Hz, "
+                      f"HP={self.cutoff_hp} Hz\n"
                       "Tempo_s,Magnitude,Fase_Graus\n")
             rows = (f"{a:.6f},{b:.5f},{c:.3f}\n" for a, b, c in zip(x, y, ph))
         csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
@@ -4273,16 +4372,16 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_sweep_count = 0
 
     def _excitation_snapshot(self):
-        '''Frequência e cortes dos dois lock-ins antes de uma varredura em frequência.'''
-        return (self.ref_freq, self.cutoff_lp, self.cutoff_hp, self.audio_cutoff_lp, self.audio_cutoff_hp)
+        '''Frequência, τ e cortes do passa-altas dos dois lock-ins antes de uma varredura em frequência.'''
+        return (self.ref_freq, self.sp_tau.value(), self.cutoff_hp, self.sp_audio_tau.value(), self.audio_cutoff_hp)
 
     def _restore_excitation(self, snap):
         '''Volta à frequência de antes da varredura (reenvia F ao STM32) e aos cortes de antes:
         apply_frequency sozinho levaria os filtros aos cortes automáticos, perdendo ajustes manuais.'''
-        f, lp, hp, alp, ahp = snap
+        f, tau, hp, atau, ahp = snap
         self._set_spin(self.sp_freq, f)
         self.apply_frequency(f)
-        for sp, v in ((self.sp_lp, lp), (self.sp_hp, hp), (self.sp_audio_lp, alp), (self.sp_audio_hp, ahp)):
+        for sp, v in ((self.sp_tau, tau), (self.sp_hp, hp), (self.sp_audio_tau, atau), (self.sp_audio_hp, ahp)):
             sp.setValue(v)
 
     def _apply_sweep_value(self, value):
@@ -4917,8 +5016,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_audio_noise.setText('Ruído/SNR: aguardando dados')
         self.audio_noise_text = None
 
-    def on_audio_lp(self, val):
-        self.audio_cutoff_lp = val
+    def on_audio_tau(self, tau):
+        self.audio_cutoff_lp = tau_cutoff(tau, AUDIO_FS_REAL)
         with self.audio_lock:
             self.audio_li.update_params(self.audio_freq, self.audio_cutoff_lp, self.audio_cutoff_hp)
         self.update_tau_labels()
@@ -5385,7 +5484,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                     w = getattr(self, name)
                     w.setValue(int(v) if isinstance(w, QtWidgets.QSpinBox) else v)
             # Filtros por último: a frequência redefine os cortes automáticos
-            for name in ('sp_lp', 'sp_hp', 'sp_audio_lp', 'sp_audio_hp'):
+            for name in ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
                 v = num(name)
                 if v is not None:
                     getattr(self, name).setValue(v)
@@ -5405,7 +5504,7 @@ class LockInWindow(QtWidgets.QMainWindow):
     def save_settings(self):
         st = QtCore.QSettings('LCTM', 'SOI Controller')
         spins, checks, combos = self._settings_widgets()
-        for name in spins + ('sp_lp', 'sp_hp', 'sp_audio_lp', 'sp_audio_hp'):
+        for name in spins + ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
             st.setValue(name, float(getattr(self, name).value()))
         for name in checks:
             st.setValue(name, bool(getattr(self, name).isChecked()))

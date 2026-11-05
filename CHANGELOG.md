@@ -8,6 +8,15 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 A interface e o firmware compartilham o mesmo número de versão.
 
+## [Não publicado]
+
+### Interface
+- O passa-baixas dos lock-ins (OPT101, INMP441 e τ da integração longa do Modo Duplo) passa a ser escolhido pela constante de tempo τ, em vez do corte em Hz. As setas andam na sequência 1–3–10, de 1 ms a 100 s.
+- Ao lado do τ aparecem o corte de −3 dB, a banda equivalente de ruído (ENBW) e a espera de 9τ.
+- O τ automático ao mudar a frequência é arredondado para 0,3 s, 1 s ou 3 s.
+- Os CSVs do Lock-In registram o τ no cabeçalho.
+- As preferências salvas guardam o τ. O passa-baixas salvo pela versão 1.0.0 (em Hz) é ignorado uma vez.
+
 ## [1.0.0] - 2026-10-27
 
 Primeira versão publicada.

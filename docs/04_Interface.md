@@ -65,7 +65,8 @@ O spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) dei
 **Gráfico inferior, dois modos:**
 
 1. **Lock-In:** magnitude (azul) e fase (vermelho) no tempo. São 50 pontos/s, e o gráfico mostra os últimos 200 (4 s).
-   - *Passa-Baixas* / *Passa-Altas* (Hz): os cortes são automáticos ao mudar a frequência (LP = 5 % de f, limitado a 0,08–0,5 Hz; HP = 2 % de f, limitado a 0,01–0,05 Hz) e podem ser editados à mão. O rótulo τ mostra a constante de tempo de cada polo.
+   - *τ* (constante de tempo de cada polo do passa-baixas): as setas andam na sequência 1–3–10 (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s e 100 s), e um valor digitado no meio (ex.: 0,5 s ou 200 ms) também é aceito. Ao mudar a frequência, τ volta ao automático: ~3 períodos da modulação, arredondado para 0,3 s (acima de ~5,8 Hz), 1 s (~1,8 a 5,8 Hz) ou 3 s (abaixo disso). Ao lado aparecem, calculados do τ, o corte de −3 dB do filtro de 2 polos (0,644/(2πτ)), a banda equivalente de ruído ENBW = 1/(8τ) e a espera de 9τ usada nas varreduras.
+   - *Passa-Altas* (Hz): automático ao mudar a frequência (2 % de f, limitado a 0,01–0,05 Hz) e editável à mão.
 2. **Valor Médio:** forma de onda média do ADC sobre N pulsos (1–1000), sincronizada na borda de subida do laser.
    - ◀ / ▶ ajustam o pré-trigger em passos de 10 ms.
    - **Análise da curva** (com o gráfico pausado): ajuste de **1 ou 2 exponenciais** `y = y∞ + A1·e^(−t/τ1) [+ A2·e^(−t/τ2)]` no trecho *On* ou *Off*. O intervalo é escolhido com duas linhas verdes arrastáveis. **Fit** desenha o modelo com os parâmetros digitados; **Otimizar** faz mínimos quadrados a partir deles e mostra o R².
@@ -98,7 +99,7 @@ Lock-in do microfone, com filtros **independentes** dos do OPT101. A referência
 - **Auto-fase**: zera a fase média do último 1 s (o sinal vai todo para X). *Offset (°)*: correção manual.
 - **Varreduras ▸**: mostra as varreduras em frequência e PWM do INMP441, que funcionam como as do OPT101.
 
-**Lock-in:** Passa-Baixas, Passa-Altas, Filtro 60 Hz e *Janela (s)* (1–60 s exibidos). São 20 pontos/s (blocos de 1600 amostras).
+**Lock-in:** τ, Passa-Altas, Filtro 60 Hz e *Janela (s)* (1–60 s exibidos). São 20 pontos/s (blocos de 1600 amostras).
 
 **Ruído/SNR:** média e desvio-padrão da saída do lock-in numa janela móvel (a mesma janela do gráfico, até 30 s). O SNR é mostrado em dB. O *Alerta SNR < (dB)* tem padrão de 10 dB (sinal ≈ 3× o ruído). Use uma janela de pelo menos 10τ.
 
