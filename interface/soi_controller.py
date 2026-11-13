@@ -35,6 +35,10 @@ from serial.tools import list_ports
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
+import soi_i18n  # idioma da interface (português ou inglês, conforme o Windows ou SOI_LANG)
+
+soi_i18n.install(QtWidgets, QtGui, pg)
+
 # Executáveis empacotados sem console (PyInstaller --windowed) não têm stdout/stderr.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w')
@@ -1200,6 +1204,9 @@ def fit_sensor_tau(f, ph, ph_e, r, f_ref, ph_ref, ph_ref_e, r_ref):
 # Modelos físicos da resposta da amostra na varredura em frequência (Modo Duplo, painel "Ajuste com modelos").
 # Com a calibração aplicada, S e Δφ já são referidos à folha fina de alumínio (∝ f^-1,5), então cada modelo
 # descreve a amostra a menos de uma constante complexa (amplitude e fase livres). x = √(f/f1), f1 = α/(πL²).
+# Medida das varreduras do Modo Duplo (o nome em português vai para o cabeçalho do CSV)
+DUAL_MODE_NAMES = ('Média no tempo (τ atual)', 'Integração longa (τ da varredura)')
+
 FREQ_MODELS = {
     'band': 'Faixa com S ∝ f⁻ⁿ (n esperado da amostra)',
     'pow': 'Lei de potência  S ∝ f⁻ⁿ',
@@ -3908,7 +3915,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_mode_w, self.dual_tau_w = {}, {}
         for kind in ('P', 'F', 'M'):
             cmb = QtWidgets.QComboBox()
-            cmb.addItems(['Média no tempo (τ atual)', 'Integração longa (τ da varredura)'])
+            cmb.addItems(list(DUAL_MODE_NAMES))
             cmb.setToolTip(
                 'Média no tempo: usa os filtros dos dois lock-ins (na varredura em frequência, os cortes automáticos\n'
                 'de cada frequência); espera 9τ do mais lento e faz a média por 4τ.\n'
@@ -4904,7 +4911,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         kind = self.dual_src if self.dual_src in ('F', 'M') else 'F'
         info = (f'Refino da ressonância: +{len(new)} pontos de {new[0]:g} a {new[-1]:g} Hz em torno de '
-                f'f0 = {f0:.4g} Hz (largura {width:.3g} Hz, {how}); medidos com {self.dual_mode_w[kind].currentText()}'
+                f'f0 = {f0:.4g} Hz (largura {width:.3g} Hz, {how}); medidos com {DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()]}'
                 + (f', τ = {self.dual_tau_w[kind].value():g} s' if self.dual_mode_w[kind].currentIndex() == 1 else ''))
         self.lbl_dual_refine.setText(f'f0 ≈ {f0:.4g} Hz ({new[0]:.4g}–{new[-1]:.4g} Hz)')
         self.lbl_dual_refine.setToolTip(info)
@@ -4984,7 +4991,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dual_ref_cfg = []
             self.dual_fit = None
             self.dual_params = {'kind': self.dual_kind, 'values': values, 'freq': self.ref_freq, 'pwm': self.laser_power,
-                                'mode': self.dual_mode_w[kind].currentText(),
+                                'mode': DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()],
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
         self.dual_active = True
         btn = self.dual_btns[kind]
@@ -7874,7 +7881,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.last_audio_status_t = now
             self._update_audio_status(now)
             text = getattr(self, 'audio_noise_text', None)
-            if text and self.lbl_audio_noise.text() != text:
+            if text and self.lbl_audio_noise.text() != soi_i18n.tr(text):
                 self.lbl_audio_noise.setText(text)
             self._show_fft_fit(self.txt_audio_fft_fit, self.lbl_audio_fft_missing,
                                self.audio_fft_enabled and self.chk_audio_fft_fit.isChecked(),

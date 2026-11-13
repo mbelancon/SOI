@@ -21,6 +21,8 @@ with cheap diode lasers, without commercial lock-in amplifiers or choppers. Targ
   `src/main.c`; raw OPT101 at 200 kS/s with the laser state in bit 15, INMP441 at exactly 48 kHz.
   Prebuilt binary in `binarios/soi_firmware_vX.Y.Z.bin`.
 - `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, software lock-in, simulated mode, icons in `interface/icones/`.
+  `interface/soi_i18n.py` — language choice and the Portuguese→English table; the code keeps Portuguese strings and
+  `install()` translates only what Qt/pyqtgraph show. New UI text: add it to `EN` (fixed pieces for f-strings).
 - `docs/01..06` — materials, wiring, firmware, interface, components, performance (English). `docs/tests/` — test procedures per version.
 - `packaging/` + `.github/workflows` — Windows executable (PyInstaller) attached to Releases.
 

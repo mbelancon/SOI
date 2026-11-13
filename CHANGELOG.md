@@ -17,7 +17,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 ### Interface (`interface/soi_controller.py`)
 
 #### Bilingual interface
-- **Portuguese and English**, chosen automatically from the Windows display language (Portuguese if Windows is in Portuguese, English otherwise). `SOI_LANG=pt` or `SOI_LANG=en` forces one. Data file names, CSV columns and header keys stay in Portuguese in both languages, so files are compatible.
+- **Portuguese and English**, chosen automatically from the Windows display language (Portuguese if Windows is in Portuguese, English otherwise). `SOI_LANG=pt` or `SOI_LANG=en` forces one. Data file names, CSV columns and header keys stay in Portuguese in both languages, so files are compatible. The translation table is in `interface/soi_i18n.py`.
 
 #### Reorganized Dual Mode (2026-11-13; replaces the arrangement described under "Changed" below)
 - **Top of the tab:** three buttons, in working order: **Sweep ▸** (frequency sweep; the matched PWM sweep is under "Matched PWM ▸"), **Calibration ▸** and **Fit ▸**. Calibration no longer repeats the sweep or the fits.
