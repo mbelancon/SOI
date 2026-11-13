@@ -1,23 +1,27 @@
-# SOI Controller: lock-in fotoacústico com STM32, OPT101 e INMP441
+<img src="docs/images/soi_icone.png" alt="SOI icon" width="96" align="right">
 
-Sistema de baixo custo para medidas fotoacústicas com detecção lock-in. Um **STM32F401 (Black Pill)** modula um laser em onda quadrada e mede, ao mesmo tempo:
+# SOI Controller: photoacoustic lock-in with STM32, OPT101 and INMP441
 
-- a **intensidade óptica** com o fotodiodo **OPT101** (ADC, 12,5 kS/s, 14 bits efetivos);
-- o **sinal acústico** com o microfone MEMS **INMP441** (I2S, ≈32 kS/s, 24 bits).
+A low-cost system for photoacoustic measurements with lock-in detection. An **STM32F401 (Black Pill)** modulates a laser with a square wave and simultaneously measures:
 
-Os dois fluxos vão por USB (CDC) para o PC. A interface em Python faz a demodulação lock-in dos dois canais, mostra os gráficos, executa varreduras em frequência e em potência, calibra o microfone e grava as medidas em CSV/PNG.
+- the **optical intensity** with the **OPT101** photodiode (12-bit ADC at 200 kS/s, oversampling adjustable in the interface);
+- the **acoustic signal** with the **INMP441** MEMS microphone (I2S, 48 kS/s, 24 bits).
 
-![Interface, aba OPT101 (modo simulado)](docs/imagens/interface_opt101.png)
+Both streams go to the PC over USB (CDC). The Python interface performs lock-in demodulation on both channels, plots the results, runs frequency and power sweeps, calibrates the microphone and saves measurements as CSV/PNG.
+
+> The interface itself is currently in Portuguese; the labels quoted in these documents (e.g. **Modo Duplo**, **Calibração**) are the ones shown on screen.
+
+![Interface, OPT101 tab (simulated mode)](docs/images/interface_opt101.png)
 
 ```
-             PWM + modulação (PA8)            ┌──────────────┐
-  ┌────────┐ ───────────────────────────────► │ Driver/Laser │ ──► luz ──┐
-  │        │                                  └──────────────┘           │
-  │ STM32  │ ◄── PA0 (ADC) ──── OPT101 ◄──────────── luz (referência) ───┤
-  │ F401   │                                                             ▼
-  │ Black  │ ◄── PB12/13/15 (I2S) ── INMP441 ◄── som ── célula fotoacústica
+             PWM + modulation (PA8)           ┌──────────────┐
+  ┌────────┐ ───────────────────────────────► │ Driver/Laser │ ──► light ──┐
+  │        │                                  └──────────────┘             │
+  │ STM32  │ ◄── PA0 (ADC) ──── OPT101 ◄────────── light (reference) ──────┤
+  │ F401   │                                                               ▼
+  │ Black  │ ◄── PB12/13/15 (I2S) ── INMP441 ◄── sound ── photoacoustic cell
   │ Pill   │
-  │        │ ──► PB0: sincronismo (osciloscópio)
+  │        │ ──► PB0: sync (oscilloscope)
   └───┬────┘
       │ USB-C (CDC, VID 0483 / PID 5740)
       ▼
@@ -26,68 +30,77 @@ Os dois fluxos vão por USB (CDC) para o PC. A interface em Python faz a demodul
 
 ## Hardware
 
-| Componente | Função | Ligação |
+| Component | Role | Connection |
 |---|---|---|
-| WeAct Black Pill STM32F401CCU6 (cristal de 25 MHz) | Controle, sincronismo e aquisição | USB-C ao PC; SWD ao ST-Link para gravar |
-| OPT101 (fotodiodo + amplificador de transimpedância) | Referência de intensidade do laser | Saída → **PA0** (máx. 3,3 V) |
-| INMP441 (microfone MEMS I2S) | Sinal fotoacústico | SCK → **PB13**, WS → **PB12**, SD → **PB15**, L/R → GND, VDD → 3V3 |
-| Laser + driver | Excitação modulada | Entrada TTL do driver ← **PA8** (PWM de 5 kHz, 0–100 %) |
-| Osciloscópio (opcional) | Ver a modulação | **PB0** (1 = laser ligado) |
+| WeAct Black Pill STM32F401CCU6 (25 MHz crystal) | Control, synchronization and acquisition | USB-C to the PC; SWD to the ST-Link for flashing |
+| OPT101 (photodiode + transimpedance amplifier) | Laser intensity reference | Output → **PA0** (max. 3.3 V) |
+| INMP441 (I2S MEMS microphone) | Photoacoustic signal | SCK → **PB13**, WS → **PB12**, SD → **PB15**, L/R → GND, VDD → 3V3 |
+| Laser + driver | Modulated excitation | Driver TTL input ← **PA8** (5 kHz PWM, 0–100 %) |
+| Oscilloscope (optional) | Watch the modulation | **PB0** (1 = laser on) |
 
-O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFET ou a entrada TTL do driver do laser). Detalhes, cuidados e diagrama em [docs/02_Hardware_e_Ligacoes.md](docs/02_Hardware_e_Ligacoes.md).
+PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET or the TTL input of the laser driver). Details, precautions and a diagram are in [docs/02_Hardware_and_Wiring.md](docs/02_Hardware_and_Wiring.md).
 
-## Início rápido
+## Quick start
 
-**Só quer usar a interface no Windows?** Baixe o `SOI_Controller_vX.Y.Z.exe` da última [Release](https://github.com/mbelancon/SOI/releases/latest) e abra. Não precisa instalar Python. Requer Windows 10/11 e um processador com SSE4.2 (Intel desde 2009 ou AMD desde 2011). Processadores mais antigos, como AMD Phenom II e Intel Core 2, não abrem o programa. Detalhes em [docs/04_Interface.md](docs/04_Interface.md#instalação-e-execução).
+**Just want to use the interface on Windows?** Download `SOI_Controller_vX.Y.Z.exe` from the latest [Release](https://github.com/mbelancon/SOI/releases/latest) and run it. No Python installation is needed. Requires Windows 10/11 and a CPU with SSE4.2 (Intel since 2009 or AMD since 2011). Older CPUs, such as AMD Phenom II and Intel Core 2, cannot run the program. Details in [docs/04_Interface.md](docs/04_Interface.md#installation-and-running).
 
-1. Monte o hardware conforme [docs/02_Hardware_e_Ligacoes.md](docs/02_Hardware_e_Ligacoes.md).
-2. Grave o firmware da pasta [`firmware/`](firmware/) com o PlatformIO e um ST-Link:
+1. Assemble the hardware following [docs/02_Hardware_and_Wiring.md](docs/02_Hardware_and_Wiring.md).
+2. Flash the firmware in [`firmware/`](firmware/) with PlatformIO and an ST-Link. The firmware is written with **STM32Cube** (ST HAL + ST USB Device library); it does not use STM32duino/Arduino:
    ```bash
    cd firmware
    pio run -t upload
    ```
-3. Instale as dependências da interface (Python 3.10 ou superior):
+   Or flash the prebuilt binary `binarios/soi_firmware_vX.Y.Z.bin` at address `0x08000000` with STM32CubeProgrammer. Firmware and interface must share the same MAJOR version (2.x does not talk to 1.0.0). Details in [docs/03_STM32_Firmware.md](docs/03_STM32_Firmware.md).
+3. Install the interface dependencies (Python 3.10 or newer):
    ```bash
    pip install -r requirements.txt
    ```
-4. Conecte a Black Pill pelo USB-C e rode:
+4. Connect the Black Pill over USB-C and run:
    ```bash
-   python interface/stm32_opt_inmmp_novo.py
+   python interface/soi_controller.py
    ```
-   A porta é detectada sozinha. Sem o STM32 conectado, marque **Simular amostragem** para testar a interface com sinais simulados.
-5. As medidas são gravadas na pasta `Medidas/`, criada ao lado do script (ou do executável).
+   The port is detected automatically. Without the STM32 connected, tick **Simular amostragem** (simulate sampling) to try the interface with simulated signals.
+5. Measurements are saved in the `Medidas/` folder, created next to the script (or the executable).
 
-## Documentação
+## Documentation
 
-| Documento | Conteúdo |
+| Document | Contents |
 |---|---|
-| [01_Materiais.md](docs/01_Materiais.md) | Hardware e software necessários |
-| [02_Hardware_e_Ligacoes.md](docs/02_Hardware_e_Ligacoes.md) | Pinagem da Black Pill e ligações de OPT101, INMP441, laser e ST-Link |
-| [03_Firmware_STM32.md](docs/03_Firmware_STM32.md) | Relógios, timers, ADC, I2S, DMA, USB, protocolo serial e gravação |
-| [04_Interface.md](docs/04_Interface.md) | Instalação, funcionalidades e especificações da interface |
-| [05_Componentes.md](docs/05_Componentes.md) | Por que STM32, OPT101 e INMP441: características e papel de cada um |
-| [06_Desempenho_e_Aplicacoes.md](docs/06_Desempenho_e_Aplicacoes.md) | Velocidade e resolução das medidas ópticas no tempo; lente térmica, espelho térmico e luminescência |
+| [01_Materials.md](docs/01_Materials.md) | Required hardware and software |
+| [02_Hardware_and_Wiring.md](docs/02_Hardware_and_Wiring.md) | Black Pill pinout and wiring of the OPT101, INMP441, laser and ST-Link |
+| [03_STM32_Firmware.md](docs/03_STM32_Firmware.md) | Clocks, timers, ADC, I2S, DMA, USB, serial protocol and flashing |
+| [04_Interface.md](docs/04_Interface.md) | Installation, features and specifications of the interface |
+| [05_Components.md](docs/05_Components.md) | Why STM32, OPT101 and INMP441: characteristics and role of each |
+| [06_Performance_and_Applications.md](docs/06_Performance_and_Applications.md) | Speed and resolution of time-resolved optical measurements; thermal lens, thermal mirror and luminescence |
 
-## Estrutura do repositório
+## Repository layout
 
 ```
 ├── interface/
-│   └── stm32_opt_inmmp_novo.py   Interface + lock-in (PySide6/PyQt + pyqtgraph + NumPy/SciPy)
-├── firmware/                     Firmware do STM32 (PlatformIO, framework Arduino-STM32)
+│   └── soi_controller.py         Interface + lock-in (PySide6/PyQt + pyqtgraph + NumPy/SciPy)
+├── firmware/                     STM32 firmware (PlatformIO, STM32Cube framework, ST USB stack)
 │   ├── platformio.ini
-│   └── src/main.cpp
-├── docs/                         Documentação
-├── packaging/                    Spec e dependências do PyInstaller (executável Windows)
-├── .github/workflows/            Geração automática do executável nas Releases
-├── CHANGELOG.md                  Histórico de versões
-├── requirements.txt              Dependências Python
+│   ├── include/                  HAL and USB configuration
+│   └── src/main.c                (src/usb = ST USB Device library)
+├── binarios/                     Prebuilt firmware (.bin) for flashing without compiling
+├── docs/                         Documentation (docs/tests: test procedures for each version)
+├── packaging/                    PyInstaller spec and dependencies (Windows executable)
+├── .github/workflows/            Automatic build of the executable for Releases
+├── CHANGELOG.md                  Version history
+├── requirements.txt              Python dependencies
 └── LICENSE
 ```
 
-## Versões
+## Versions
 
-Cada versão publicada tem uma tag `vX.Y.Z` e uma página em [Releases](https://github.com/mbelancon/SOI/releases). O que mudou em cada uma está no [CHANGELOG.md](CHANGELOG.md). O número aparece no título da janela da interface e na constante `FIRMWARE_VERSION` do firmware.
+Each published version has a `vX.Y.Z` tag and a page under [Releases](https://github.com/mbelancon/SOI/releases). What changed in each one is in [CHANGELOG.md](CHANGELOG.md). The number appears in the interface window title and in the firmware constant `FIRMWARE_VERSION`.
 
-## Licença
+## License
 
-Distribuído sob a licença GPL-3.0 (GNU General Public License v3.0). Veja [LICENSE](LICENSE).
+Distributed under the GPL-3.0 license (GNU General Public License v3.0). See [LICENSE](LICENSE).
+
+---
+
+<img src="docs/images/logo_lctm.png" alt="LCTM logo" height="120">
+
+Developed at LCTM (Laboratório de Ciência e Tecnologia de Materiais — Materials Science and Technology Laboratory). The icon of the interface and the executable comes from the laboratory logo (`docs/images/logo_lctm.svg`).

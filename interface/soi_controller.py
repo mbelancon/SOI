@@ -14,9 +14,10 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '1.0.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.1.0'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
+import bisect
 import os
 import re
 import sys
@@ -34,6 +35,10 @@ from serial.tools import list_ports
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
+import soi_i18n  # idioma da interface (português ou inglês, conforme o Windows ou SOI_LANG)
+
+soi_i18n.install(QtWidgets, QtGui, pg)
+
 # Executáveis empacotados sem console (PyInstaller --windowed) não têm stdout/stderr.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w')
@@ -47,24 +52,57 @@ BAUD_RATE = 500000        # Ignorado pelo USB CDC do STM32
 ARDUINO_VIDS = {0x0483, 0x2341, 0x2A03, 0x1A86}  # 0x0483 = STM32 CDC.
 RECONNECT_INTERVAL = 3.0
 
-FS = 12500.0              # Taxa de amostragem do STM32 (Hz) = FS_HZ do firmware
-DECIMATION = 250          # Decimação da saída do lock-in (12500 -> 50 Hz)
-ADC_OVS_FACTOR = 1.0  # OVS_BITS=2: o firmware envia 4095 * 4; a interface exibe a escala com oversampling
-ADC_FULL_SCALE = 16380.0
+# Firmware 2.0.0 (STM32Cube): o STM32 envia TODAS as amostras do ADC (12 bits, 200 kS/s) com o rótulo
+# do laser; a sobreamostragem (média de OSR amostras) é feita aqui. FS e DECIMATION mudam com o OSR
+# escolhido na aba OPT101 (LockInWindow.set_osr); o padrão OSR 16 reproduz os 12,5 kS/s da 1.0.0.
+RAW_FS = 200000.0         # Taxa do ADC no firmware (TIM3 TRGO)
+OSR_CHOICES = (1, 2, 4, 8, 16, 32, 64)
+OSR_DEFAULT = 16
+LOCKIN_OUT_HZ = 50.0      # Taxa aproximada da saída do lock-in (pontos de R e fase por segundo)
+FS = RAW_FS / OSR_DEFAULT                  # Taxa depois da sobreamostragem (Hz)
+DECIMATION = int(round(FS / LOCKIN_OUT_HZ))  # Decimação da saída do lock-in (12500 -> 50 Hz)
+ADC_OVS_FACTOR = 1.0
+ADC_FULL_SCALE = 16380.0  # 4095 * 4: a média é exibida na escala de 14 bits da 1.0.0, qualquer que seja o OSR
+ADC_LSB = ADC_FULL_SCALE / 4095.0          # 1 LSB do ADC de 12 bits na escala exibida (= 4)
 ADC_VREF = 3.3
-AUDIO_FS = 32000          # = AUDIO_FS_HZ do firmware (nominal)
-# Taxa real do I2S: PLLI2S = 1 MHz * 258 / 3 = 86 MHz; quadro de 64 bits; divisor inteiro do HAL
-# = round(86e6 / 64 / 32000) = 42 -> 31994,05 Hz (-186 ppm). A referência numérica do lock-in de
-# áudio precisa da taxa real: com 32000 a fase gira em f * 186e-6 Hz (ex.: 1 volta a cada ~18 min a 5 Hz).
-I2S_CLK_HZ = 1e6 * 258 / 3
+AUDIO_FS = 48000          # = AUDIO_FS_HZ do firmware (nominal)
+# Taxa real do I2S: PLLI2S = 1 MHz * 384 / 5 = 76,8 MHz; quadro de 64 bits; I2SDIV = 12 com ODD = 1
+# (divisor 25) -> 76,8e6 / 64 / 25 = 48000 Hz exatos. A referência numérica do lock-in de áudio usa a
+# taxa real (na 1.0.0 eram 31994,05 Hz, -186 ppm, e a diferença fazia a fase girar).
+I2S_CLK_HZ = 1e6 * 384 / 5
 AUDIO_FS_REAL = I2S_CLK_HZ / 64.0 / round(I2S_CLK_HZ / 64.0 / AUDIO_FS)
 MOD_TIMER_CLK_HZ = 84e6   # TIM4 (APB1 x2), mesmo cristal do I2S
-# Atraso da referência do lock-in do OPT101 em relação à luz (cadeia digital do firmware): a fase do PLL
-# vale 0 no centro do quadro em que o REF (maioria das 16 amostras) sobe, em média 7,5 amostras do ADC
-# (200 kHz) depois da borda do rótulo; o rótulo segue a escrita do DMA, 12 ciclos do ADC (21 MHz) depois
-# do instante amostrado, e o CCR1 do laser muda ~0,2 µs depois do rótulo. Soma +360°·f·OPT_REF_DELAY à
-# fase do OPT101 (conferido com simulação do firmware: erro < 0,05° até 1,7 kHz).
-OPT_REF_DELAY = 7.5 / 200000.0 - 12.0 / 21e6 - 0.2e-6
+# Atraso da referência do lock-in do OPT101 em relação à luz (cadeia digital): a fase do PLL vale 0 no
+# centro do bloco em que o REF (maioria das OSR amostras) sobe, em média (OSR-1)/2 amostras do ADC
+# (200 kHz) depois da borda do rótulo (7,5 com OSR 16); o rótulo segue a escrita do DMA, 12 ciclos do ADC
+# (21 MHz) depois do instante amostrado, e o CCR1 do laser muda ~0,2 µs depois do rótulo. Soma
+# +360°·f·opt_ref_delay() à fase do OPT101 (conferido com simulação do firmware: erro < 0,05° até 1,7 kHz).
+def opt_fft_size():
+    '''Pontos da FFT da faixa completa do OPT101: 4096 a 12,5 kS/s, proporcional à taxa (mesma resolução).'''
+    return int(OPT_FFT_SIZE * max(1, round(FS / 12500.0))) if FS >= 12500.0 else OPT_FFT_SIZE
+
+
+def opt_ref_delay(osr=None):
+    osr = int(round(RAW_FS / FS)) if osr is None else int(osr)
+    return 0.5 * (osr - 1) / RAW_FS - 12.0 / 21e6 - 0.2e-6
+
+
+def boxcar_gain(f, osr, fs_raw=RAW_FS):
+    '''Ganho (real) da média de osr amostras consecutivas em f: sin(pi f osr/fs)/(osr sin(pi f/fs)).'''
+    x = np.pi * np.asarray(f, dtype=np.float64) / fs_raw
+    if osr <= 1:
+        return np.ones_like(x)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        g = np.sin(osr * x) / (osr * np.sin(x))
+    return np.where(np.abs(x) < 1e-12, 1.0, g)
+
+
+# Pacote óptico do firmware 2.0.0: A5 5A 4F 50 | SEQ (uint32, índice absoluto da 1ª amostra) | N (uint16)
+# | N x uint16 (bits 0-11 = ADC, bit 15 = laser) | CRC16 (CCITT-FALSE dos bytes entre o magic e o CRC).
+OPT_PACKET_MAGIC = b'\xA5\x5A\x4F\x50'
+OPT_PACKET_HEADER_SIZE = 10
+OPT_PACKET_MAX_SAMPLES = 512
+OPT_GAP_FILL_MAX = int(RAW_FS)   # perdas até 1 s são preenchidas (repete a última amostra) para manter o tempo
 AUDIO_PACKET_MAGIC = b'\xA5\x5A\x49\x32'
 # Marcador A5 5A 4D 4B + SEQ (uint32) + CRC16: amostra I2S em que a onda quadrada do laser começou
 # (borda de subida). Dá ao lock-in do INMP441 a mesma origem de fase do OPT101 (PLL na borda).
@@ -76,7 +114,7 @@ AUDIO_QUEUE_MAX_SAMPLES = AUDIO_FS * 2
 AUDIO_DISPLAY_SAMPLES = AUDIO_FS // 10
 AUDIO_FFT_SIZE = 4096        # FFT da faixa completa (resolução ~7,8 Hz)
 AUDIO_FFT_HISTORY_SEC = 4.0  # histórico de áudio; a FFT com zoom usa todo ele (resolução ~0,25 Hz)
-AUDIO_LOCKIN_BLOCK = 1600     # amostras por ponto do lock-in de áudio (0,05 s a 32 kHz -> 20 Hz)
+AUDIO_LOCKIN_BLOCK = 2400     # amostras por ponto do lock-in de áudio (0,05 s a 48 kHz -> 20 Hz)
 AUDIO_LOCKIN_SPAN = 10.0    # s exibidos no gráfico do lock-in de áudio (padrão; ajustável na aba)
 LOW_SIGNAL_SNR_DB = 10.0    # alerta de sinal baixo abaixo deste SNR (~3 sigma)
 ALERT_COLOR = '#ffd6d6'
@@ -85,7 +123,9 @@ AUDIO_NOISE_SPAN = 60.0     # s de histórico do lock-in de áudio usados no gr�
 AUDIO_NOISE_POINTS = int(round(AUDIO_NOISE_SPAN * AUDIO_FS / AUDIO_LOCKIN_BLOCK))
 AUTO_PHASE_SPAN = 1.0       # s de média usados pela auto-fase
 AUDIO_FFT_INTERVAL = 0.25     # s entre FFTs (só roda com a opção ligada)
-OPT_FFT_SIZE = 4096          # FFT da faixa completa do ADC do OPT101 (resolução ~3,1 Hz)
+OPT_FFT_SIZE = 4096          # FFT da faixa completa do ADC do OPT101 com OSR 16 (resolução ~3,1 Hz);
+                             # cresce com a taxa (opt_fft_size()) para manter a resolução
+OPT_FFT_ZOOM_MAX = 1 << 19   # limite da FFT com zoom (a 200 kS/s: 2,6 s, resolução ~0,4 Hz)
 OPT_FFT_HISTORY_SEC = 4.0    # histórico do ADC; a FFT com zoom usa todo ele (resolução ~0,25 Hz)
 # Varredura recomendada para a calibração do microfone (padrão de alumínio), aba Modo Duplo.
 # 5 Hz fica bem abaixo do corte do microfone/célula (~40 Hz); 35 pontos log até 2440 Hz ficam a >= 4 Hz
@@ -101,8 +141,8 @@ MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__)), 'Medidas')
 MAX_POINTS = 200          # Pontos exibidos de R e Fase
-MAX_BATCH_SAMPLES = 40900
-MAX_RX_BYTES = 1_000_000  # Proteção contra acúmulo de bytes se a GUI travar
+MAX_RX_BYTES = 4_000_000  # Proteção contra acúmulo de bytes se a GUI travar (10 s a 200 kS/s; múltiplo de 2)
+MAX_SCOPE_POINTS = 120_000  # pontos guardados no osciloscópio; acima disso a janela é reduzida por média
 GUI_INTERVAL_MS = 40      # 25 FPS (indistinguível de 30 para este sinal)
 STATUS_INTERVAL = 0.15    # s entre atualizações do texto de status
 RANGE_INTERVAL = 0.5      # s entre reajustes automáticos de escala Y
@@ -113,9 +153,25 @@ OK_COLOR = '#e6ffe6'
 WARN_COLOR = '#fff3cd'
 
 
+# Valores de τ do passa-baixas do lock-in (sequência 1–3–10, como nos lock-ins comerciais).
+# As setas do campo τ andam por esta lista; um valor digitado fora dela também é aceito.
+TAU_STEPS = (0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
+TAU_MIN, TAU_MAX = TAU_STEPS[0], TAU_STEPS[-1]
+
+
+def auto_tau(f):
+    '''τ automático ao mudar a frequência: ~3,2 períodos da modulação (equivale ao antigo corte de 5 % de f),
+    limitado a 0,32–2 s e arredondado para o valor mais próximo de TAU_STEPS (escala log): 0,3 s acima de
+    ~5,8 Hz, 1 s de ~1,8 a 5,8 Hz e 3 s abaixo disso.'''
+    tau = float(np.clip(1.0 / (2.0 * np.pi * 0.05 * max(f, 1e-6)), 1.0 / (2.0 * np.pi * 0.5),
+                        1.0 / (2.0 * np.pi * 0.08)))
+    return min(TAU_STEPS, key=lambda v: abs(np.log(v / tau)))
+
+
 def get_effective_cutoffs(f):
-    '''Cortes adaptativos de filtro conforme a frequência de modulação.'''
-    lp = float(np.clip(f * 0.05, 0.08, 0.50))
+    '''Cortes adaptativos de filtro conforme a frequência de modulação: o passa-baixas vem do τ
+    automático (auto_tau) e o passa-altas fica em 2 % de f, entre 0,01 e 0,05 Hz.'''
+    lp = 1.0 / (2.0 * np.pi * auto_tau(f))
     hp = float(np.clip(f * 0.02, 0.01, 0.05))
     return lp, hp
 
@@ -125,6 +181,19 @@ def lp_tau(cutoff, fs):
     com a = 2*pi*fc/fs: tau = -1/(fs*ln(1-a)), que tende a 1/(2*pi*fc) quando fc << fs.'''
     a = 2.0 * np.pi * cutoff / fs
     return float('inf') if a >= 1.0 else -1.0 / (fs * np.log1p(-a))
+
+
+def tau_cutoff(tau, fs):
+    '''Inverso de lp_tau: corte (Hz) que dá exatamente a constante de tempo tau (s) por polo na taxa fs.'''
+    return fs * -np.expm1(-1.0 / (fs * tau)) / (2.0 * np.pi)
+
+
+def lp_info(tau):
+    '''Corte de -3 dB, banda equivalente de ruído (ENBW) e espera recomendada do passa-baixas do lock-in
+    (2 polos iguais em cascata, 12 dB/oitava) para um τ por polo.'''
+    f3 = np.sqrt(np.sqrt(2.0) - 1.0) / (2.0 * np.pi * tau)     # -3 dB de dois polos: 0,644/(2πτ)
+    enbw = 1.0 / (8.0 * tau)
+    return f3, enbw, 9.0 * tau
 
 
 def actual_mod_freq(f):
@@ -203,7 +272,8 @@ def find_flat_band(f, sens, good, tol_db=1.0):
 
 
 def load_mic_calibration(path):
-    '''Lê uma calibração CAL_[amostra_]microfone_*.csv. Devolve dict com 'path', 'f',
+    '''Lê uma calibração CAL_[amostra_]microfone_*.csv. Devolve dict com 'path', 'f', 'ref' (referência),
+    'cell' ('OPC' ou 'Camara'), 'verified' (True/False; None nas calibrações antigas), 'verify_txt',
     'sens' (sensibilidade relativa), 'phase' (graus), 'opt_tau' (τ do sensor OPT101 descontado, em s; 0 se
     não houve correção) e 'legacy' (True sem a chave OPT101_tau_sensor_s: calibração feita com o firmware
     anterior ao marcador de modulação corrigido, ou com a correção pelo τ efetivo; a fase não é comparável),
@@ -211,6 +281,7 @@ def load_mic_calibration(path):
     if not path:
         return None
     opt_tau = None
+    meta = {}
     try:
         with open(path, encoding='utf-8') as fh:
             raw = [ln.strip() for ln in fh if ln.strip()]
@@ -218,6 +289,15 @@ def load_mic_calibration(path):
             m = re.match(r'#\s*OPT101_tau_sensor_s\s*=\s*(\S+)', ln)
             if m:
                 opt_tau = float(m.group(1))
+            m = re.match(r'#\s*(Referencia|Referencia_ID|Celula|Verificada|Ressonancia_f0_Hz)\s*=\s*(.+)$', ln)
+            if m:
+                meta[m.group(1)] = m.group(2).strip()
+            m = re.match(r'#\s*Verificacao:\s*(.+)$', ln)
+            if m:
+                meta['Verificacao'] = m.group(1).strip()
+            m = re.match(r'#\s*Verificacao_2a_referencia:\s*(.+)$', ln)
+            if m:
+                meta['Verificacao2'] = m.group(1).strip()
         lines = [ln for ln in raw if not ln.startswith('#')]
         head = lines[0].split(',')
         data = np.array([[float(v) for v in ln.split(',')] for ln in lines[1:]])
@@ -230,8 +310,63 @@ def load_mic_calibration(path):
     if ok.sum() < 2:
         return None
     k = np.argsort(f[ok])
+    # Sem as chaves (calibrações até a 2.0.0): folha de Al em OPC, sem verificação registrada
+    ver = meta.get('Verificada')
     return {'path': path, 'f': f[ok][k], 'sens': sens[ok][k], 'phase': ph[ok][k],
-            'opt_tau': opt_tau or 0.0, 'legacy': opt_tau is None}
+            'opt_tau': opt_tau or 0.0, 'legacy': opt_tau is None,
+            'ref': meta.get('Referencia', CAL_REFS['al_opc']['name']), 'cell': meta.get('Celula', 'OPC'),
+            'ref_id': meta.get('Referencia_ID', 'al_opc'), 'verify2': meta.get('Verificacao2', ''),
+            'f0': float(meta['Ressonancia_f0_Hz']) if meta.get('Ressonancia_f0_Hz', '').replace('.', '', 1).isdigit() else None,
+            'verified': None if ver is None else ver.lower().startswith('s'),
+            'verify_txt': meta.get('Verificacao', '').split(' - problemas: ')[-1] if ver and not ver.lower().startswith('s') else ''}
+
+
+CAL_VER_DB = 1.5        # desvio rms máximo (dB) da 2ª referência corrigida em relação a f^-n
+CAL_VER_DEG = 10.0      # desvio rms máximo (graus) da fase corrigida em relação a uma constante
+
+
+def verify_with_second_ref(f, s, dphi, n_exp):
+    '''Verificação da calibração por uma segunda referência: com a calibração aplicada, a varredura de outra
+    referência deve dar S ∝ f^-n_exp com fase constante. Devolve dict ('ok', 'n', 'n_err', 'rms_db',
+    'rms_deg', 'npts', 'fmin', 'fmax', 'text') ou None (menos de 5 pontos).'''
+    f, s, dphi = (np.asarray(v, dtype=np.float64) for v in (f, s, dphi))
+    ok = (f > 0) & (s > 0) & np.isfinite(s) & np.isfinite(dphi)
+    f, s, dphi = f[ok], s[ok], dphi[ok]
+    if f.size < 5:
+        return None
+    lf, ls = np.log10(f), np.log10(s)
+    c, cov = np.polyfit(lf, ls, 1, cov=True)
+    n, n_err = float(-c[0]), float(np.sqrt(cov[0, 0]))
+    r = ls + n_exp * lf
+    rms_db = float(20.0 * np.std(r - np.median(r)))
+    ph = np.degrees(np.angle(np.exp(1j * np.radians(dphi - np.degrees(np.angle(np.mean(np.exp(1j * np.radians(dphi)))))))))
+    rms_deg = float(np.sqrt(np.mean(ph ** 2)))
+    good = abs(n - n_exp) <= CAL_N_TOL and rms_db <= CAL_VER_DB and rms_deg <= CAL_VER_DEG
+    text = (f'n = {n:.2f} ± {n_err:.2f} (esperado {n_exp:g}), desvio de f<sup>−{n_exp:g}</sup> = {rms_db:.1f} dB rms, '
+            f'fase constante ± {rms_deg:.0f}° rms ({f.size} pontos, {fmt_freq(f.min())}–{fmt_freq(f.max())})')
+    return {'ok': bool(good), 'n': n, 'n_err': n_err, 'rms_db': rms_db, 'rms_deg': rms_deg, 'npts': int(f.size),
+            'fmin': float(f.min()), 'fmax': float(f.max()), 'text': text}
+
+
+def mark_calibration_verified(path, ok, text):
+    '''Regrava o cabeçalho da calibração com o resultado da verificação pela segunda referência.'''
+    with open(path, encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
+    out, done = [], False
+    for ln in lines:
+        if re.match(r'#\s*Verificada\s*=', ln):
+            ln = f"# Verificada = {'sim' if ok else 'nao'}"
+            done = True
+        elif re.match(r'#\s*Verificacao_2a_referencia:', ln):
+            continue
+        out.append(ln)
+        if re.match(r'#\s*Verificada\s*=', ln):
+            out.append(f'# Verificacao_2a_referencia: {text}')
+    if not done:
+        out.insert(1, f"# Verificada = {'sim' if ok else 'nao'}")
+        out.insert(2, f'# Verificacao_2a_referencia: {text}')
+    with open(path, 'w', encoding='utf-8', newline='') as fh:
+        fh.write('\n'.join(out) + '\n')
 
 
 DUAL_COLUMNS = ('OPT101_R', 'OPT101_R_DP', 'INMP441_R', 'INMP441_R_DP', 'INMP441_Fase_Graus',
@@ -274,6 +409,9 @@ def load_dual_csv(path):
               'freq': num(r'_f([\d.]+)Hz_', name) if kind == 'P' else None,
               'mode': mode.group(1).strip() if mode else 'não registrada',
               'tau': num(r'tau = ([\d.eE+-]+) s \(integração longa\)', header)}
+    refine = re.findall(r'# (Refino da ressonância:[^\n]+)', header)
+    if refine:
+        params['refine'] = refine[-1]
     if kind == 'F' and params['pwm'] is None:
         params['pwm'] = num(r'PWM\s*([\d.]+)\s*%', header) or 0.0
     if kind == 'P' and params['freq'] is None:
@@ -328,8 +466,9 @@ def fit_sweep(x, y, model):
     return (lambda xx: a + b * xx), f'y = a + b·x<br>b = {b:.4g}{sb}<br>a = {a:.4g}<br>R² = {r2:.4f}'
 
 
-def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True):
-    '''Fit do padrão (papel alumínio, termicamente fino e opaco) na varredura em frequência normalizada.
+def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True, n_exp=None, ref_name=None):
+    '''Fit do padrão de calibração (referência escolhida; n livre) na varredura em frequência normalizada.
+    Com n_exp, o texto compara o n ajustado com o esperado da referência ref_name.
     Amplitude S(f) = A·f^-n·H(f), H = passa-altas de 1ª ordem de corte fc (microfone/célula);
     fase Δφ(f) = φ0 + atan(fc/f) - 360°·f·td (td = atraso de propagação acústica).
     Pontos com SNR < snr_min ou resíduo > 3σ ficam fora do ajuste e da faixa confiável.
@@ -397,10 +536,14 @@ def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True):
     except np.linalg.LinAlgError:
         err = np.full(J.shape[1], np.nan)
     fc, fc_err = np.exp(p[2]), np.exp(p[2]) * err[2]
-    fc_txt = (f'Corte do microfone/célula (fc) = {fc:.3g} ± {fc_err:.2g} Hz' if p[2] > lo + 0.05
-              else f'Corte do microfone/célula (fc) abaixo de {f.min():g} Hz')
+    fc_txt = (f'Corte PAS = {fc:.3g} ± {fc_err:.2g} Hz' if p[2] > lo + 0.05
+              else f'Corte PAS < {f.min():.3g} Hz')
     # Classificação pelo expoente: ≈1 amostra sobre suporte espesso, ≈1,5 folha fina livre (capacidade térmica)
-    if 0.75 <= p[1] < 1.25:
+    if n_exp is not None:
+        ok_n = abs(p[1] - n_exp) <= CAL_N_TOL
+        amostra = (f'{ref_name or "Referência"}: n esperado {n_exp:g} '
+                   + ('✓' if ok_n else '<span style="color:#d00000;">⚠</span>'))
+    elif 0.75 <= p[1] < 1.25:
         amostra = 'Amostra fina sobre suporte espesso'
     elif 1.25 <= p[1] < 1.75:
         amostra = 'Amostra fina livre'
@@ -408,7 +551,7 @@ def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True):
         amostra = 'Fora dos regimes padrão (n ≈ 1 ou 1,5)'
     text = (f'<b>Fit padrão:</b> <b>{amostra}</b> &nbsp; n = {p[1]:.2f} ± {err[1]:.2f} &nbsp; {fc_txt}')
     if use_phase:
-        text += (f' &nbsp; Atraso luz→microfone (td) = {p[3] * 1e6:.0f} ± {err[3] * 1e6:.0f} µs')
+        text += (f' &nbsp; Atraso do sistema (td) = {p[3] * 1e6:.0f} ± {err[3] * 1e6:.0f} µs')
     text += (f'<br>Faixa confiável: {f[good].min():.4g} a {f[good].max():.4g} Hz '
              f'({int(good.sum())} de {f.size} pontos); x vermelho = ponto excluído')
     return {'amp': lambda ff: np.exp(amp_l(p, np.asarray(ff, dtype=np.float64))),
@@ -416,10 +559,499 @@ def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True):
             'good': good, 'text': text, 'params': p, 'errors': err, 'chi2': chi2}
 
 
-def opt_digital_phase(f, hp_cutoff, mains=False, fs=FS):
+# Referências de calibração do microfone (aba Modo Duplo, painel "Calibração do microfone").
+# Todas têm fase teórica constante na faixa de uso; muda o expoente n de S ∝ f^-n e a célula em que valem.
+# Rosencwaig–Gersho (célula fechada, amostra dentro): amostra opaca dá S ∝ f^-1 seja termicamente fina ou
+# grossa. OPC (amostra fecha a célula, detecção traseira): folha termicamente fina dá S ∝ f^-1,5, enquanto
+# f << f1 = α/(πL²).
+CELLS = {'OPC': 'OPC', 'Camara': 'Câmara'}
+CELL_TIPS = {'OPC': 'OPC: a amostra fecha a abertura da célula; a luz chega pelo lado de fora e o microfone fica do outro lado.',
+             'Camara': 'Câmara: a amostra fica dentro da célula, iluminada através de uma janela de vidro.'}
+CAL_REFS = {
+    'al_opc': {'name': 'Folha de Al fina (modo OPC)', 'cell': 'OPC', 'n': 1.5, 'L_um': 12.0, 'alpha': 0.97,
+               'params': ('L', 'alpha'), 'sample': 'al', 'thin': True,
+               'tips': 'Folha de alumínio fina (papel alumínio, ~12 µm) tampando a abertura, bem esticada e vedada '
+                       'nas bordas (graxa ou fita). O laser incide na face de fora; o microfone fica do lado de dentro.'},
+    'al_cam': {'name': 'Al espesso dentro da câmara', 'cell': 'Camara', 'n': 1.0, 'L_um': 2000.0, 'alpha': 0.97,
+               'params': ('L', 'alpha'), 'sample': 'al',
+               'tips': 'Placa de alumínio (1 mm ou mais) no fundo da câmara, com a face lixada (fosca) para o laser. '
+                       'Feche com a janela de vidro e deixe 2–3 mm de ar ou mais sobre a amostra. '
+                       'Sinal fraco: o alumínio reflete ~90 % da luz.'},
+    'al_fina_cam': {'name': 'Folha de Al fina dentro da câmara', 'cell': 'Camara', 'n': 1.0, 'L_um': 12.0,
+                    'alpha': 0.97, 'params': ('L', 'alpha'), 'sample': 'foil',
+                    'tips': 'Folha de alumínio (papel alumínio) com o lado fosco para o laser, lisa e colada sobre um '
+                            'apoio isolante (papel, plástico ou fita dupla face) no fundo da câmara, sob a janela de '
+                            'vidro, com 2–3 mm de ar ou mais por cima. Sem rugas nem bolhas: o sinal depende do '
+                            'contato com o apoio. Sinal fraco (reflete ~90 %); o Al pintado de preto dá mais sinal.'},
+    'al_preto': {'name': 'Al pintado de preto fosco (câmara)', 'cell': 'Camara', 'n': 1.0, 'L_um': 2000.0,
+                 'alpha': 0.97, 'params': ('L', 'alpha'), 'sample': 'black_plate',
+                 'tips': 'Placa de alumínio com a face voltada para o laser pintada de preto fosco (spray), no fundo da '
+                         'câmara, sob a janela de vidro, com 2–3 mm de ar ou mais por cima. A tinta é uma camada isolante '
+                         'sobre o Al: abaixo de ~10–100 Hz (depende da espessura da tinta) parte do calor vai para o Al e o '
+                         'sinal cai; acima disso segue f⁻¹ como a fita preta.'},
+    'negro_fumo': {'name': 'Negro de fumo (câmara)', 'cell': 'Camara', 'n': 1.0, 'L_um': 0.0,
+                   'alpha': 0.0, 'params': (), 'sample': 'black',
+                   'tips': 'Fuligem de vela sobre um pedaço de lâmina de vidro (apoio isolante, não metal), em camada '
+                           'grossa (~0,1 mm, preto fosco e opaco contra a luz), na mesma altura das amostras, no fundo '
+                           'da câmara, com 2–3 mm de ar ou mais por cima. É o padrão clássico da fotoacústica: o mais '
+                           'próximo de f⁻¹ ideal. Frágil: não toque nem sopre.'},
+    'preto': {'name': 'Fita preta fosca (câmara)', 'cell': 'Camara', 'n': 1.0, 'L_um': 0.0,
+              'alpha': 0.0, 'params': (), 'sample': 'black',
+              'tips': 'Fita isolante preta (lado fosco) colada numa placa rígida, no fundo da câmara, sob a janela, '
+                      'com 2–3 mm de ar ou mais por cima. Rápida de montar e com sinal alto; boa para gerar a '
+                      'calibração ou para conferir a do negro de fumo. Limite a "Faixa" a ~1 kHz.'},
+    'custom': {'name': 'Personalizada (lei de potência)', 'cell': None, 'n': 1.0, 'L_um': 0.0, 'alpha': 0.0,
+               'params': ('n',), 'sample': 'generic',
+               'tips': 'Use um padrão cujo expoente n você conheça (S ∝ f⁻ⁿ, fase constante). '
+                       'A célula é a escolhida em "Célula" na linha superior.'},
+}
+CAL_N_TOL = 0.15          # |n ajustado − n esperado| acima disso: aviso
+CAL_PHASE_TOL = 15.0      # graus: variação da fase (descontados fc e td) acima disso: aviso
+CAL_MIN_DECADES = 1.0     # faixa confiável mais curta que isso: aviso
+
+
+def fmt_freq(f):
+    '''Frequência legível: 7,7 Hz; 214 kHz.'''
+    return f'{f / 1e3:.3g} kHz' if f >= 1e3 else f'{f:.3g} Hz'
+
+
+def cal_ref_info(key, L_um, alpha, n_custom, fmin=None, fmax=None):
+    '''Curva esperada da referência key. alpha em cm²/s, L em µm. Devolve (n esperado, texto HTML,
+    ok), com ok = False quando os parâmetros saem da validade do modelo (ex.: folha grossa demais).'''
+    ref = CAL_REFS[key]
+    n = float(n_custom) if key == 'custom' else ref['n']
+    nt = f'{n:g}'.replace('.', ',')
+    parts = [f'<b>Curva esperada:</b> S ∝ f<sup>−{nt}</sup>, fase constante']
+    ok = True
+    a = alpha * 1e-4                              # m²/s
+    L = L_um * 1e-6
+    if key == 'al_opc' and a > 0 and L > 0:
+        f1 = a / (np.pi * L * L)
+        parts.append(f'f₁ = α/(πL²) = {fmt_freq(f1)}')
+        if fmax is not None and fmax > f1 / 10.0:
+            ok = False
+            parts.append(f'<span style="color:#d00000;">⚠ acima de f₁/10 ({fmt_freq(f1 / 10)}) a folha deixa de ser '
+                         f'termicamente fina e f<sup>−1,5</sup> não vale: use folha mais fina ou limite a faixa</span>')
+        else:
+            parts.append('folha termicamente fina na faixa ✓')
+    elif key == 'al_preto':
+        parts.append('tinta isolante sobre Al: f<sup>−1</sup> acima de ~100 Hz (abaixo, o calor chega ao Al e o sinal cai)')
+    elif key == 'al_cam' and a > 0:
+        if fmin and fmax:
+            mu0, mu1 = (np.sqrt(a / (np.pi * f)) * 1e3 for f in (fmin, fmax))
+            parts.append(f'μ = √(α/πf) = {mu0:.2g} mm ({fmin:g} Hz) a {mu1:.2g} mm ({fmax:g} Hz)')
+        if L > 0:
+            parts.append(f'termicamente grossa acima de f₁ = α/(πL²) = {fmt_freq(a / (np.pi * L * L))}')
+        parts.append('opaca: f<sup>−1</sup> nos dois regimes, não depende de L nem de α')
+    elif key == 'al_fina_cam' and a > 0 and L > 0:
+        parts.append(f'termicamente fina até f₁ = α/(πL²) = {fmt_freq(a / (np.pi * L * L))}: o sinal vem da folha e do '
+                     'apoio, e continua f<sup>−1</sup> com o apoio termicamente grosso (papel ou plástico de ~0,1 mm ou mais)')
+    elif key in ('preto', 'negro_fumo'):
+        parts.append('opaca (Rosencwaig–Gersho): não depende da espessura nem da difusividade')
+    return n, ' &nbsp; '.join(parts), ok
+
+
+def verify_cal_fit(f, dphi, res, n_exp):
+    '''Confere se o ajuste do padrão segue a referência: expoente, fase constante (descontados o passa-altas
+    fc e o atraso td) e largura da faixa confiável. f e dphi são os pontos usados no ajuste. Devolve a lista
+    de problemas (vazia = verificada) e um texto curto com os números.'''
+    good = res['good']
+    p, err = res['params'], res['errors']
+    probs = []
+    dn = p[1] - n_exp
+    if abs(dn) > CAL_N_TOL:
+        probs.append(f'expoente n = {p[1]:.2f} ± {err[1]:.2f}, esperado {n_exp:g} (diferença {dn:+.2f})')
+    ph_txt = ''
+    if res['phase'] is not None and good.sum() >= 4:
+        r = wrap_deg(dphi[good] - res['phase'](f[good]))
+        dev = float(np.percentile(np.abs(r - circ_stats_deg(r)[0]), 90))
+        ph_txt = f'; fase: ±{dev:.0f}° em torno do modelo'
+        if dev > CAL_PHASE_TOL:
+            probs.append(f'a fase varia ±{dev:.0f}° (descontados fc e td), esperado constante (±{CAL_PHASE_TOL:g}°)')
+    dec = float(np.log10(f[good].max() / f[good].min())) if good.sum() >= 2 else 0.0
+    if dec < CAL_MIN_DECADES:
+        probs.append(f'faixa confiável de só {dec:.2f} década(s), mínimo {CAL_MIN_DECADES:g}')
+    txt = f'n = {p[1]:.2f} ± {err[1]:.2f} (esperado {n_exp:g}){ph_txt}; faixa confiável {dec:.1f} década(s)'
+    return probs, txt
+
+
+CAL_PROBLEM_CAUSES = ('vazamento na célula, amostra solta ou mal vedada, folga de ar pequena sobre a amostra, '
+                      'sinal fraco (SNR baixo), absorção da janela de vidro, ou uma ressonância dentro da faixa '
+                      'do ajuste (limite com a "Faixa")')
+
+
+def find_resonance(f, s):
+    '''Pico de ressonância em S(f): o maior excesso sobre uma reta em log-log (fundo) ajustada aos pontos
+    fora do pico. Devolve (i do pico, f0 estimada, largura estimada, janela (f_lo, f_hi)) ou None.'''
+    f, s = np.asarray(f, dtype=np.float64), np.asarray(s, dtype=np.float64)
+    ok = (f > 0) & (s > 0) & np.isfinite(s)
+    if ok.sum() < 6:
+        return None
+    k = np.flatnonzero(ok)[np.argsort(f[ok])]
+    f, ls = f[k], np.log(s[k])
+    lf = np.log(f)
+    use = np.ones(f.size, dtype=bool)
+    for _ in range(3):                              # fundo robusto: tira os pontos muito acima da reta
+        c = np.polyfit(lf[use], ls[use], 1)
+        ex = ls - np.polyval(c, lf)
+        thr = 2.0 * max(1.4826 * np.median(np.abs(ex[use] - np.median(ex[use]))), 0.05)
+        new = ex < thr
+        if new.sum() < 4 or np.array_equal(new, use):
+            break
+        use = new
+    i = int(np.argmax(ex))
+    if ex[i] < np.log(1.5):                        # menos de 3,5 dB acima do fundo: sem pico claro
+        return None
+    half = 0.5 * (np.exp(ex[i]) + 1.0)              # meia altura do excesso, em amplitude
+    lo = i
+    while lo > 0 and np.exp(ex[lo]) > half:
+        lo -= 1
+    hi = i
+    while hi < f.size - 1 and np.exp(ex[hi]) > half:
+        hi += 1
+    width = max(f[hi] - f[lo], 2.0 * (f[min(i + 1, f.size - 1)] - f[max(i - 1, 0)]) / 2.0, 1e-3 * f[i])
+    # ±3 larguras (fundo dos dois lados), sem passar de f0/1,8 a 1,8·f0 (com poucos pontos a largura sai superestimada)
+    f_lo = max(f[0], f[i] - 3.0 * width, f[i] / 1.8)
+    f_hi = min(f[-1], f[i] + 3.0 * width, f[i] * 1.8)
+    return int(k[i]), float(f[i]), float(width), (float(f_lo), float(f_hi))
+
+
+def find_ref_band(f, s, dphi, n_exp, valid=None, tol_n=CAL_N_TOL, max_db=CAL_VER_DB, max_deg=CAL_VER_DEG, min_pts=5, min_dec=0.4):
+    '''Procura a maior faixa contínua de frequências em que S segue f^-n_exp: ajuste livre de log S × log f com
+    |n − n_exp| ≤ tol_n, desvio da reta com n = n_exp ≤ max_db (rms) e fase constante dentro de ±max_deg (rms).
+    É o "Ajuste da referência": no resto da varredura a forma vem do sistema (vazamento, ressonância).
+    Devolve dict com 'ok', 'i0', 'i1' (índices em f ordenado), 'f_lo', 'f_hi', 'n', 'n_err', 'rms_db', 'rms_deg',
+    'lnA' (S = e^lnA·f^-n_exp), 'phi0' (graus), 'order' (ordenação usada) ou None. Sem faixa que passe, devolve a
+    de menor desvio (ok = False), para mostrar o mais próximo.'''
+    f, s, dphi = (np.asarray(v, dtype=np.float64) for v in (f, s, dphi))
+    use = (f > 0) & (s > 0) & np.isfinite(s) & np.isfinite(dphi)
+    if valid is not None:
+        use &= np.asarray(valid, dtype=bool)
+    idx = np.flatnonzero(use)
+    if idx.size < min_pts:
+        return None
+    k = idx[np.argsort(f[idx])]
+    lf, ls = np.log(f[k]), np.log(s[k])
+    ph = np.unwrap(np.radians(dphi[k]))
+    npt = k.size
+    best_ok, best_any = None, None
+    for i in range(npt):
+        for j in range(i + min_pts - 1, npt):
+            if lf[j] - lf[i] < min_dec * np.log(10.0):
+                continue
+            x, y = lf[i:j + 1], ls[i:j + 1]
+            c, cov = np.polyfit(x, y, 1, cov=True) if j - i >= 3 else (np.polyfit(x, y, 1), np.zeros((2, 2)))
+            n = -c[0]
+            n_err = float(np.sqrt(max(cov[0, 0], 0.0)))
+            lnA = float(np.mean(y + n_exp * x))
+            rms_db = float(np.sqrt(np.mean((y + n_exp * x - lnA) ** 2)) * 20.0 / np.log(10.0))
+            p = ph[i:j + 1]
+            phi0 = float(np.angle(np.mean(np.exp(1j * p))))
+            rms_deg = float(np.degrees(np.sqrt(np.mean(np.angle(np.exp(1j * (p - phi0))) ** 2))))
+            good = abs(n - n_exp) <= tol_n and rms_db <= max_db and rms_deg <= max_deg
+            r = {'i0': i, 'i1': j, 'f_lo': float(np.exp(lf[i])), 'f_hi': float(np.exp(lf[j])), 'n': float(n),
+                 'n_err': n_err, 'rms_db': rms_db, 'rms_deg': rms_deg, 'lnA': lnA, 'phi0': float(np.degrees(phi0)),
+                 'order': k, 'npts': j - i + 1}
+            score = abs(n - n_exp) / tol_n + rms_db / max_db + rms_deg / max_deg
+            if good and (best_ok is None or (lf[j] - lf[i], -score) > (np.log(best_ok['f_hi'] / best_ok['f_lo']),
+                                                                       -best_ok['score'])):
+                best_ok = dict(r, score=score)
+            if best_any is None or score < best_any['score']:
+                best_any = dict(r, score=score)
+    if best_ok is not None:
+        return dict(best_ok, ok=True)
+    return dict(best_any, ok=False) if best_any is not None else None
+
+
+def cell_resonance_f0(f, s, f_min=250.0):
+    '''f0 da ressonância da célula (Helmholtz, ~1–2 kHz): procura o pico só acima de f_min, para não confundir
+    com ruído ou interferência em baixa frequência. Devolve f0 ou None.'''
+    f, s = np.asarray(f, dtype=np.float64), np.asarray(s, dtype=np.float64)
+    m = f >= f_min
+    fr = find_resonance(f[m], s[m]) if m.sum() >= 6 else None
+    return None if fr is None else fr[1]
+
+
+def resonance_complex(p, f):
+    '''Oscilador amortecido + fundo complexo, com atraso: p = (ln A, φ0, τ, ln f0, ln Q, b, β).
+    z(f) = A·e^{i(φ0 − 2πfτ)}·[f0²/(f0² − f² + i·f·f0/Q) + b·e^{iβ}].'''
+    la, phi0, tau, lf0, lq, b, beta = p
+    f0, q = np.exp(lf0), np.exp(lq)
+    r = f0 * f0 / (f0 * f0 - f * f + 1j * f * f0 / q)
+    return np.exp(la + 1j * (phi0 - 2.0 * np.pi * f * tau)) * (r + b * np.exp(1j * beta))
+
+
+def fit_resonance(f, s, s_rel, dphi, dphi_e, target='both', window=None):
+    '''Ajusta a ressonância (resonance_complex) aos pontos dentro de window (f_lo, f_hi); sem window, acha o
+    pico sozinho (find_resonance). target: 'mag', 'phase' ou 'both'. Devolve dict com 'func', 'f0', 'f0_err',
+    'q', 'q_err', 'fwhm', 'fwhm_err', 'gain_db', 'window', 'n', 'rms_mag', 'rms_phase', ou None.'''
+    from scipy.optimize import least_squares
+    f = np.asarray(f, dtype=np.float64)
+    s = np.asarray(s, dtype=np.float64)
+    dphi = np.asarray(dphi, dtype=np.float64)
+    s_rel = np.maximum(np.asarray(s_rel, dtype=np.float64), 0.01)
+    sig_p = np.radians(np.maximum(np.asarray(dphi_e, dtype=np.float64), 1.0))
+    guess = None
+    if window is None:
+        found = find_resonance(f, s)
+        if found is None:
+            return None
+        window, guess = found[3], (found[1], found[2])
+    sel = (f >= window[0]) & (f <= window[1]) & (s > 0) & np.isfinite(s)
+    if sel.sum() < 6:
+        return None
+    f, s, s_rel, ph, sig_p = f[sel], s[sel], s_rel[sel], np.radians(dphi[sel]), sig_p[sel]
+    k = np.argsort(f)
+    f, s, s_rel, ph, sig_p = f[k], s[k], s_rel[k], ph[k], sig_p[k]
+    ph = np.unwrap(ph)
+    ls = np.log(s)
+    if guess is None:                               # janela dada pelo usuário: chute pelo maior ponto
+        i = int(np.argmax(s))
+        above = s > 0.5 * (s[i] + np.median(s))
+        guess = (f[i], max(float(np.ptp(f[above])) if above.sum() > 1 else 0.0, 2.0 * float(np.median(np.diff(f)))))
+    f0g, wg = guess
+    use_mag, use_ph = target in ('mag', 'both'), target in ('phase', 'both')
+    fixed_ph = not use_ph
+
+    def resid(p):
+        if fixed_ph:
+            p = np.r_[p[0], 0.0, 0.0, p[1:]]
+        z = resonance_complex(p, f)
+        r = []
+        if use_mag:
+            r.append((np.log(np.abs(z)) - ls) / s_rel)
+        if use_ph:
+            r.append(np.angle(np.exp(1j * (np.angle(z) - ph))) / sig_p)
+        return np.concatenate(r)
+
+    # Atraso inicial pela inclinação da fase fora do pico; fase e amplitude pela borda de baixa frequência
+    tau0 = float(np.clip(-np.polyfit(f, ph, 1)[0] / (2.0 * np.pi), -0.01, 0.01)) if use_ph else 0.0
+    q0 = float(np.clip(f0g / max(wg, 1e-6), 0.5, 500.0))
+    best = None
+    for b0 in (0.05, 0.3, 1.0):
+        for beta0 in (0.0, np.pi / 2, np.pi, -np.pi / 2):
+            for qm in (0.5, 1.0, 2.0):
+                p0 = np.array([0.0, 0.0, tau0, np.log(f0g), np.log(q0 * qm), b0, beta0])
+                z0 = resonance_complex(p0, f)
+                p0[0] = float(np.median(ls - np.log(np.abs(z0))))
+                if use_ph:
+                    p0[1] = float(np.angle(np.mean(np.exp(1j * (ph - np.angle(z0))))))
+                lb = [-np.inf, -np.inf, -0.02, np.log(f.min()), np.log(0.3), 0.0, -np.inf]
+                ub = [np.inf, np.inf, 0.02, np.log(f.max()), np.log(5000.0), 50.0, np.inf]
+                if fixed_ph:
+                    p0 = np.r_[p0[0], p0[3:]]
+                    lb = [lb[0]] + lb[3:]
+                    ub = [ub[0]] + ub[3:]
+                try:
+                    sol = least_squares(resid, p0, bounds=(lb, ub))
+                except ValueError:
+                    continue
+                if best is None or sol.cost < best.cost:
+                    best = sol
+    if best is None:
+        return None
+    p = best.x
+    npar = p.size
+    dof = max(1, best.fun.size - npar)
+    try:
+        cov = np.linalg.pinv(best.jac.T @ best.jac) * max(2.0 * best.cost / dof, 1.0)
+        err = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    except np.linalg.LinAlgError:
+        err = np.full(npar, np.nan)
+    if fixed_ph:
+        p = np.r_[p[0], 0.0, 0.0, p[1:]]
+        err = np.r_[err[0], np.nan, np.nan, err[1:]]
+    f0, q = float(np.exp(p[3])), float(np.exp(p[4]))
+    f0_err, q_err = f0 * float(err[3]), q * float(err[4])
+    ff = np.linspace(f.min(), f.max(), 2000)
+    zz = np.abs(resonance_complex(p, ff))
+    z_bg = np.exp(p[0]) * abs(1.0 + p[5] * np.exp(1j * p[6]))   # fundo do lado de baixa frequência (r → 1)
+    z = resonance_complex(p, f)
+    rms_mag = float(np.sqrt(np.mean((np.log(np.abs(z)) - ls) ** 2)))
+    rms_ph = float(np.degrees(np.sqrt(np.mean(np.angle(np.exp(1j * (np.angle(z) - ph))) ** 2))))
+
+    def func(x):
+        return resonance_complex(p, np.asarray(x, dtype=np.float64))
+    return {'func': func, 'f0': f0, 'f0_err': f0_err, 'q': q, 'q_err': q_err, 'fwhm': f0 / q,
+            'fwhm_err': f0 / q * np.hypot(f0_err / f0, q_err / q), 'tau': float(p[2]),
+            'gain_db': float(20.0 * np.log10(zz.max() / max(z_bg, 1e-30))), 'f_peak': float(ff[np.argmax(zz)]),
+            'window': (float(f.min()), float(f.max())), 'n': int(f.size), 'rms_mag': rms_mag, 'rms_phase': rms_ph}
+
+
+def diag_complex(p, f, parts=False):
+    '''Modelo do Diagnóstico. p = (ln A, n, α, ln fc, td, ln B, β, ln f0, ln Q); ln B = None sem fundo e
+    ln f0 = None sem ressonância. z(f) = e^{−2πi·f·td}·HP(f)·R(f)·[A·(f/100 Hz)^−n·e^{iα} + B·e^{iβ}],
+    com HP(f) = (if/fc)/(1 + if/fc) (passa-alta do microfone) e R(f) = f0²/(f0² − f² + i·f·f0/Q).
+    parts=True devolve (total, fotoacústico, fundo), cada um já com HP, R e o atraso.'''
+    la, n, al, lfc, td, lb, be, lf0, lq = p
+    f = np.asarray(f, dtype=np.float64)
+    sysr = np.exp(-2j * np.pi * f * td) * (1j * f / np.exp(lfc)) / (1.0 + 1j * f / np.exp(lfc))
+    if lf0 is not None:
+        f0, q = np.exp(lf0), np.exp(lq)
+        sysr = sysr * f0 * f0 / (f0 * f0 - f * f + 1j * f * f0 / q)
+    pa = np.exp(la) * (f / 100.0) ** (-n) * np.exp(1j * al) * sysr
+    bg = np.exp(lb) * np.exp(1j * be) * sysr if lb is not None else np.zeros_like(pa)
+    return (pa + bg, pa, bg) if parts else pa + bg
+
+
+def diagnose_freq(f, s, dphi):
+    '''Diagnóstico da varredura em frequência (S e Δφ em graus): separa um sinal fotoacústico em lei de
+    potência (A·f^−n, fase constante) de um fundo plano (amplitude e fase constantes, como luz chegando ao
+    microfone, chiado do driver coerente com a modulação ou acoplamento elétrico), com o passa-alta do
+    microfone, o atraso do sistema e a ressonância da célula (se houver pico). Ajusta amplitude e fase juntas,
+    com e sem fundo, e fica com o fundo só se ele melhorar o ajuste de verdade (critério BIC).
+    Devolve dict ou None (menos de 12 pontos ou menos de uma década).'''
+    from scipy.optimize import least_squares
+    f, s, dphi = (np.asarray(v, dtype=np.float64) for v in (f, s, dphi))
+    ok = (f > 0) & (s > 0) & np.isfinite(s) & np.isfinite(dphi)
+    f, s, dphi = f[ok], s[ok], dphi[ok]
+    if f.size < 12 or f.max() / f.min() < 10.0:
+        return None
+    k = np.argsort(f)
+    f, s, ph = f[k], s[k], np.unwrap(np.radians(dphi[k]))
+    z = s * np.exp(1j * ph)
+    res_found = find_resonance(f, s)
+    fmin, fmax = float(f.min()), float(f.max())
+
+    def unpack(q, with_bg, with_res):
+        q = list(q)
+        la, n, al, lfc, td = q[:5]
+        i = 5
+        lb = be = lf0 = lq = None
+        if with_bg:
+            lb, be = q[i], q[i + 1]
+            i += 2
+        if with_res:
+            lf0, lq = q[i], q[i + 1]
+        return (la, n, al, lfc, td, lb, be, lf0, lq)
+
+    def resid(q, with_bg, with_res):
+        r = diag_complex(unpack(q, with_bg, with_res), f) / z
+        return np.concatenate([np.log(np.abs(r)), np.angle(r)])
+
+    td0 = float(np.clip(-np.polyfit(f, ph, 1)[0] / (2.0 * np.pi), -4e-3, 4e-3))
+    fits = {}
+    for with_bg in (False, True):
+        with_res = res_found is not None
+        best = None
+        for fc0 in (fmin * 0.5, fmin * 3.0, min(100.0, fmax / 4.0)):
+            for al0 in np.linspace(-np.pi, np.pi, 4, endpoint=False):
+                for b0 in ((0.1, 1.0) if with_bg else (None,)):
+                    q0 = [0.0, 1.0, al0, np.log(max(fc0, 0.2)), td0]
+                    lb_ = [-np.inf, -1.0, -10.0, np.log(0.1), -5e-3]
+                    ub_ = [np.inf, 3.0, 10.0, np.log(max(fmax, 1.0)), 5e-3]
+                    if with_bg:
+                        q0 += [0.0, 0.0]
+                        lb_ += [-np.inf, -10.0]
+                        ub_ += [np.inf, 10.0]
+                    if with_res:
+                        q0 += [np.log(res_found[1]), np.log(np.clip(res_found[1] / res_found[2], 0.7, 200.0))]
+                        lb_ += [np.log(fmin), np.log(0.3)]
+                        ub_ += [np.log(fmax * 1.5), np.log(500.0)]
+                    # escala: A pelo ponto de 100 Hz (ou o mais próximo); B como fração b0 do sinal no meio da faixa
+                    zz = diag_complex(unpack(q0, False, with_res) if not with_bg else
+                                      unpack(q0[:5] + [-np.inf, 0.0] + q0[7:], True, with_res), f)
+                    q0[0] = float(np.median(np.log(s) - np.log(np.abs(zz))))
+                    if with_bg:
+                        q0[5] = q0[0] + np.log(b0)
+                    try:
+                        sol = least_squares(resid, q0, args=(with_bg, with_res), bounds=(lb_, ub_),
+                                            loss='soft_l1', f_scale=0.1, max_nfev=300)
+                    except ValueError:
+                        continue
+                    if best is None or sol.cost < best.cost:
+                        best = sol
+        if best is not None:
+            fits[with_bg] = (best, with_res)
+    if not fits:
+        return None
+
+    def bic(sol):
+        r = sol.fun
+        return r.size * np.log(max(np.mean(r * r), 1e-30)) + sol.x.size * np.log(r.size)
+    use_bg = True in fits and (False not in fits or bic(fits[True][0]) < bic(fits[False][0]) - 6.0)
+    sol, with_res = fits[use_bg]
+    p = unpack(sol.x, use_bg, with_res)
+    dof = max(1, sol.fun.size - sol.x.size)
+    try:
+        cov = np.linalg.pinv(sol.jac.T @ sol.jac) * max(np.sum(sol.fun ** 2) / dof, 1e-12)
+        err = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    except np.linalg.LinAlgError:
+        err = np.full(sol.x.size, np.nan)
+    r = resid(sol.x, use_bg, with_res)
+    m = r.size // 2
+    out = {'params': p, 'bg': use_bg, 'res': with_res, 'n': float(p[1]), 'n_err': float(err[1]),
+           'alpha': float(np.degrees(p[2])), 'fc': float(np.exp(p[3])), 'fc_err': float(np.exp(p[3]) * err[3]),
+           'td': float(p[4]), 'td_err': float(err[4]), 'rms_mag': float(np.sqrt(np.mean(r[:m] ** 2))),
+           'rms_phase': float(np.degrees(np.sqrt(np.mean(r[m:] ** 2)))), 'fmin': fmin, 'fmax': fmax,
+           'npts': int(f.size), 'func': lambda x: diag_complex(p, x, parts=True)}
+    if use_bg:
+        out['beta'] = float(np.degrees(p[6]))
+        out['dphase'] = float((np.degrees(p[6] - p[2]) + 180.0) % 360.0 - 180.0)   # fundo − fotoacústico
+        # razão fundo/fotoacústico = (B/A)·(f/100)^n; f onde as duas se igualam
+        ba = float(np.exp(p[5] - p[0]))
+        out['ratio'] = lambda x: ba * (np.asarray(x, dtype=np.float64) / 100.0) ** p[1]
+        out['f_cross'] = float(100.0 * ba ** (-1.0 / p[1])) if abs(p[1]) > 0.05 else None
+    if with_res:
+        j = 5 + (2 if use_bg else 0)
+        f0, q = float(np.exp(p[7])), float(np.exp(p[8]))
+        out.update(f0=f0, f0_err=f0 * float(err[j]), q=q, q_err=q * float(err[j + 1]))
+        ff = np.linspace(max(fmin, f0 / 3.0), min(fmax, f0 * 3.0), 2000)
+        rr = np.abs(f0 * f0 / (f0 * f0 - ff * ff + 1j * ff * f0 / q))
+        out['gain_db'] = float(20.0 * np.log10(rr.max()))
+        out['f_peak'] = float(ff[np.argmax(rr)])
+    return out
+
+
+def diagnose_text(d, calibrated=False):
+    '''Texto curto (HTML) do Diagnóstico a partir do dict de diagnose_freq. Devolve (texto, dica com os detalhes).'''
+    red = '#d00000'
+    L = [f'<b>Fotoacústico:</b> n = {d["n"]:.2f} ± {d["n_err"]:.2f}']
+    if d['bg']:
+        rat, fx = d['ratio'], d.get('f_cross')
+        if fx is not None and d['fmin'] < fx < d['fmax']:
+            where = f'domina {"acima" if d["n"] > 0 else "abaixo"} de {fmt_freq(fx)}'
+        elif rat(d['fmax'] if d['n'] > 0 else d['fmin']) > 1.0:
+            where = 'domina a faixa toda'
+        else:
+            where = f'até {rat(d["fmax"]):.2g}× o fotoacústico'
+        L.append(f'<span style="color:{red};"><b>⚠ Fundo plano não fotoacústico detectado</b> ({where}). '
+                 'Verifique a montagem antes de seguir; não gere calibração com ele presente.</span>')
+    else:
+        L.append('<span style="color:#2e7d32;">Sem fundo plano.</span>')
+    sysl = []
+    if d['fc'] > 1.2 * d['fmin']:
+        sysl.append(f'fc = {d["fc"]:.3g} Hz')
+    sysl.append(f'atraso = {d["td"] * 1e6:.0f} µs')
+    if d['res']:
+        sysl.append(f'ressonância {d["f0"]:.4g} Hz, Q = {d["q"]:.2g}')
+    L.append('<b>Sistema:</b> ' + ', '.join(sysl))
+    if d['rms_mag'] > 0.25 or d['rms_phase'] > 15.0:
+        L.append(f'<span style="color:{red};">⚠ Ajuste ruim: use só como indicação.</span>')
+    tip = (f'Fotoacústico: S ∝ f^-n, n = {d["n"]:.3f} ± {d["n_err"]:.3f}, fase constante.\n')
+    if d['bg']:
+        parts = [f'{rat(x):.2g}× em {fmt_freq(x)}' for x in
+                 sorted({d['fmin'], *[v for v in (100.0, 1000.0) if d['fmin'] < v < d['fmax']], d['fmax']})]
+        tip += (f'Fundo plano (amplitude e fase constantes): fundo/fotoacústico = {", ".join(parts)}; '
+                f'fase fundo − fotoacústico = {d["dphase"]:+.0f}°.\n')
+    tip += (f'fc = passa-alta do microfone ({d["fc"]:.3g} ± {d["fc_err"]:.2g} Hz).\n'
+            f'Atraso = atraso puro da cadeia do microfone em relação à do OPT101 ({d["td"] * 1e6:.0f} ± '
+            f'{d["td_err"] * 1e6:.0f} µs), quase todo do filtro digital do INMP441;\n'
+            'não é o tempo de voo do som nem o atraso térmico da amostra. O atraso do driver/laser se cancela em Δφ.\n')
+    if d['res']:
+        tip += (f'Ressonância: f0 = {d["f0"]:.4g} ± {d["f0_err"]:.2g} Hz, Q = {d["q"]:.2g} ± {d["q_err"]:.1g}, '
+                f'pico em {fmt_freq(d["f_peak"])} (+{d["gain_db"]:.1f} dB).\n')
+    tip += (f'Resíduo rms: magnitude {100 * d["rms_mag"]:.0f} %, fase {d["rms_phase"]:.1f}° '
+            f'({d["npts"]} pontos, {fmt_freq(d["fmin"])}–{fmt_freq(d["fmax"])}).')
+    if calibrated:
+        tip += '\nCom a calibração aplicada, o esperado é fc, atraso e ressonância quase nulos.'
+    return ' &nbsp;|&nbsp; '.join(L[:1] + L[2:3]) + '<br>' + '<br>'.join(L[1:2] + L[3:]), tip
+
+def opt_digital_phase(f, hp_cutoff, mains=False, fs=None):
     '''Fase (graus) que a cadeia digital soma à fundamental do OPT101 em f (frequência real): atraso da
-    referência (OPT_REF_DELAY), passa-altas de remoção do DC e, onde ligados, os notches de rede.
+    referência (opt_ref_delay(), depende do OSR), passa-altas de remoção do DC e, onde ligados, os notches de rede.
     hp_cutoff e mains podem ser escalares ou um valor por frequência.'''
+    fs = FS if fs is None else fs
     f = np.atleast_1d(np.asarray(f, dtype=np.float64))
     hp = np.broadcast_to(np.asarray(hp_cutoff, dtype=np.float64), f.shape)
     mains = np.broadcast_to(np.asarray(mains, dtype=bool), f.shape)
@@ -430,7 +1062,7 @@ def opt_digital_phase(f, hp_cutoff, mains=False, fs=FS):
         z = zinv[i]
         for b0, b1, b2, _, a1, a2 in mains_notch_sos(fs, f[i]).values():
             h[i] *= (b0 + b1 * z + b2 * z * z) / (1.0 + a1 * z + a2 * z * z)
-    return 360.0 * f * OPT_REF_DELAY + np.degrees(np.angle(h))
+    return 360.0 * f * opt_ref_delay(int(round(RAW_FS / fs))) + np.degrees(np.angle(h))
 
 
 def fit_opt_tau(f, phase, phase_e, digital, r=None):
@@ -496,6 +1128,40 @@ def fit_opt_tau(f, phase, phase_e, digital, r=None):
     return out
 
 
+def opt_channel_summary(f, r, opt_tau):
+    '''Uma linha sobre a luz na varredura em frequência (o que importa para o usuário) e o texto completo do
+    canal óptico para a dica. f: frequências reais; r: R do OPT101; opt_tau: dict de fit_opt_tau ou None.'''
+    f, r = np.asarray(f, dtype=np.float64), np.asarray(r, dtype=np.float64)
+    ok = (r > 0) & np.isfinite(r)
+    if ok.sum() < 2:
+        return '', ''
+    k = np.argsort(f[ok])
+    fs, rs = f[ok][k], r[ok][k]
+    ref = float(np.median(rs[: max(1, rs.size // 5)]))          # nível de baixa frequência
+    drop = 100.0 * (rs[-1] / ref - 1.0)
+    spread = 100.0 * (rs.max() - rs.min()) / ref
+    parts = [f'<b>Luz (OPT101):</b> R = {ref:.3g} em baixa frequência, {drop:+.0f} % em {fmt_freq(fs[-1])} '
+             f'(variação total {spread:.0f} %)']
+    if spread < 2.0:
+        parts.append('estável')
+    else:
+        parts.append('a normalização desconta essa variação')
+    details = ('Canal óptico = driver + laser + OPT101. Só o polo do OPT101 não é comum ao microfone; o atraso do\n'
+               'driver/laser se cancela em Δφ, e a calibração do microfone absorve o polo do OPT101 enquanto o\n'
+               'resistor de realimentação for o mesmo. Nada aqui precisa ser calibrado no uso normal.')
+    warn = ''
+    if opt_tau is not None and opt_tau.get('valid'):
+        tau = opt_tau['tau_amp'] if opt_tau.get('tau_amp') else opt_tau['tau']
+        fc = 1.0 / (2.0 * np.pi * tau) if tau > 0 else np.inf
+        parts.append(f'banda do canal óptico ≈ {fmt_freq(fc)}')
+        if fs[-1] > 0.5 * fc:
+            warn = (f'<br><span style="color:#b35c00;">A varredura passa de metade da banda óptica: perto de '
+                    f'{fmt_freq(fs[-1])} parte da queda da luz pode ser do sensor. Se trocar o resistor do OPT101, '
+                    f'use Calibração do microfone → Avançado.</span>')
+        details += '\n\n' + re.sub(r'<[^>]+>', '', opt_tau['text'].replace('<br>', '\n')).replace('&nbsp;', ' ')
+    return '<span style="color:#404040;">' + '; '.join(parts) + '.</span>' + warn, details
+
+
 def fit_sensor_tau(f, ph, ph_e, r, f_ref, ph_ref, ph_ref_e, r_ref):
     '''τ do sensor (polo do OPT101) pela diferença de fase entre duas varreduras em frequência com a mesma
     luz (mesmo PWM e alinhamento) e resistores de realimentação diferentes. A cadeia digital, o driver e o
@@ -538,13 +1204,25 @@ def fit_sensor_tau(f, ph, ph_e, r, f_ref, ph_ref, ph_ref_e, r_ref):
 # Modelos físicos da resposta da amostra na varredura em frequência (Modo Duplo, painel "Ajuste com modelos").
 # Com a calibração aplicada, S e Δφ já são referidos à folha fina de alumínio (∝ f^-1,5), então cada modelo
 # descreve a amostra a menos de uma constante complexa (amplitude e fase livres). x = √(f/f1), f1 = α/(πL²).
+# Medida das varreduras do Modo Duplo (o nome em português vai para o cabeçalho do CSV)
+DUAL_MODE_NAMES = ('Média no tempo (τ atual)', 'Integração longa (τ da varredura)')
+
 FREQ_MODELS = {
+    'band': 'Faixa com S ∝ f⁻ⁿ (n esperado da amostra)',
     'pow': 'Lei de potência  S ∝ f⁻ⁿ',
     'pow2': 'Duas leis de potência (com quebra)',
     'diff': 'Difusão térmica (placa, detecção traseira)',
     'te': 'Flexão termoelástica (Perondi–Miranda)',
+    'cam_op': 'Câmara: amostra opaca (RG, S ∝ f⁻¹)',
+    'cam_tr': 'Câmara: transparente e termicamente grossa (RG, S ∝ f⁻¹·⁵)',
+    'res': 'Ressonância da célula (oscilador amortecido + fundo)',
 }
+FREQ_MODELS_FIXED = {'cam_op': 1.0, 'cam_tr': 1.5}     # modelos sem parâmetro de forma: só amplitude e fase
 FREQ_MODEL_TIPS = {
+    'band': ('Escolha o n esperado da amostra (1: opaca na câmara; 1,5: folha fina em OPC ou transparente). O ajuste\n'
+             'procura a maior faixa contínua em que S segue f⁻ⁿ (n livre dentro de ±0,15 do esperado, desvio ≤ 1,5 dB rms\n'
+             'e fase constante ± 10°) e a mostra sombreada. Fora dela, a forma vem do sistema (vazamento, ressonância)\n'
+             'ou a amostra não é a esperada. Com a calibração aplicada ("Usar"), a faixa mostra onde a calibração vale.'),
     'pow': 'S ∝ f⁻ⁿ com fase constante. Ajusta só o expoente n (descritivo, sem modelo físico).',
     'pow2': ('Duas retas em log-log, contínuas na frequência de quebra fb: S ∝ f^-n1 abaixo de fb e f^-n2 acima.\n'
              'Ajusta n1, n2 e fb (só a magnitude). Útil para separar regimes: por exemplo, a flexão termoelástica\n'
@@ -559,6 +1237,17 @@ FREQ_MODEL_TIPS = {
            'A fase cai ~90° em torno de f1 e se estabiliza acima dela.\n'
            'Ref.: L. F. Perondi, L. C. M. Miranda, J. Appl. Phys. 62, 2955 (1987);\n'
            'G. Rousset, F. Lepoutre, L. Bertrand, J. Appl. Phys. 54, 2383 (1983).'),
+    'cam_op': ('Célula fechada com a amostra dentro (Rosencwaig–Gersho). Amostra opaca: S ∝ f⁻¹ com fase constante,\n'
+               'seja ela termicamente fina ou grossa. Sem parâmetro de forma: o ajuste mede só o quanto os dados\n'
+               'se afastam do modelo (resíduos). Use com a calibração aplicada.\n'
+               'Ref.: A. Rosencwaig, A. Gersho, J. Appl. Phys. 47, 64 (1976).'),
+    'cam_tr': ('Célula fechada com a amostra dentro (Rosencwaig–Gersho). Amostra transparente (absorção fraca) e\n'
+               'termicamente grossa: S ∝ f⁻¹·⁵, fase constante (−90° em relação à opaca). Se a amostra for\n'
+               'semitransparente, o expoente fica entre 1 e 1,5. Sem parâmetro de forma: veja os resíduos.'),
+    'res': ('Ressonância acústica da célula: z(f) = A·e^{i(φ0 − 2πfτ)}·[f0²/(f0² − f² + i·f·f0/Q) + b·e^{iβ}].\n'
+            'Ajusta f0, Q, a largura (f0/Q) e o ganho do pico sobre o fundo. Sem "Faixa", o pico é achado sozinho;\n'
+            'ou use "Marcar pico" e clique dos dois lados dele no gráfico da esquerda.\n'
+            'Meça com "Usar" desmarcado: a calibração do microfone remove a ressonância da célula.'),
 }
 
 
@@ -577,6 +1266,8 @@ def freq_model_log(model, f, shape):
     f = np.asarray(f, dtype=np.float64)
     if model == 'pow':
         return -shape * np.log(f) + 0j
+    if model in FREQ_MODELS_FIXED:
+        return -FREQ_MODELS_FIXED[model] * np.log(f) + 0j
     x = np.sqrt(f / shape)
     if model == 'diff':
         q = (1 + 1j) * x
@@ -597,6 +1288,15 @@ def fit_freq_model(f, s, s_rel, dphi, dphi_e, model, target):
     use_mag, use_ph = target in ('mag', 'both'), target in ('phase', 'both')
     if f.size < 3 or not np.all(np.isfinite(ls)):
         return None
+    if model in FREQ_MODELS_FIXED:
+        # Sem parâmetro de forma: a melhor amplitude e fase constantes, e os resíduos
+        g = freq_model_log(model, f, 0.0)
+        c0 = float(np.sum((ls - g.real) / sig_l ** 2) / np.sum(1.0 / sig_l ** 2))
+        p1 = float(np.angle(np.mean(np.exp(1j * (ph - g.imag)))))
+        rms_mag = float(np.sqrt(np.mean((c0 + g.real - ls) ** 2)))
+        rms_ph = float(np.degrees(np.sqrt(np.mean(np.angle(np.exp(1j * (p1 + g.imag - ph))) ** 2))))
+        return {'func': lambda ff: np.exp(c0 + 1j * p1 + freq_model_log(model, ff, 0.0)), 'shape': None,
+                'shape_err': None, 'rms_mag': rms_mag, 'rms_phase': rms_ph, 'n': f.size}
 
     def shape_of(p):
         return p[2] if model == 'pow' else float(np.exp(p[2]))
@@ -702,18 +1402,36 @@ def fmt_tau(tau):
     return f'τ = {tau * 1e3:.3g} ms' if tau < 1.0 else f'τ = {tau:.3g} s'
 
 
-LP_TIP = ('Passa-baixas aplicado depois da demodulação (2 polos em cascata): define a banda do lock-in.\n'
-          'Corte menor = menos ruído e leitura mais estável, porém resposta mais lenta (τ maior).\n'
-          'Deve ficar bem abaixo de 2× a frequência de modulação, para rejeitar o resíduo em 2f.\n'
-          'Ao mudar a frequência, volta ao automático: 5 % da frequência, entre 0,08 e 0,5 Hz.')
+def fmt_hz(f):
+    return f'{f * 1e3:.3g} mHz' if f < 1.0 else f'{f:.3g} Hz'
+
+
+def fmt_seconds(s):
+    return f'{s * 1e3:.3g} ms' if s < 1.0 else f'{s:.3g} s'
+
+
+def fmt_lp_info(tau):
+    '''Texto curto mostrado ao lado do τ de cada lock-in.'''
+    f3, enbw, wait = lp_info(tau)
+    return f'−3 dB: {fmt_hz(f3)}   ENBW: {fmt_hz(enbw)}   espera: {fmt_seconds(wait)}'
+
+
+TAU_TIP = ('Constante de tempo de cada polo do passa-baixas aplicado depois da demodulação (2 polos em cascata).\n'
+           'τ maior = menos ruído e leitura mais estável, porém resposta mais lenta.\n'
+           'As setas andam na sequência 1–3–10: 1 ms, 3 ms, 10 ms … 30 s, 100 s. Também aceita um valor digitado\n'
+           '(ex.: 0,5 s ou 200 ms).\n'
+           'Use τ de pelo menos ~3 períodos da modulação (τ ≥ 3/f) para rejeitar o resíduo em 2f.\n'
+           'Ao mudar a frequência, volta ao automático: ~3 períodos, arredondado para 0,3 s, 1 s ou 3 s.')
 HP_TIP = ('Passa-altas de 1 polo antes da demodulação: estima e remove o nível DC do sinal\n'
           '(luz ambiente, offset do sensor), deixando só a parte modulada.\n'
           'Precisa ficar bem abaixo da frequência de modulação: corte alto atenua e adianta a fase do sinal.\n'
           'No OPT101 o DC estimado também é o usado em R/DC e na coluna DC_Offset das varreduras.\n'
           'Ao mudar a frequência, volta ao automático: 2 % da frequência, entre 0,01 e 0,05 Hz.')
-TAU_TIP = ('Constante de tempo de cada polo do passa-baixas, calculada a partir do corte (τ ≈ 1/(2π·corte)).\n'
-           'Após um degrau, a saída atinge ~95% em 4,7τ e ~99% em 6,6τ.\n'
-           'As varreduras esperam 9τ antes de medir cada ponto.')
+LP_INFO_TIP = ('Calculados a partir do τ (2 polos em cascata, 12 dB/oitava):\n'
+               '−3 dB: frequência de corte do filtro, 0,644/(2πτ).\n'
+               'ENBW: banda equivalente de ruído, 1/(8τ). O ruído na saída cresce com √ENBW.\n'
+               'espera: 9τ, tempo para a saída chegar a ~0,1 % do valor final após um degrau\n'
+               '(~95 % em 4,7τ e ~99 % em 6,6τ). É o que as varreduras esperam em cada ponto.')
 
 
 # ============================================================================
@@ -740,6 +1458,7 @@ def _wrap_pi(x):
 _E_U16 = np.empty(0, np.uint16)
 _E_U8 = np.empty(0, np.uint8)
 _E_F = np.empty(0, np.float64)
+_E_F32 = np.empty(0, np.float32)
 
 
 MAINS_HZ = 60.0
@@ -791,6 +1510,23 @@ class _MainsFilterMixin:
         return y
 
 
+def decimate_raw(buf, osr):
+    '''Média de osr palavras cruas do firmware 2.0.0 (uint16 LE: bits 0-11 = ADC, bit 15 = laser).
+    Devolve (adc float32 = soma * 4 / osr, na escala 0-16380 da 1.0.0; ref uint8 = maioria das osr
+    amostras, empate = 0; bytes consumidos, sempre blocos completos).'''
+    osr = max(1, int(osr))
+    m = (len(buf) // 2) // osr
+    if m == 0:
+        return _E_F32, _E_U8, 0
+    w = np.frombuffer(buf, dtype='<u2', count=m * osr)
+    if osr == 1:
+        return (w & 0x0FFF).astype(np.float32) * np.float32(4.0), (w >> 15).astype(np.uint8), m * 2
+    blk = w.reshape(m, osr)
+    adc = (blk & 0x0FFF).sum(axis=1, dtype=np.uint32).astype(np.float32) * np.float32(4.0 / osr)
+    ref = ((blk >> 15).sum(axis=1, dtype=np.uint32) * 2 > osr).astype(np.uint8)
+    return adc, ref, m * osr * 2
+
+
 class PyLockIn(_MainsFilterMixin):
     def __init__(self, fs, ref_freq, cutoff_lp, cutoff_hp):
         self.init(fs, ref_freq, cutoff_lp, cutoff_hp)
@@ -798,6 +1534,7 @@ class PyLockIn(_MainsFilterMixin):
     # --------------------------------------------------------------- estado
     def init(self, fs, ref_freq, cutoff_lp, cutoff_hp):
         self.fs = float(fs)
+        self.osr = max(1, int(round(RAW_FS / self.fs)))   # amostras cruas do ADC por amostra do lock-in
         self.ref_freq = ref_freq
         self.alpha_lp = TWO_PI * cutoff_lp / self.fs
         self.alpha_hp = TWO_PI * cutoff_hp / self.fs
@@ -831,31 +1568,12 @@ class PyLockIn(_MainsFilterMixin):
         self.d_theta = self._nominal_step()
         self.measured_freq = self.ref_freq
 
-    # --------------------------------------------------------------- quadros
-    @staticmethod
-    def _parse(buf):
-        '''Extrai quadros 0x55 0xAA ADC_L ADC_H REF; devolve (adc, ref, bytes_consumidos).'''
-        raw = np.frombuffer(buf, dtype=np.uint8)
-        size = raw.size
-        if size < 5:
-            return _E_U16, _E_U8, 0
-        m = size // 5
-        fr = raw[:m * 5].reshape(m, 5)
-        if (fr[:, 0] == 0x55).all() and (fr[:, 1] == 0xAA).all():
-            adc = fr[:, 2].astype(np.uint16) | (fr[:, 3].astype(np.uint16) << 8)
-            return adc, fr[:, 4].copy(), m * 5
-        # Fora de sincronismo: aceita cada 0x55 0xAA sem sobreposição de quadros
-        cand = np.flatnonzero((raw[:-1] == 0x55) & (raw[1:] == 0xAA))
-        starts, end = [], 0
-        for c in cand:
-            if c >= end and c + 5 <= size:
-                starts.append(c)
-                end = c + 5
-        if not starts:
-            return _E_U16, _E_U8, size - 4
-        st = np.asarray(starts)
-        adc = raw[st + 2].astype(np.uint16) | (raw[st + 3].astype(np.uint16) << 8)
-        return adc, raw[st + 4].copy(), (end if size - end < 5 else size - 4)
+    # --------------------------------------------------------------- amostras
+    def _parse(self, buf):
+        '''Sobreamostragem: média de OSR palavras cruas (uint16 LE: bits 0-11 = ADC, bit 15 = laser).
+        Devolve (adc float32 na escala 0-16380, ref uint8 = maioria das OSR amostras, bytes consumidos).
+        Só consome blocos completos; o resto fica no buffer para a próxima chamada.'''
+        return decimate_raw(buf, self.osr)
 
     # ------------------------------------------------------------------- PLL
     def _phase(self, ref):
@@ -953,9 +1671,9 @@ class PyLockIn(_MainsFilterMixin):
         self.sample_count = (self.sample_count + n) % decimation
         idx = np.arange(first, n, decimation)
         zo = z2[idx]
-        # Cada quadro do firmware é a média de OSR amostras do ADC numa janela de 1/FS (80 us):
-        # a fundamental chega atenuada por sinc(f/FS) (-1 % em 1 kHz, -9 % em 3 kHz). Desfaz aqui.
-        r = np.abs(zo) / np.sinc(self.ref_freq / self.fs)
+        # Cada amostra é a média de OSR amostras do ADC (janela de OSR/200 kHz, 80 us com OSR 16): a
+        # fundamental chega atenuada pelo ganho da média (-1 % em 1 kHz e -9 % em 3 kHz com OSR 16). Desfaz.
+        r = np.abs(zo) / float(boxcar_gain(self.ref_freq, self.osr))
         phase = np.degrees(np.angle(zo))
         dco = dc[idx]
         if normalize:
@@ -1021,15 +1739,26 @@ class AudioLockIn(_MainsFilterMixin):
 class RawRing:
     '''Ring buffer do osciloscópio. Em vez de apagar um 'rastro' com NaN
     amostra por amostra, o desenho usa duas fatias que deixam um vão à frente
-    do cursor; o custo por lote é constante, independente do tamanho do vão.'''
+    do cursor; o custo por lote é constante, independente do tamanho do vão.
+    Guarda no máximo MAX_SCOPE_POINTS pontos: se janela x taxa passar disso, cada ponto exibido é a média
+    de 'step' amostras (o laser é o máximo do bloco), para o desenho não travar a 200 kS/s.'''
 
-    def __init__(self, window_sec, fs):
+    def __init__(self, window_sec, fs, max_points=MAX_SCOPE_POINTS):
         self.fs = fs
+        self.max_points = int(max_points)
         self.resize(window_sec)
+
+    def set_fs(self, fs):
+        self.fs = fs
+        self.resize(self.window)
 
     def resize(self, window_sec):
         self.window = float(window_sec)
-        self.n = max(2, int(self.window * self.fs))
+        total = max(2, int(self.window * self.fs))
+        self.step = max(1, -(-total // self.max_points))
+        self.n = max(2, total // self.step)
+        self._pend_adc = np.empty(0, dtype=np.float32)
+        self._pend_ref = np.empty(0, dtype=np.float32)
         self.gap = max(5, int(0.02 * self.n))
         self.adc = np.zeros(self.n, dtype=np.float32)
         self.ref = np.zeros(self.n, dtype=np.float32)
@@ -1039,6 +1768,16 @@ class RawRing:
 
     def push(self, adc, ref):
         '''Insere um lote. Retorna True se o cursor deu a volta na janela.'''
+        k = self.step
+        if k > 1:
+            adc = np.concatenate((self._pend_adc, np.asarray(adc, dtype=np.float32)))
+            ref = np.concatenate((self._pend_ref, np.asarray(ref, dtype=np.float32)))
+            m = len(adc) // k
+            self._pend_adc, self._pend_ref = adc[m * k:], ref[m * k:]
+            if m == 0:
+                return False
+            adc = adc[:m * k].reshape(m, k).mean(axis=1)
+            ref = ref[:m * k].reshape(m, k).max(axis=1)
         N = self.n
         n = len(adc)
         if n >= N:
@@ -1075,9 +1814,11 @@ class RawRing:
 class AverageAccumulator:
     '''Forma de onda média por pulso, vetorizada por lote.
 
-    Um ciclo vai de (borda_k - pré) até a borda_{k+1} (exclusive), exatamente
-    como no algoritmo original amostra a amostra.
+    Um ciclo vai de (borda_k - pré) até a borda_{k+1} (exclusive), como no algoritmo original amostra
+    a amostra. Guarda só a soma corrente dos ciclos e os pedaços do ciclo aberto (sem concatenar o
+    ciclo inteiro a cada lote), para aguentar 200 kS/s com ciclos longos.
     '''
+    MAX_CYCLE_SEC = 120.0     # ciclo aberto mais longo que isso (laser parado) é descartado
 
     def __init__(self, fs):
         self.fs = fs
@@ -1086,51 +1827,171 @@ class AverageAccumulator:
         self.reset()
 
     def reset(self):
-        self.cycles = []
-        self.tail_adc = np.empty(0, dtype=np.float32)
-        self.tail_ref = np.empty(0, dtype=np.uint8)
-        self.tail_prev_ref = 0
-        self.open_idx = -1
+        self.chunks = []          # ciclo aberto (com as 'pre' amostras antes da borda) ou o histórico pré
+        self.chunks_len = 0
+        self.is_open = False
+        self.open_valid = False   # havia 'pre' amostras antes da borda que abriu o ciclo
+        self.prev_ref = 0
+        self.sum = None
+        self.count = 0
+        self.spc = 0
         self.values = np.empty(0)
         self.time = np.empty(0)
 
+    @property
+    def cycles(self):
+        '''Compatibilidade: só o número de ciclos acumulados importa (len(avg.cycles)).'''
+        return range(self.count)
+
     def current_len(self):
-        return len(self.tail_adc) if self.open_idx >= 0 else 0
+        return self.chunks_len if self.is_open else 0
+
+    def _joined(self, extra):
+        parts = self.chunks + [extra] if len(extra) else self.chunks
+        if not parts:
+            return np.empty(0, dtype=np.float32)
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+    def _accumulate(self, cyc):
+        if self.count == 0:
+            self.sum = cyc.astype(np.float64)
+            self.spc = len(cyc)
+        else:
+            self.spc = min(self.spc, len(cyc))
+            self.sum = self.sum[:self.spc] + cyc[:self.spc]
+        self.count += 1
+        if self.count >= self.pulses:
+            self.values = self.sum / self.count
+            self.time = (np.arange(self.spc) - self.pre) / self.fs
+            self.sum, self.count, self.spc = None, 0, 0
+            return True
+        return False
 
     def push(self, adc, ref):
         '''Processa um lote. Retorna True quando uma nova média ficou pronta.'''
-        a = np.concatenate((self.tail_adc, np.asarray(adc, dtype=np.float32)))
-        r = np.concatenate((self.tail_ref, np.asarray(ref, dtype=np.uint8)))
-        n_old = len(self.tail_adc)
-        rp = np.concatenate((np.array([self.tail_prev_ref], dtype=np.uint8), r))
-        edges = np.flatnonzero((rp[1:] == 1) & (rp[:-1] == 0))
-        edges = edges[edges >= n_old]
-
+        a = np.asarray(adc, dtype=np.float32)
+        r = np.asarray(ref, dtype=np.uint8)
+        if a.size == 0:
+            return False
+        rp = np.empty(r.size, dtype=np.uint8)
+        rp[0] = self.prev_ref
+        rp[1:] = r[:-1]
+        edges = np.flatnonzero((r == 1) & (rp == 0))
+        self.prev_ref = int(r[-1])
         pre = self.pre
-        open_idx = self.open_idx
         ready = False
+        pos = 0
         for e in edges.tolist():
-            if open_idx >= 0 and open_idx - pre >= 0:
-                self.cycles.append(a[open_idx - pre:e].copy())
-                if len(self.cycles) >= self.pulses:
-                    spc = min(len(c) for c in self.cycles)
-                    stack = np.stack([c[:spc] for c in self.cycles])
-                    self.values = stack.mean(axis=0)
-                    self.time = (np.arange(spc) - pre) / self.fs
-                    self.cycles = []
-                    ready = True
-            open_idx = e
-
-        if open_idx >= 0:
-            start = max(open_idx - pre, 0)
-        else:
-            start = max(len(a) - (pre + 1), 0)
-        if start > 0:
-            self.tail_prev_ref = int(r[start - 1])
-        self.tail_adc = a[start:].copy()
-        self.tail_ref = r[start:].copy()
-        self.open_idx = open_idx - start if open_idx >= 0 else -1
+            full = self._joined(a[pos:e])
+            if self.is_open and self.open_valid and len(full) > pre:
+                ready |= self._accumulate(full)
+            self.is_open = True
+            self.open_valid = len(full) >= pre
+            head = full[len(full) - pre:] if pre > 0 else full[:0]
+            self.chunks = [head.copy()] if len(head) else []
+            self.chunks_len = len(head)
+            pos = e
+        rest = a[pos:]
+        if len(rest):
+            self.chunks.append(rest.copy())
+            self.chunks_len += len(rest)
+        if not self.is_open and self.chunks_len > pre:
+            full = self._joined(_E_F32)
+            keep = full[len(full) - pre:] if pre > 0 else full[:0]
+            self.chunks = [keep.copy()] if len(keep) else []
+            self.chunks_len = len(keep)
+        elif self.is_open and self.chunks_len > self.MAX_CYCLE_SEC * self.fs:
+            self.is_open = False
+            self.chunks, self.chunks_len = [], 0
         return ready
+
+
+def resolution_analysis(raw, osr_list=None, min_blocks=64):
+    '''Teste de resolução da sobreamostragem a partir das palavras cruas do firmware 2.0.0 (uint16:
+    bits 0-11 = ADC, bit 15 = laser), com sinal estável.
+
+    Para cada N (amostras por média) calcula o ruído das médias pelo desvio de Allan
+    σ(N) = sqrt(½·⟨(m[k+1] - m[k])²⟩), em LSB do ADC de 12 bits. Para ruído branco σ(N) = σ(1)/√N; o
+    desvio de Allan ignora uma deriva linear lenta, mas sobe com ruído 1/f, interferência e deriva
+    curva, que são justamente o que limita o ganho real. Devolve um dicionário com as curvas, o
+    histograma dos códigos crus e os diagnósticos (dither, laser modulando, OSR até onde o ganho é real).'''
+    w = np.asarray(raw, dtype=np.uint16)
+    codes = (w & 0x0FFF).astype(np.float64)
+    ref = (w >> 15).astype(np.uint8)
+    n = codes.size
+    if n < 1024:
+        raise ValueError('poucas amostras para o teste (mínimo 1024)')
+    if osr_list is None:
+        osr_list = [1 << k for k in range(0, 20) if n // (1 << k) >= min_blocks]
+    osr_list = [int(k) for k in osr_list if n // int(k) >= 8]
+    sig, sig_std = [], []
+    for k in osr_list:
+        m = n // k
+        means = codes[:m * k].reshape(m, k).mean(axis=1)
+        d = np.diff(means)
+        sig.append(float(np.sqrt(0.5 * np.mean(d * d))) if d.size else float('nan'))
+        sig_std.append(float(np.std(means)))
+    osr = np.asarray(osr_list, dtype=np.float64)
+    sig = np.asarray(sig)
+    sig_std = np.asarray(sig_std)
+    s1 = sig[0]
+    floor = 1e-6
+    ideal = s1 / np.sqrt(osr)
+    gain_bits = np.log2(np.maximum(s1, floor) / np.maximum(sig, floor))
+    ideal_bits = 0.5 * np.log2(osr)
+    # Bits efetivos: resolução de um conversor ideal com o mesmo ruído (σ = LSB/√12) em 12 bits de faixa
+    enob = 12.0 - np.log2(np.maximum(sig, floor) * np.sqrt(12.0))
+    # OSR até onde o ganho segue o ideal (perde no máximo 0,25 bit)
+    ok = gain_bits >= ideal_bits - 0.25
+    limit = 1
+    for k, good in zip(osr_list, ok):
+        if not good:
+            break
+        limit = k
+    if s1 < 0.3:
+        # Sem dither o ruído das médias cai, mas a média converge para o código errado (viés de quantização
+        # de até ~0,5 LSB): não há resolução nova, mesmo com a curva parecendo ideal.
+        limit = 1
+    vals, counts = np.unique(w & 0x0FFF, return_counts=True)
+    toggles = int(np.count_nonzero(np.diff(ref)))
+    return {'n': n, 'osr': osr, 'sigma': sig, 'sigma_std': sig_std, 'ideal': ideal,
+            'gain_bits': gain_bits, 'ideal_bits': ideal_bits, 'enob': enob, 'limit_osr': limit,
+            'sigma_raw': float(np.std(codes)), 'mean': float(codes.mean()),
+            'hist_codes': vals.astype(np.int64), 'hist_counts': counts.astype(np.int64),
+            'distinct_codes': int(vals.size), 'ref_toggles': toggles, 'ref_on_frac': float(ref.mean())}
+
+
+def resolution_verdict(res, laser_power=None):
+    '''Texto curto (HTML) com a conclusão do teste de resolução.'''
+    s1 = res['sigma'][0]
+    lines = []
+    if res['ref_toggles'] > 2 and (laser_power is None or laser_power > 0):
+        lines.append('<b style="color:#d00000;">O laser estava modulando durante a medida.</b> O sinal entra '
+                     'como "ruído" e o resultado não vale; repita com PWM 0 % ou luz constante.')
+    if s1 < 0.3:
+        lines.append(f'<b style="color:#d00000;">Sem dither:</b> σ = {s1:.2f} LSB, quase todas as amostras caem no '
+                     f'mesmo código ({res["distinct_codes"]} códigos distintos). O ruído das médias até cai, mas '
+                     'a média converge para o código errado (viés de até ~½ LSB): não há resolução nova. '
+                     'A sobreamostragem precisa de ruído de ~0,5 LSB ou mais (ganho maior no OPT101 ajuda).')
+        return '<br>'.join(lines)
+    elif s1 < 0.5:
+        lines.append(f'<b style="color:#e07000;">Dither marginal:</b> σ = {s1:.2f} LSB. O ganho pode ficar '
+                     'abaixo do ideal; ruído um pouco maior (ou ganho maior no OPT101) ajudaria.')
+    else:
+        lines.append(f'Dither suficiente: σ = {s1:.2f} LSB por amostra ({res["distinct_codes"]} códigos distintos).')
+    lim = res['limit_osr']
+    i = int(np.flatnonzero(res['osr'] == lim)[0])
+    rate = RAW_FS / lim
+    rate_txt = f'{rate / 1000:.4g} kS/s' if rate >= 1000 else f'{rate:.4g} S/s'
+    lines.append(f'O ruído cai como 1/√N até <b>N = {lim}</b> ({rate_txt}): '
+                 f'ganho de {res["gain_bits"][i]:.2f} bit (ideal {res["ideal_bits"][i]:.2f}), '
+                 f'{res["enob"][i]:.1f} bits efetivos.')
+    if lim < OSR_CHOICES[-1] and res['osr'][-1] > lim:
+        lines.append('Acima disso a curva se afasta do ideal: ruído 1/f, interferência ou deriva dominam e '
+                     'aumentar o OSR quase não melhora a resolução (o lock-in continua filtrando pela banda do τ).')
+    return '<br>'.join(lines)
+
+
 # ============================================================================
 # PURE-END
 # ============================================================================
@@ -1139,10 +2000,26 @@ class AverageAccumulator:
 # ----------------------------------------------------------------------------
 # Serial em thread
 # ----------------------------------------------------------------------------
+def keep_system_awake(on):
+    """Windows: com on=True impede a suspensão (e a hibernação) por inatividade até ser chamada com False.
+    A tela ainda pode apagar. Não impede fechar a tampa nem suspender pelo menu ou pelo botão.
+    Vale para a thread que chama (chame sempre da thread da GUI). Devolve True se o Windows aceitou."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        es_continuous, es_system_required = 0x80000000, 0x00000001
+        flags = es_continuous | (es_system_required if on else 0)
+        return bool(ctypes.windll.kernel32.SetThreadExecutionState(flags))
+    except Exception:
+        return False
+
+
 def find_arduino_port():
     configured_port = os.environ.get('TL_ARDUINO_PORT')
     ports = list(list_ports.comports())
-    if configured_port and any(p.device.upper() == configured_port.upper() for p in ports):
+    if configured_port and (any(p.device.upper() == configured_port.upper() for p in ports)
+                            or (configured_port.startswith('/dev/') and os.path.exists(configured_port))):
         return configured_port, ports
     # STM32 (VID 0x0483) primeiro, depois as outras placas conhecidas; só portas USB.
     # Nomes genéricos ("serial", "usb serial") não bastam: pegavam Bluetooth e adaptadores USB-serial.
@@ -1158,6 +2035,94 @@ def find_arduino_port():
     if len(usb) == 1:
         return usb[0].device, ports
     return None, ports
+
+
+def _serial_reader_process(out_q, cmd_q, stop_evt, params):
+    '''Processo leitor da porta serial (firmware 2.0.0: ~550 kB/s). Roda fora do processo da interface
+    para não depender do GIL: o STM32 guarda só ~41 ms de amostras, e um desenho ou uma conta longa na
+    tela bastava para perder dados. Conecta, reconecta, envia F/P e repassa os bytes crus.
+    Mensagens para a interface: ('status', conectado, porta, erro) e ('data', bytes).
+    Comandos recebidos: ('write', texto) e ('stop',).'''
+    import queue as _queue
+    f, p = params
+    ser = None
+    last_try = 0.0
+
+    def send_status(connected, port, error):
+        out_q.put(('status', connected, port, error))
+
+    def close():
+        nonlocal ser
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+        ser = None
+
+    while not stop_evt.is_set():
+        # comandos (não bloqueia)
+        while True:
+            try:
+                cmd = cmd_q.get_nowait()
+            except _queue.Empty:
+                break
+            if cmd[0] == 'stop':
+                close()
+                return
+            if cmd[0] == 'write':
+                text = cmd[1]
+                if text.startswith('F'):
+                    f = text[1:].strip()
+                elif text.startswith('P'):
+                    p = text[1:].strip()
+                if ser is not None:
+                    try:
+                        ser.write(text.encode())
+                    except Exception as e:
+                        print(f"Conexão com o STM32 perdida ao escrever: {e}")
+                        close()
+                        send_status(False, None, None)
+        if ser is None:
+            now = time.monotonic()
+            if now - last_try < RECONNECT_INTERVAL:
+                stop_evt.wait(0.05)
+                continue
+            last_try = now
+            port, _ = find_arduino_port()
+            if port is None:
+                continue
+            try:
+                print(f"Conectando à porta {port}...")
+                ser = serial.Serial(port, BAUD_RATE, timeout=0.02)
+                try:
+                    ser.set_buffer_size(rx_size=1 << 20, tx_size=1 << 14)
+                except Exception:
+                    pass
+                if stop_evt.wait(0.3):
+                    close()
+                    return
+                ser.reset_input_buffer()
+                ser.write(f"F{f}\n".encode())
+                time.sleep(0.05)
+                ser.write(f"P{p}\n".encode())
+                print(f"Conectado! Parâmetros enviados: F={f} Hz, PWM={p}%")
+                send_status(True, port, None)
+            except Exception as e:
+                print(f"Erro ao abrir porta serial ({port}): {e}")
+                close()
+                send_status(False, None, f"{port}: {e}")
+            continue
+        try:
+            data = ser.read(max(1, ser.in_waiting))
+        except Exception as e:
+            print(f"Conexão com o STM32 perdida ao ler: {e}")
+            close()
+            send_status(False, None, None)
+            continue
+        if data:
+            out_q.put(('data', data))
+    close()
 
 
 class SerialLink(threading.Thread):
@@ -1177,9 +2142,24 @@ class SerialLink(threading.Thread):
         self._audio_queued_samples = 0
         self._audio_queue_drops = 0
         self.audio_crc_errors = 0
+        self._opt_reset_counters()
         self._lock = threading.Lock()         # protege as filas de saída
         self._wlock = threading.Lock()        # protege escrita/fechamento
         self._stop_evt = threading.Event()
+        # Leitura num processo separado (padrão); SOI_SERIAL_THREAD=1 volta à thread da 1.0.0
+        self.use_process = os.environ.get('SOI_SERIAL_THREAD', '0') != '1'
+        self._proc = None
+
+    def _opt_reset_counters(self):
+        self._opt_next_seq = None
+        # Logo depois de abrir a porta chega um resto do fluxo antigo (anterior ao reset do buffer):
+        # o salto de SEQ desse início não é perda e não é contado.
+        self._opt_settle_until = time.monotonic() + 0.5
+        self._opt_last_word = b'\x00\x00'
+        self.opt_lost_samples = 0
+        self.opt_gap_events = 0
+        self.opt_crc_errors = 0
+        self.opt_received_samples = 0
 
     # -- API para a GUI --
     def take_optical(self):
@@ -1202,36 +2182,92 @@ class SerialLink(threading.Thread):
         # CRC-16/CCITT-FALSE em C (o laço em Python saturava a CPU e a thread serial)
         return binascii.crc_hqx(bytes(data), 0xFFFF)
 
+    def _opt_append(self, out, sequence, payload):
+        '''Acrescenta as palavras cruas de um pacote óptico. Um salto de SEQ (amostras perdidas na USB ou
+        no firmware) é preenchido repetindo a última amostra, para o tempo e o PLL seguirem certos.'''
+        n = len(payload) // 2
+        end_seq = (sequence + n) & 0xFFFFFFFF
+        expected = self._opt_next_seq
+        if expected is not None:
+            gap = (sequence - expected) & 0xFFFFFFFF
+            if gap >= 0x80000000:            # pacote repetido/atrasado: ignora o que já veio
+                skip = min(n, (expected - sequence) & 0xFFFFFFFF)
+                payload = payload[skip * 2:]
+                n -= skip
+                if n <= 0:
+                    return
+            elif gap and time.monotonic() < self._opt_settle_until:
+                pass                         # início da conexão: recomeça do pacote atual
+            elif gap:
+                self.opt_lost_samples += gap
+                self.opt_gap_events += 1
+                print(f"[{time.strftime('%H:%M:%S')}] Perda USB no OPT101: {gap} amostras "
+                      f"({gap / RAW_FS * 1000:.1f} ms); total {self.opt_lost_samples} em {self.opt_gap_events} vezes")
+                if gap <= OPT_GAP_FILL_MAX:
+                    out.extend(self._opt_last_word * gap)
+        out.extend(payload)
+        self._opt_last_word = bytes(payload[-2:])
+        self._opt_next_seq = end_seq
+
     def _parse_received(self, data):
-        self._parse_buf.extend(data)
+        buf = self._parse_buf
+        buf.extend(data)
         optical = bytearray()
         audio = []
         pos = 0
-        size = len(self._parse_buf)
+        size = len(buf)
 
         while pos < size:
-            remaining = size - pos
-            if remaining == 1 and self._parse_buf[pos] == 0x55:
-                break
-            if remaining < len(AUDIO_PACKET_MAGIC):
-                tail = self._parse_buf[pos:]
-                if AUDIO_PACKET_MAGIC.startswith(tail) or MOD_MARKER_MAGIC.startswith(tail):
+            if buf[pos] != 0xA5:
+                nxt = buf.find(b'\xA5', pos + 1)
+                if nxt < 0:
+                    pos = size
                     break
-            elif self._parse_buf[pos:pos + len(MOD_MARKER_MAGIC)] == MOD_MARKER_MAGIC:
+                pos = nxt
+                continue
+            remaining = size - pos
+            if remaining < 4:
+                tail = bytes(buf[pos:])
+                if any(m.startswith(tail) for m in (OPT_PACKET_MAGIC, AUDIO_PACKET_MAGIC, MOD_MARKER_MAGIC)):
+                    break
+                pos += 1
+                continue
+            magic = bytes(buf[pos:pos + 4])
+            if magic == OPT_PACKET_MAGIC:
+                if remaining < OPT_PACKET_HEADER_SIZE:
+                    break
+                count = int.from_bytes(buf[pos + 8:pos + 10], 'little')
+                if not 1 <= count <= OPT_PACKET_MAX_SAMPLES:
+                    pos += 1
+                    continue
+                packet_end = pos + OPT_PACKET_HEADER_SIZE + count * 2 + 2
+                if size < packet_end:
+                    break
+                crc = int.from_bytes(buf[packet_end - 2:packet_end], 'little')
+                if self._crc16_ccitt(buf[pos + 4:packet_end - 2]) != crc:
+                    self.opt_crc_errors += 1
+                    pos += 1
+                    continue
+                sequence = int.from_bytes(buf[pos + 4:pos + 8], 'little')
+                self._opt_append(optical, sequence, buf[pos + OPT_PACKET_HEADER_SIZE:packet_end - 2])
+                self.opt_received_samples += count
+                pos = packet_end
+                continue
+            if magic == MOD_MARKER_MAGIC:
                 if remaining < MOD_MARKER_SIZE:
                     break
-                crc = int.from_bytes(self._parse_buf[pos + 8:pos + 10], 'little')
-                if self._crc16_ccitt(self._parse_buf[pos + 4:pos + 8]) == crc:
-                    audio.append((int.from_bytes(self._parse_buf[pos + 4:pos + 8], 'little'), None))
+                crc = int.from_bytes(buf[pos + 8:pos + 10], 'little')
+                if self._crc16_ccitt(buf[pos + 4:pos + 8]) == crc:
+                    audio.append((int.from_bytes(buf[pos + 4:pos + 8], 'little'), None))
                     pos += MOD_MARKER_SIZE
                     continue
                 pos += 1
                 continue
-            elif self._parse_buf[pos:pos + len(AUDIO_PACKET_MAGIC)] == AUDIO_PACKET_MAGIC:
+            if magic == AUDIO_PACKET_MAGIC:
                 if remaining < AUDIO_PACKET_HEADER_SIZE:
                     break
-                sequence = int.from_bytes(self._parse_buf[pos + 4:pos + 8], 'little')
-                count = int.from_bytes(self._parse_buf[pos + 8:pos + 10], 'little')
+                sequence = int.from_bytes(buf[pos + 4:pos + 8], 'little')
+                count = int.from_bytes(buf[pos + 8:pos + 10], 'little')
                 if not 1 <= count <= AUDIO_PACKET_MAX_SAMPLES:
                     pos += 1
                     continue
@@ -1239,32 +2275,25 @@ class SerialLink(threading.Thread):
                 packet_end = payload_start + count * 3 + 2
                 if size < packet_end:
                     break
-                packet_crc = int.from_bytes(self._parse_buf[packet_end - 2:packet_end], 'little')
-                if self._crc16_ccitt(self._parse_buf[pos + 4:packet_end - 2]) != packet_crc:
+                packet_crc = int.from_bytes(buf[packet_end - 2:packet_end], 'little')
+                if self._crc16_ccitt(buf[pos + 4:packet_end - 2]) != packet_crc:
                     self.audio_crc_errors += 1
                     pos += 1
                     continue
-
                 packed = np.frombuffer(
-                    self._parse_buf, dtype=np.uint8, count=count * 3, offset=payload_start
+                    buf, dtype=np.uint8, count=count * 3, offset=payload_start
                 ).reshape(count, 3).astype(np.int32)
                 samples = packed[:, 0] | (packed[:, 1] << 8) | (packed[:, 2] << 16)
                 samples = (samples ^ 0x800000) - 0x800000
                 audio.append((sequence, samples))
                 pos = packet_end
                 continue
-
-            if remaining >= 2 and self._parse_buf[pos:pos + 2] == b'\x55\xAA':
-                if remaining < 5:
-                    break
-                if self._parse_buf[pos + 4] <= 1:
-                    optical.extend(self._parse_buf[pos:pos + 5])
-                    pos += 5
-                    continue
             pos += 1
 
         if pos:
-            del self._parse_buf[:pos]
+            del buf[:pos]
+        if len(buf) > 1 << 16:        # lixo sem cabeçalho válido: não deixa crescer
+            del buf[:-8]
 
         if optical or audio:
             with self._lock:
@@ -1280,6 +2309,9 @@ class SerialLink(threading.Thread):
                         self._audio_queue_drops += len(discarded)
 
     def write(self, text):
+        if self._proc is not None:
+            self._cmd_q.put(('write', text))
+            return
         with self._wlock:
             ser = self.ser
             if ser is None:
@@ -1293,8 +2325,65 @@ class SerialLink(threading.Thread):
     def stop(self):
         self._stop_evt.set()
         self.join(timeout=2.0)
+        if self._proc is not None:
+            try:
+                self._cmd_q.put(('stop',))
+                self._mp_stop.set()
+                self._proc.join(timeout=2.0)
+                if self._proc.is_alive():
+                    self._proc.terminate()
+            except Exception:
+                pass
         with self._wlock:
             self._close_locked()
+
+    def _start_process(self):
+        import multiprocessing as mp
+        ctx = mp.get_context('spawn')
+        self._out_q = ctx.Queue()
+        self._cmd_q = ctx.Queue()
+        self._mp_stop = ctx.Event()
+        self._proc = ctx.Process(target=_serial_reader_process, name='SOI-serial',
+                                 args=(self._out_q, self._cmd_q, self._mp_stop, self.get_params()),
+                                 daemon=True)
+        self._proc.start()
+
+    def _run_process(self):
+        import queue as _queue
+        while not self._stop_evt.is_set():
+            try:
+                msg = self._out_q.get(timeout=0.1)
+            except _queue.Empty:
+                if not self._proc.is_alive():
+                    print('Processo de leitura da serial terminou; voltando à leitura em thread.')
+                    self._proc = None
+                    self.connected = False
+                    return False
+                continue
+            if msg[0] == 'data':
+                self._parse_received(msg[1])
+            elif msg[0] == 'status':
+                _, connected, port, error = msg
+                if connected:
+                    self._parse_buf.clear()
+                    with self._lock:
+                        self._opt_buf.clear()
+                        self._audio_chunks.clear()
+                        self._audio_queued_samples = 0
+                        self.audio_crc_errors = 0
+                        self._opt_reset_counters()
+                    self.port = port
+                    self.last_error = None
+                    self.connected = True
+                    # Uma troca feita na GUI durante a conexão: reenviar o estado atual não faz mal
+                    f2, p2 = self.get_params()
+                    self.write(f"F{f2}\n")
+                    self.write(f"P{p2}\n")
+                else:
+                    self.connected = False
+                    if error:
+                        self.last_error = error
+        return True
 
     # -- internos --
     def _close_locked(self):
@@ -1333,6 +2422,7 @@ class SerialLink(threading.Thread):
                 self._audio_chunks.clear()
                 self._audio_queued_samples = 0
                 self.audio_crc_errors = 0
+                self._opt_reset_counters()
             with self._wlock:
                 self.ser = new
                 self.port = port
@@ -1355,6 +2445,14 @@ class SerialLink(threading.Thread):
                     pass
 
     def run(self):
+        if self.use_process:
+            try:
+                self._start_process()
+            except Exception as e:
+                print(f'Leitura da serial em processo separado indisponível ({e}); usando thread.')
+                self._proc = None
+            if self._proc is not None and self._run_process():
+                return
         last_try = 0.0
         while not self._stop_evt.is_set():
             ser = self.ser
@@ -1382,7 +2480,8 @@ class SerialLink(threading.Thread):
 # Janela principal
 # ----------------------------------------------------------------------------
 class SignalSimulator:
-    '''Gera quadros 0x55 0xAA ADC_L ADC_H REF como o firmware, sem STM32.
+    '''Gera as palavras cruas do firmware 2.0.0 (uint16 LE a 200 kS/s: ADC de 12 bits + bit 15 do laser),
+    sem STM32; a interface faz a sobreamostragem como faria com o STM32.
     Referência quadrada; com laser ligado o sinal sobe exponencialmente até uma saturação
     proporcional à potência (100 % -> SIM_FULL_POWER_FRAC do fundo de escala).'''
     SIM_FULL_POWER_FRAC = 0.70
@@ -1390,10 +2489,10 @@ class SignalSimulator:
     BASELINE = 0.02       # fração do fundo de escala (escuro)
     NOISE = 0.004         # desvio padrão (fração do fundo de escala)
 
-    def __init__(self, fs):
+    def __init__(self, fs=RAW_FS):
         from scipy.signal import lfilter
         self._lfilter = lfilter
-        self.fs = fs
+        self.fs = RAW_FS
         self.rng = np.random.default_rng()
         self.a = float(np.exp(-1.0 / (fs * self.TAU)))
         self.reset()
@@ -1410,12 +2509,14 @@ class SignalSimulator:
         m = int((now - self.t_last) * self.fs)
         if m <= 0:
             return b''
-        m = min(m, int(self.fs))
+        m = min(m, int(self.fs // 4))
         self.t_last += m / self.fs
+        if now - self.t_last > 1.0:      # GUI parada: não tenta recuperar o atraso
+            self.t_last = now
         idx = self.n + np.arange(m)
         self.n += m
         if freq > 0:
-            ref = ((idx * freq / self.fs) % 1.0 < 0.5).astype(np.uint8)
+            ref = ((idx * actual_mod_freq(freq) / self.fs) % 1.0 < 0.5).astype(np.uint8)
         else:
             ref = np.ones(m, dtype=np.uint8)
         top = self.SIM_FULL_POWER_FRAC * max(0.0, min(power_pct, 100.0)) / 100.0
@@ -1426,14 +2527,8 @@ class SignalSimulator:
         t = idx / self.fs
         sig = (self.BASELINE + y + 0.003 * np.sin(2 * np.pi * 60.0 * t)
                + self.NOISE * self.rng.standard_normal(m))
-        adc = np.clip(sig * ADC_FULL_SCALE * ADC_OVS_FACTOR, 0, 65535).astype('<u2')
-        frames = np.empty((m, 5), dtype=np.uint8)
-        frames[:, 0] = 0x55
-        frames[:, 1] = 0xAA
-        frames[:, 2] = adc & 0xFF
-        frames[:, 3] = adc >> 8
-        frames[:, 4] = ref
-        return frames.tobytes()
+        adc = np.clip(np.rint(sig * 4095.0), 0, 4095).astype('<u2')
+        return (adc | (ref.astype('<u2') << 15)).tobytes()
 
 
 class AudioSimulator:
@@ -1597,6 +2692,51 @@ class RefreshComboBox(QtWidgets.QComboBox):
         super().showPopup()
 
 
+class TauSpinBox(QtWidgets.QDoubleSpinBox):
+    '''Campo de τ (s): mostra "300 ms" / "1 s", aceita valores digitados com ou sem unidade e as setas
+    andam pela sequência 1–3–10 de TAU_STEPS.'''
+
+    def __init__(self, value, slot=None, width=90):
+        super().__init__()
+        self.setDecimals(6)
+        self.setRange(TAU_MIN, TAU_MAX)
+        self.setValue(value)
+        self.setKeyboardTracking(False)   # só dispara ao confirmar (Enter/perder foco)
+        self.setFixedWidth(width)
+        if slot is not None:
+            self.valueChanged.connect(slot)
+
+    def textFromValue(self, v):
+        return f'{v * 1e3:.4g} ms' if v < 1.0 else f'{v:.4g} s'
+
+    @staticmethod
+    def _parse(text):
+        m = re.fullmatch(r'\s*([0-9]*[.,]?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*(ms|s)?\s*', text)
+        if not m:
+            return None
+        v = float(m.group(1).replace(',', '.'))
+        return v * 1e-3 if m.group(2) == 'ms' else v
+
+    def valueFromText(self, text):
+        v = self._parse(text)
+        return self.value() if v is None else v
+
+    def validate(self, text, pos):
+        v = self._parse(text)
+        if v is not None and TAU_MIN <= v <= TAU_MAX:
+            return QtGui.QValidator.State.Acceptable, text, pos
+        return QtGui.QValidator.State.Intermediate, text, pos
+
+    def stepBy(self, steps):
+        v = self.value()
+        for _ in range(abs(steps)):
+            if steps > 0:
+                v = next((s for s in TAU_STEPS if s > v * (1.0 + 1e-6)), TAU_MAX)
+            else:
+                v = next((s for s in reversed(TAU_STEPS) if s < v * (1.0 - 1e-6)), TAU_MIN)
+        self.setValue(v)
+
+
 class StepThread(threading.Thread):
     '''Chama step() repetidamente em thread própria até stop().'''
 
@@ -1619,6 +2759,207 @@ class StepThread(threading.Thread):
         self.join(timeout=2.0)
 
 
+class FloatingResults(QtWidgets.QFrame):
+    '''Quadro de resultados que flutua sobre os gráficos: arraste pelo título para tirá-lo de cima dos dados;
+    ▾/▸ recolhe o conteúdo. Fica sempre dentro do widget pai e some quando todos os textos estão vazios.'''
+
+    def __init__(self, parent, labels, title='Resultados'):
+        super().__init__(parent)
+        self.labels = labels
+        self.setObjectName('floatres')
+        self.setStyleSheet('#floatres{background:rgba(255,255,255,230);border:1px solid #9a9a9a;border-radius:4px;}')
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(6, 2, 6, 4)
+        v.setSpacing(1)
+        head = QtWidgets.QHBoxLayout()
+        self.title = QtWidgets.QLabel(f'<b>{title}</b> <span style="color:#808080;">(arraste para mover)</span>')
+        self.title.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        head.addWidget(self.title)
+        head.addStretch(1)
+        self.btn = QtWidgets.QToolButton()
+        self.btn.setText('▾')
+        self.btn.setAutoRaise(True)
+        self.btn.setToolTip('Recolhe ou mostra os resultados.')
+        self.btn.clicked.connect(self._toggle)
+        head.addWidget(self.btn)
+        v.addLayout(head)
+        self.body = QtWidgets.QWidget()
+        bv = QtWidgets.QVBoxLayout(self.body)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(1)
+        for lb in labels:
+            lb.setParent(self.body)
+            bv.addWidget(lb)
+        v.addWidget(self.body)
+        self.rel = (0.06, 0.62)                     # canto superior esquerdo, em fração do pai
+        self._drag = None
+        self._texts = None
+        parent.installEventFilter(self)
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(300)
+        self.hide()
+
+    def _toggle(self):
+        self.body.setVisible(not self.body.isVisible())
+        self.btn.setText('▾' if self.body.isVisible() else '▸')
+        self._fit()
+
+    def refresh(self, force=False):
+        texts = tuple(lb.text() for lb in self.labels)
+        if texts == self._texts and not force:
+            return
+        self._texts = texts
+        for lb, tx in zip(self.labels, texts):
+            lb.setVisible(bool(tx.strip()))
+        any_txt = any(tx.strip() for tx in texts)
+        self.setVisible(any_txt)
+        if any_txt:
+            self._fit()
+            self.raise_()
+
+    def _fit(self):
+        par = self.parentWidget()
+        w = max(280, min(640, int(par.width() * 0.42)))
+        self.setFixedWidth(w)
+        lay = self.layout()
+        lay.activate()
+        self.setFixedHeight(lay.totalHeightForWidth(w) if lay.hasHeightForWidth() else lay.sizeHint().height())
+        self._place()
+
+    def _place(self):
+        par = self.parentWidget()
+        x = int(self.rel[0] * par.width())
+        y = int(self.rel[1] * par.height())
+        x = min(max(0, x), max(0, par.width() - self.width()))
+        y = min(max(0, y), max(0, par.height() - self.height()))
+        self.move(x, y)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parentWidget() and ev.type() == QtCore.QEvent.Type.Resize and self.isVisible():
+            self._fit()
+        return False
+
+    def mousePressEvent(self, ev):
+        if ev.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._drag = ev.position().toPoint()
+            ev.accept()
+
+    def mouseMoveEvent(self, ev):
+        if self._drag is None:
+            return
+        par = self.parentWidget()
+        pos = self.mapToParent(ev.position().toPoint()) - self._drag
+        self.rel = (pos.x() / max(1, par.width()), pos.y() / max(1, par.height()))
+        self._place()
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        self._drag = None
+
+
+class CellSchematic(QtWidgets.QWidget):
+    '''Esquema genérico da montagem para a referência de calibração escolhida: a amostra fecha a abertura
+    da célula (OPC) ou fica dentro dela, sob uma janela de vidro (câmara). Desenho vetorial, sem imagens.'''
+
+    SAMPLE_COLORS = {'al': '#a8adb3', 'black_plate': '#a8adb3', 'black': '#1e1e1e', 'generic': '#c9a36b',
+                     'foil': '#e8dcc0'}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cell, self.sample = 'OPC', 'al'
+        # Tamanho proporcional à fonte da interface (escala do Windows), entre 1× e 1,5×, em 85 % do desenho
+        # original (300 × 160): o esquema define a altura do quadro da calibração, então fica compacto
+        k = 0.85 * min(1.5, max(1.0, QtGui.QFontMetrics(self.font()).height() / 16.0))
+        self.setFixedSize(round(300 * k), round(160 * k))
+
+    def set_setup(self, cell, sample):
+        self.cell, self.sample = cell or 'OPC', sample
+        self.update()
+
+    def paintEvent(self, _):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QtGui.QColor('#ffffff'))
+        # Desenho em coordenadas fixas (300 × 160) e fontes em pixels: o texto escala junto com o desenho,
+        # sem depender da escala do Windows nem da fonte do sistema
+        p.scale(self.width() / 300.0, self.height() / 160.0)
+        pen = QtGui.QPen(QtGui.QColor('#404040'), 1.5)
+        body = QtGui.QColor('#d9dde2')
+        gas = QtGui.QColor('#eef6ff')
+        x0, x1, y0, y1 = 52, 202, 38, 132          # corpo da célula
+        cx0, cx1, cy0, cy1 = 82, 172, 50, 120      # cavidade
+        p.setPen(pen)
+        p.setBrush(body)
+        p.drawRect(x0, y0, x1 - x0, y1 - y0)
+        p.setBrush(gas)
+        p.drawRect(cx0, cy0, cx1 - cx0, cy1 - cy0)
+        # Abertura no topo (por onde a luz entra)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.setBrush(gas)
+        p.drawRect(cx0 + 15, y0 - 1, cx1 - cx0 - 30, cy0 - y0 + 2)
+        p.setPen(pen)
+        p.drawLine(cx0 + 15, y0, cx0 + 15, cy0)
+        p.drawLine(cx1 - 15, y0, cx1 - 15, cy0)
+        lx = cx0 + 28                              # feixe do laser
+        col = QtGui.QColor(self.SAMPLE_COLORS.get(self.sample, '#a8adb3'))
+        font = QtGui.QFont(p.font())
+        font.setPixelSize(10)
+        p.setFont(font)
+        if self.cell == 'OPC':
+            # Amostra fina tampando a abertura, por fora
+            p.setBrush(col)
+            p.drawRect(cx0 + 5, y0 - 5, cx1 - cx0 - 10, 5)
+            p.setPen(QtGui.QColor('#202020'))
+            p.drawText(QtCore.QRectF(x1 + 4, y0 - 12, 94, 26), QtCore.Qt.AlignmentFlag.AlignLeft, 'amostra\n(fecha)')
+            title = 'OPC: a amostra fecha a célula'
+            hit_y = y0 - 5
+        else:
+            # Janela de vidro fechando a abertura e amostra no fundo da cavidade
+            p.setBrush(QtGui.QColor(170, 215, 240, 170))
+            p.drawRect(cx0 + 5, y0 - 5, cx1 - cx0 - 10, 5)
+            sh = 9
+            p.setBrush(col)
+            p.drawRect(cx0 + 12, cy1 - sh, cx1 - cx0 - 24, sh)
+            if self.sample == 'black_plate':            # face de cima pintada de preto
+                p.setBrush(QtGui.QColor('#1e1e1e'))
+                p.drawRect(cx0 + 12, cy1 - sh, cx1 - cx0 - 24, 3)
+            elif self.sample == 'foil':                 # folha de Al fina sobre apoio isolante (bege)
+                p.setBrush(QtGui.QColor('#a8adb3'))
+                p.drawRect(cx0 + 12, cy1 - sh - 2, cx1 - cx0 - 24, 2)
+            p.setPen(QtGui.QColor('#202020'))
+            p.drawText(QtCore.QRectF(x1 + 4, y0 - 12, 94, 26), QtCore.Qt.AlignmentFlag.AlignLeft, 'janela\nde vidro')
+            p.drawText(QtCore.QRectF(x1 + 4, cy1 - 16, 94, 26), QtCore.Qt.AlignmentFlag.AlignLeft, 'amostra\n(dentro)')
+            # folga de ar sobre a amostra
+            p.setPen(QtGui.QPen(QtGui.QColor('#2e7d32'), 1))
+            ax = cx1 - 8
+            p.drawLine(ax, cy1 - sh - 1, ax, cy0 + 2)
+            p.drawText(QtCore.QRectF(lx + 4, cy0 + 12, cx1 - lx - 14, 26), QtCore.Qt.AlignmentFlag.AlignRight, 'ar\n≥ 2–3 mm')
+            title = 'Câmara: amostra dentro, janela de vidro'
+            hit_y = cy1 - sh
+        # Laser vindo de cima
+        lp = QtGui.QPen(QtGui.QColor('#d00000'), 2.5)
+        p.setPen(lp)
+        p.drawLine(lx, 4, lx, hit_y)
+        p.setBrush(QtGui.QColor('#d00000'))
+        p.drawPolygon(QtGui.QPolygonF([QtCore.QPointF(lx - 4, hit_y - 7), QtCore.QPointF(lx + 4, hit_y - 7),
+                                       QtCore.QPointF(lx, hit_y)]))
+        p.setPen(QtGui.QColor('#d00000'))
+        p.drawText(QtCore.QRectF(lx + 5, 1, 50, 14), QtCore.Qt.AlignmentFlag.AlignLeft, 'laser')
+        # Microfone na parede esquerda da cavidade
+        p.setPen(pen)
+        p.setBrush(QtGui.QColor('#505050'))
+        p.drawRect(x0 + 6, (cy0 + cy1) // 2 - 9, cx0 - x0 - 6, 18)
+        p.setPen(QtGui.QColor('#202020'))
+        p.drawText(QtCore.QRectF(0, (cy0 + cy1) // 2 - 7, x0 - 3, 14), QtCore.Qt.AlignmentFlag.AlignRight, 'mic')
+        font.setBold(True)
+        while font.pixelSize() > 7 and QtGui.QFontMetrics(font).horizontalAdvance(title) > 296:
+            font.setPixelSize(font.pixelSize() - 1)
+        p.setFont(font)
+        p.drawText(QtCore.QRectF(0, y1 + 6, 300, 18), QtCore.Qt.AlignmentFlag.AlignHCenter, title)
+        p.end()
+
+
 class LockInWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1628,10 +2969,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         # --- Parâmetros ---
         self.ref_freq = 5.0
         self.laser_power = 0.4
-        self.cutoff_lp, self.cutoff_hp = get_effective_cutoffs(self.ref_freq)
+        self.cutoff_hp = get_effective_cutoffs(self.ref_freq)[1]
+        self.cutoff_lp = tau_cutoff(auto_tau(self.ref_freq), FS)
         self.normalize_mode = False
 
         # --- DSP do OPT101 (PyLockIn, definido neste arquivo) ---
+        self.osr = OSR_DEFAULT                # sobreamostragem feita na interface (FS = RAW_FS / osr)
+        self.res_capture = None               # Teste de resolução: bytes crus capturados (None = parado)
         self.dsp = PyLockIn(FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
         self.rx_bytes = bytearray()
         self.dsp_lock = threading.Lock()      # protege dsp e rx_bytes (thread do OPT101)
@@ -1645,7 +2989,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_snr_db = None              # SNR da janela mais recente (alerta de sinal baixo)
         self.audio_snr_alert = LOW_SIGNAL_SNR_DB
         # Filtros do lock-in do INMP441: começam iguais aos do OPT101, mas são independentes
-        self.audio_cutoff_lp = self.cutoff_lp
+        self.audio_cutoff_lp = tau_cutoff(auto_tau(self.ref_freq), AUDIO_FS_REAL)
         self.audio_cutoff_hp = self.cutoff_hp
         self.audio_mains = False
         self.audio_lock = threading.Lock()    # protege o estado do áudio (thread do INMP441)
@@ -1727,19 +3071,25 @@ class LockInWindow(QtWidgets.QMainWindow):
 
         # --- Serial em thread ---
         self.link = SerialLink(lambda: (self.ref_freq, self.laser_power))
-        self.simulator = SignalSimulator(FS)
+        self.simulator = SignalSimulator()
         self.audio_sim = AudioSimulator()
         self.simulating = False
         self._pll_bad_since = None            # desde quando o PLL do OPT101 não trava (conectado)
         self.session_files = []               # arquivos salvos nesta sessão (ZIP do "Finalizar experimento")
 
         self._build_ui()
+        self._install_double_click_reset()
         self.load_settings()
         # Só depois das preferências: a conexão envia F/P com a frequência restaurada, não com a padrão
         self.link.start()
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.tick)
+        # Medida em curso (varreduras, Modo Duplo, Teste de resolução): o Windows não suspende por inatividade
+        self.keep_awake = False
+        self.awake_timer = QtCore.QTimer(self)
+        self.awake_timer.timeout.connect(self._update_keep_awake)
+        self.awake_timer.start(2000)
         self.timer.start(GUI_INTERVAL_MS)
 
         self.opt_thread = StepThread(self._optical_step)
@@ -1791,6 +3141,20 @@ class LockInWindow(QtWidgets.QMainWindow):
                                     'Desmarque para gerar uma calibração nova (ela usa os dados brutos).')
         self.chk_mic_cal.toggled.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.chk_mic_cal)
+        # Configuração da célula: a calibração só vale na configuração em que foi feita (acústica diferente)
+        excitation.addSpacing(8)
+        lbl_cell = QtWidgets.QLabel('Célula:')
+        lbl_cell.setStyleSheet('font-weight:bold;')
+        excitation.addWidget(lbl_cell)
+        self.cmb_cell = QtWidgets.QComboBox()
+        for key, name in CELLS.items():
+            self.cmb_cell.addItem(name, key)
+            self.cmb_cell.setItemData(self.cmb_cell.count() - 1, CELL_TIPS[key], QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.cmb_cell.setToolTip('Configuração da célula nesta medida:\n' + '\n'.join(CELL_TIPS.values())
+                                 + '\nA calibração do microfone só vale na configuração em que foi feita (o volume de gás e a\n'
+                                   'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
+        self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
+        excitation.addWidget(self.cmb_cell)
         excitation.addStretch(1)
         self.chk_sim = QtWidgets.QCheckBox('Simular amostragem')
         self.chk_sim.setStyleSheet('QCheckBox{font-weight:bold;color:#006400;}')
@@ -1840,6 +3204,27 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.chk_mains.setEnabled(False)
             self.chk_mains.setToolTip('Disponível apenas no lock-in em Python.')
         top.addWidget(self.chk_mains)
+        top.addSpacing(16)
+        top.addWidget(QtWidgets.QLabel('Sobreamostragem:'))
+        self.cmb_osr = QtWidgets.QComboBox()
+        for osr in OSR_CHOICES:
+            self.cmb_osr.addItem(f'{osr}x  ({RAW_FS / osr / 1000:g} kS/s)', osr)
+        self.cmb_osr.setCurrentIndex(OSR_CHOICES.index(OSR_DEFAULT))
+        self.cmb_osr.setToolTip(
+            'O STM32 envia todas as amostras do ADC (12 bits, 200 kS/s). A interface tira a média de\n'
+            'OSR amostras seguidas: o ruído branco cai com √OSR (+½ bit a cada dobra) e a taxa\n'
+            'cai para 200/OSR kS/s. 16x reproduz a versão 1.0.0 (12,5 kS/s).\n'
+            'Use "Teste de resolução" para ver até onde o ganho é real no seu sinal.\n'
+            'Bloqueado durante varreduras.')
+        self.cmb_osr.currentIndexChanged.connect(lambda i: self.set_osr(self.cmb_osr.itemData(i)))
+        top.addWidget(self.cmb_osr)
+        self.btn_res_test = QtWidgets.QPushButton('Teste de resolução')
+        self.btn_res_test.setToolTip(
+            'Mede, com sinal estável (laser desligado ou luz constante), quanto a sobreamostragem\n'
+            'reduz o ruído de fato: ruído × OSR comparado com o ideal 1/√OSR, bits efetivos e\n'
+            'histograma dos códigos crus do ADC.')
+        self.btn_res_test.clicked.connect(self.open_resolution_test)
+        top.addWidget(self.btn_res_test)
         top.addStretch(1)
         root.addLayout(top)
 
@@ -1997,7 +3382,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         bottom.addLayout(side, 1)
         root.addLayout(bottom, 4)
 
-        self.sp_lp = self._dspin(0.0001, 500.0, self.cutoff_lp, 4, 0.01, self.on_lp)
+        self.sp_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_tau)
         self.sp_hp = self._dspin(0.0001, 500.0, self.cutoff_hp, 4, 0.01, self.on_hp)
 
         # Análise da curva (acessível apenas com o gráfico pausado no modo Valor Médio)
@@ -2140,7 +3525,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_opt_fft_full = QtWidgets.QCheckBox('Espectro completo')
         self.chk_opt_fft_full.setToolTip('Desligado: região em torno da frequência de referência, com FFT longa\n'
                                          f'({OPT_FFT_HISTORY_SEC:g} s, resolução fina).\n'
-                                         f'Ligado: 0 a {FS / 2:g} Hz, FFT de {OPT_FFT_SIZE} pontos.')
+                                         'Ligado: 0 a FS/2 (metade da taxa depois da sobreamostragem),\n'
+                                         f'FFT de {OPT_FFT_SIZE} pontos a 12,5 kS/s (cresce com a taxa).')
         self.chk_opt_fft_full.toggled.connect(self.on_opt_fft_full)
         offt_head.addWidget(self.chk_opt_fft_fit)
         offt_head.addSpacing(8)
@@ -2173,6 +3559,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.txt_opt_fft_fit.setPos(8, 8)
         self.txt_opt_fft_fit.setVisible(False)
         self.lbl_opt_fft_missing = self._make_fft_missing_label(opt_fft_item)
+        self.opt_fft_cursor = self._make_fft_interactive(self.plot_opt_fft, self.curve_opt_fft,
+                                                         self.update_opt_fft_range)
         self.opt_fft_panel.setVisible(False)
         side.addWidget(self.opt_fft_panel, 0)
         side.addStretch(1)          # some quando a FFT está visível (on_opt_fft)
@@ -2182,7 +3570,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.li_group = QtWidgets.QWidget()
         li_lay = QtWidgets.QHBoxLayout(self.li_group)
         li_lay.setContentsMargins(0, 0, 0, 0)
-        self.lbl_tau = self._filter_row(li_lay, self.sp_lp, self.sp_hp)
+        self.lbl_tau = self._filter_row(li_lay, self.sp_tau, self.sp_hp)
         self.update_tau_labels()
         li_lay.addStretch(1)
         self.mode_params.addWidget(self.li_group)
@@ -2226,6 +3614,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         view_box = self._group('Exibição')
         audio_mode = QtWidgets.QHBoxLayout(view_box)
         audio_mode.setContentsMargins(6, 2, 6, 2)
+        # Varreduras à esquerda, no começo da linha (à direita ficava escondido em telas largas)
+        self.btn_audio_sweeps = QtWidgets.QPushButton('Varreduras ▸')
+        self.btn_audio_sweeps.setCheckable(True)
+        self.btn_audio_sweeps.setToolTip('Mostra ou esconde as varreduras em frequência e PWM do INMP441.')
+        self.btn_audio_sweeps.toggled.connect(self.on_audio_sweeps_panel)
+        audio_mode.addWidget(self.btn_audio_sweeps)
+        audio_mode.addSpacing(16)
         audio_mode.addWidget(QtWidgets.QLabel('Gráficos:'))
         self.chk_audio_lockin = QtWidgets.QCheckBox('Lock-In')
         self.chk_audio_lockin.setChecked(True)
@@ -2260,20 +3655,15 @@ class LockInWindow(QtWidgets.QMainWindow):
         xy_lay.addWidget(self.sp_audio_phase_off)
         audio_mode.addWidget(self.audio_xy_group)
         audio_mode.addStretch(1)
-        self.btn_audio_sweeps = QtWidgets.QPushButton('Varreduras ▸')
-        self.btn_audio_sweeps.setCheckable(True)
-        self.btn_audio_sweeps.setToolTip('Mostra ou esconde as varreduras em frequência e PWM do INMP441.')
-        self.btn_audio_sweeps.toggled.connect(self.on_audio_sweeps_panel)
-        audio_mode.addWidget(self.btn_audio_sweeps)
         audio_layout.addWidget(view_box)
 
         # Parâmetros do lock-in do INMP441 (mesmos do OPT101, porém independentes)
         self.audio_li_group = self._group('Lock-in')
         audio_params = QtWidgets.QHBoxLayout(self.audio_li_group)
         audio_params.setContentsMargins(6, 2, 6, 2)
-        self.sp_audio_lp = self._dspin(0.0001, 500.0, self.audio_cutoff_lp, 4, 0.01, self.on_audio_lp)
+        self.sp_audio_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_audio_tau)
         self.sp_audio_hp = self._dspin(0.0001, 500.0, self.audio_cutoff_hp, 4, 0.01, self.on_audio_hp)
-        self.lbl_audio_tau = self._filter_row(audio_params, self.sp_audio_lp, self.sp_audio_hp)
+        self.lbl_audio_tau = self._filter_row(audio_params, self.sp_audio_tau, self.sp_audio_hp)
         self.update_tau_labels()
         self.chk_audio_mains = QtWidgets.QCheckBox('Filtro 60 Hz')
         self.chk_audio_mains.setToolTip('Rejeita 60 Hz e múltiplos (até 1,5 kHz) no sinal do lock-in.\n'
@@ -2474,6 +3864,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_fft_fit_html = None
         self.audio_fft_missing = None
         self.lbl_audio_fft_missing = self._make_fft_missing_label(audio_fft_item)
+        self.audio_fft_cursor = self._make_fft_interactive(self.plot_audio_fft, self.curve_audio_fft,
+                                                           self.update_audio_fft_range)
         audio_plots.addWidget(self.audio_fft_panel, 1)
         self.audio_fft_panel.setVisible(self.audio_fft_enabled)
         self.update_audio_fft_range()
@@ -2499,7 +3891,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         'P' = varredura casada em PWM; 'F' = varredura em frequência normalizada pelo OPT101.'''
         self.dual_active = False
         self.dual_state = 'IDLE'
-        self.dual_kind = 'P'
+        self.dual_kind = 'F'
+        self.dual_src = 'F'         # quadro que iniciou a varredura: 'P', 'F' (calibração) ou 'M' (medidas em frequência)
         self.dual_values = []
         self.dual_idx = 0
         self.dual_timer = 0.0
@@ -2520,24 +3913,27 @@ class LockInWindow(QtWidgets.QMainWindow):
 
         # Medida: cada varredura tem a sua (a calibração pede integração longa; a casada em PWM, em geral, não)
         self.dual_mode_w, self.dual_tau_w = {}, {}
-        for kind in ('P', 'F'):
+        for kind in ('P', 'F', 'M'):
             cmb = QtWidgets.QComboBox()
-            cmb.addItems(['Média no tempo (τ atual)', 'Integração longa (τ da varredura)'])
+            cmb.addItems(list(DUAL_MODE_NAMES))
             cmb.setToolTip(
                 'Média no tempo: usa os filtros dos dois lock-ins (na varredura em frequência, os cortes automáticos\n'
                 'de cada frequência); espera 9τ do mais lento e faz a média por 4τ.\n'
                 'Integração longa: durante a varredura os dois passa-baixas passam a ter o τ escolhido (restaurados no fim);\n'
                 'espera 9τ e faz a média por 1τ. Menos ruído por ponto, varredura mais lenta.')
             self.dual_mode_w[kind] = cmb
-            self.dual_tau_w[kind] = self._dspin(0.001, 100.0, 1.0, 3, 0.5, None, width=70)
+            self.dual_tau_w[kind] = TauSpinBox(1.0, None, width=80)
         # Nomes fixos: usados pelas preferências (QSettings)
         self.cmb_dual_mode_p, self.cmb_dual_mode_f = self.dual_mode_w['P'], self.dual_mode_w['F']
         self.sp_dual_tau_p, self.sp_dual_tau_f = self.dual_tau_w['P'], self.dual_tau_w['F']
+        self.cmb_dual_mode_m, self.sp_dual_tau_m = self.dual_mode_w['M'], self.dual_tau_w['M']
 
-        def sweep_box(title, fields, kind):
+        def sweep_box(title, fields, kind, mid=()):
+            # Varreduras em frequência: sempre integração longa, com o τ do INMP441 (os campos andam juntos)
+            meas = ((('Medida:', self.dual_mode_w[kind]),) if kind == 'P' else ()) + (('τ:', self.dual_tau_w[kind]),)
             box, btn, eta, bar = self._make_sweep_box(
                 title, fields, lambda _=False, k=kind: self.toggle_dual_sweep(k),
-                extra=(('Medida:', self.dual_mode_w[kind]), ('τ (s):', self.dual_tau_w[kind])))
+                extra=mid if mid else meas, more=(meas,) if mid else ())
             self.dual_bars[kind] = bar
             return box, btn, eta
 
@@ -2554,17 +3950,58 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cmb_dual_fspace.addItems(['Logarítmico', 'Linear'])
         self.sp_dual_fn = self._dspin(1.0, 5000.0, CAL_SWEEP_N, 1, 1.0, None, 90)
         self.lbl_dual_fn = QtWidgets.QLabel('N pontos:')
-        self.cmb_dual_fspace.currentIndexChanged.connect(self._on_dual_fspace)
-        box_f, btn_f, eta_f = sweep_box('Varredura em frequência (normalizada pelo OPT101)',
-                                        (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1),
-                                         ('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn)), 'F')
-        self.dual_btns = {'P': btn_p, 'F': btn_f}
-        self.dual_etas = {'P': eta_p, 'F': eta_f}
-        # Topo da aba: executar varreduras (painel recolhível) ou abrir uma varredura salva para analisar
+        box_f, btn_f, eta_f = sweep_box('Varredura em frequência',
+                                        (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1)), 'F',
+                                        mid=(('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn)))
+        # Varredura em frequência das medidas (painel "Varreduras"): parâmetros próprios, para não mexer nos da calibração
+        self.sp_dual_m_f0 = self._dspin(0.1, 5000.0, 10.0, 2, 1.0, None, 110, ' Hz')
+        self.sp_dual_m_f1 = self._dspin(0.1, 5000.0, 2000.0, 2, 10.0, None, 110, ' Hz')
+        self.cmb_dual_m_fspace = QtWidgets.QComboBox()
+        self.cmb_dual_m_fspace.addItems(['Logarítmico', 'Linear'])
+        self.sp_dual_m_fn = self._dspin(1.0, 5000.0, 30.0, 1, 1.0, None, 90)
+        self.lbl_dual_m_fn = QtWidgets.QLabel('N pontos:')
+        box_m, btn_m, eta_m = sweep_box('Varredura em frequência (normalizada pelo OPT101)',
+                                        (('Início:', self.sp_dual_m_f0), ('Fim:', self.sp_dual_m_f1)), 'M',
+                                        mid=(('Espaçamento:', self.cmb_dual_m_fspace), (self.lbl_dual_m_fn, self.sp_dual_m_fn)))
+        self.dual_fw = {'F': (self.sp_dual_f0, self.sp_dual_f1, self.cmb_dual_fspace, self.sp_dual_fn, self.lbl_dual_fn),
+                        'M': (self.sp_dual_m_f0, self.sp_dual_m_f1, self.cmb_dual_m_fspace, self.sp_dual_m_fn,
+                              self.lbl_dual_m_fn)}
+        for k in ('F', 'M'):
+            self.dual_fw[k][2].currentIndexChanged.connect(lambda i, k=k: self._on_dual_fspace(i, k))
+        self.dual_btns = {'P': btn_p, 'F': btn_f, 'M': btn_m}
+        # Refinar ressonância: ajusta a ressonância na varredura atual e mede mais pontos em volta do f0 ajustado
+        row_ref = QtWidgets.QHBoxLayout()
+        self.btn_dual_refine = QtWidgets.QPushButton('Refinar ressonância')
+        self.btn_dual_refine.setToolTip(
+            'Ajusta a ressonância da célula (oscilador amortecido + fundo, acima de 250 Hz) na varredura atual\n'
+            'e mede mais pontos, igualmente espaçados, dentro do pico, f0 ± f0/(2Q). Os pontos novos entram na\n'
+            'mesma varredura (em ordem de frequência) e o CSV é gravado de novo com todos. Usa a Medida e o τ\n'
+            'deste quadro. Serve também para uma varredura aberta do disco.')
+        self.btn_dual_refine.clicked.connect(self.refine_dual_resonance)
+        row_ref.addWidget(self.btn_dual_refine)
+        row_ref.addWidget(QtWidgets.QLabel('Pontos novos:'))
+        self.sp_dual_refine_n = self._dspin(3.0, 100.0, 12.0, 0, 1.0, None, 70)
+        row_ref.addWidget(self.sp_dual_refine_n)
+        self.lbl_dual_refine = QtWidgets.QLabel('')
+        self.lbl_dual_refine.setStyleSheet('color:#606060;')
+        row_ref.addWidget(self.lbl_dual_refine)
+        row_ref.addStretch(1)
+        box_f.layout().addLayout(row_ref)
+        self.dual_etas = {'P': eta_p, 'F': eta_f, 'M': eta_m}
+        # Topo da aba: "Calibração" (referência, esquema da célula, passos e a varredura em frequência),
+        # "Varredura" (casada em PWM, pouco usada) e abrir uma varredura salva para analisar
         top_row = QtWidgets.QHBoxLayout()
-        self.btn_dual_sweeps_panel = QtWidgets.QPushButton('Executar varreduras ▸')
+        self.dual_top_row = top_row
+        self.btn_dual_pwm_panel = QtWidgets.QPushButton('Varredura ▸')
+        self.btn_dual_pwm_panel.setCheckable(True)
+        self.btn_dual_pwm_panel.setToolTip('Varredura em frequência (calibrar e medir), Refinar ressonância e, recolhida,\n'
+                                           'a varredura casada em PWM (linearidade com a potência do laser).')
+        self.btn_dual_pwm_panel.toggled.connect(self.on_dual_pwm_panel)
+        top_row.addWidget(self.btn_dual_pwm_panel)
+        self.btn_dual_sweeps_panel = QtWidgets.QPushButton('Calibração ▸')
         self.btn_dual_sweeps_panel.setCheckable(True)
-        self.btn_dual_sweeps_panel.setToolTip('Mostra ou esconde as varreduras casada em PWM e em frequência.')
+        self.btn_dual_sweeps_panel.setToolTip('Calibração do microfone: referência, esquema da montagem, Gerar curva de calibração e\n'
+                                              'Verificar com outra referência.')
         self.btn_dual_sweeps_panel.toggled.connect(self.on_dual_sweeps_panel)
         top_row.addWidget(self.btn_dual_sweeps_panel)
         self.btn_dual_open = QtWidgets.QPushButton('Abrir varredura…')
@@ -2574,24 +4011,65 @@ class LockInWindow(QtWidgets.QMainWindow):
         top_row.addWidget(self.btn_dual_open)
         top_row.addStretch(1)
         lay.addLayout(top_row)
+        # Painel "Calibração": o quadro da calibração (preenchido mais abaixo) à esquerda e a varredura em
+        # frequência à direita
         self.dual_sweeps_panel = QtWidgets.QWidget()
-        boxes = QtWidgets.QHBoxLayout(self.dual_sweeps_panel)
-        boxes.setContentsMargins(0, 0, 0, 0)
-        boxes.addWidget(box_p)
-        boxes.addWidget(box_f)
-        boxes.addStretch(1)
-        self.dual_sweeps_panel.setVisible(False)
-        lay.addWidget(self.dual_sweeps_panel)
+        self.dual_cal_boxes = QtWidgets.QHBoxLayout(self.dual_sweeps_panel)
+        self.dual_cal_boxes.setContentsMargins(0, 0, 0, 0)
+        self.dual_box_f = box_f
+        box_f.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Maximum)
+        # Numa área com rolagem horizontal: em tela estreita o painel não alarga a janela além da tela
+        self.dual_cal_scroll = QtWidgets.QScrollArea()
+        self.dual_cal_scroll.setWidgetResizable(True)
+        self.dual_cal_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.dual_cal_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.dual_cal_scroll.setWidget(self.dual_sweeps_panel)
+        self.dual_cal_scroll.setVisible(False)
+        lay.addWidget(self.dual_cal_scroll)
+        self.dual_pwm_panel = QtWidgets.QWidget()
+        pbox = QtWidgets.QHBoxLayout(self.dual_pwm_panel)
+        pbox.setContentsMargins(0, 0, 0, 0)
+        box_m.setVisible(False)          # uma varredura em frequência só (a da calibração serve para medir)
+        box_m.setParent(self.dual_pwm_panel)
+        pbox.addWidget(box_f, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        self.btn_dual_pwm_sub = QtWidgets.QPushButton('Casada em PWM ▸')
+        self.btn_dual_pwm_sub.setCheckable(True)
+        self.btn_dual_pwm_sub.setFlat(True)
+        self.btn_dual_pwm_sub.toggled.connect(lambda c: (box_p.setVisible(c),
+                                                          self.btn_dual_pwm_sub.setText('Casada em PWM ' + ('▾' if c else '▸'))))
+        pbox.addWidget(self.btn_dual_pwm_sub, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        box_p.setVisible(False)
+        pbox.addWidget(box_p, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        pbox.addStretch(1)
+        self.dual_pwm_panel.setVisible(False)
+        lay.addWidget(self.dual_pwm_panel)
         self.lbl_dual_status = QtWidgets.QLabel('')
         lay.addWidget(self.lbl_dual_status)
 
         self.dual_plots = QtWidgets.QWidget()
-        pl = QtWidgets.QHBoxLayout(self.dual_plots)
-        pl.setContentsMargins(0, 0, 0, 0)
+        # Grade: lado a lado, empilhado ou sobrepostos (mesma célula), escolhido no menu do botão direito
+        self.dual_plot_grid = QtWidgets.QGridLayout(self.dual_plots)
+        self.dual_plot_grid.setContentsMargins(0, 0, 0, 0)
+        self.dual_layout = 'side'
         self.pw_dual_a, self.pw_dual_b = pg.PlotWidget(), pg.PlotWidget()
         for pw in (self.pw_dual_a, self.pw_dual_b):
             pw.showGrid(x=True, y=True, alpha=0.3)
-            pl.addWidget(pw, 1)
+        self.dual_layout_actions = {}
+        grp = QtGui.QActionGroup(self)
+        for pw in (self.pw_dual_a, self.pw_dual_b):
+            menu = pw.getPlotItem().vb.menu
+            menu.addSeparator()
+            sub = menu.addMenu('Arranjo dos gráficos')
+            for key, name in (('side', 'Lado a lado'), ('stacked', 'Empilhado'),
+                              ('overlay', 'Sobrepostos (fase no eixo da direita)')):
+                act = sub.addAction(name)
+                act.setCheckable(True)
+                act.setChecked(key == 'side')
+                grp.addAction(act)
+                act.triggered.connect(lambda _=False, k=key: self.set_dual_layout(k))
+                self.dual_layout_actions.setdefault(key, []).append(act)
+        grp.setExclusive(False)                      # dois menus: a marcação é feita à mão em set_dual_layout
+        self._place_dual_plots()
         self.c_dual_a = self.pw_dual_a.plot([], [], pen=None, symbol='o', symbolSize=7,
                                             symbolBrush='royalblue', symbolPen='royalblue')
         self.c_dual_a.setZValue(10)         # acima do fit e dos "x" vermelhos: recebe o clique
@@ -2600,6 +4078,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.pw_dual_a.addItem(self.e_dual_a)
         self.c_dual_a_fit = self.pw_dual_a.plot([], [], pen=pg.mkPen('#e67e22', width=2,
                                                                      style=QtCore.Qt.PenStyle.DashLine))
+        # Curva teórica da referência de calibração (S ∝ f^-n com o passa-altas fc do ajuste), para comparar
+        self.c_dual_a_theory = self.pw_dual_a.plot([], [], pen=pg.mkPen('#7f7f7f', width=1.5,
+                                                                        style=QtCore.Qt.PenStyle.DotLine))
         self.c_dual_a_bad = self.pw_dual_a.plot([], [], pen=None, symbol='x', symbolSize=12,
                                                 symbolBrush='#d00000', symbolPen=pg.mkPen('#d00000', width=2))
         self.c_dual_b = self.pw_dual_b.plot([], [], pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=6,
@@ -2609,8 +4090,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.c_dual_b_fit = self.pw_dual_b.plot([], [], pen=pg.mkPen('#e67e22', width=2,
                                                                      style=QtCore.Qt.PenStyle.DashLine))
         excl_row = QtWidgets.QHBoxLayout()
-        excl_hint = QtWidgets.QLabel('Clique num ponto do gráfico da esquerda para tirá-lo do ajuste '
-                                     '(vazado = excluído); clique de novo para incluí-lo.')
+        excl_hint = QtWidgets.QLabel('Clique num ponto para tirá-lo do ajuste.')
+        excl_hint.setToolTip('Clique num ponto do gráfico da esquerda para tirá-lo do ajuste; clique de novo para incluí-lo.')
         excl_hint.setStyleSheet('color:#606060;')
         excl_row.addWidget(excl_hint)
         self.btn_dual_incl = QtWidgets.QPushButton('Incluir todos')
@@ -2624,9 +4105,56 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_resave.clicked.connect(lambda: self._export_dual(resave=True))
         self.btn_dual_resave.setEnabled(False)
         excl_row.addWidget(self.btn_dual_resave)
+        self.btn_dual_diag = QtWidgets.QPushButton('Diagnóstico')
+        self.btn_dual_diag.setCheckable(True)
+        self.btn_dual_diag.setToolTip(
+            'Varredura em frequência: separa o sinal fotoacústico (S ∝ f^-n, fase constante) de um fundo plano\n'
+            '(luz chegando ao microfone, chiado do driver, acoplamento elétrico), ajustando amplitude e fase juntas,\n'
+            'com o passa-alta do microfone, o atraso do sistema e a ressonância da célula. Desenha as componentes\n'
+            '(vermelho: fotoacústico; roxo: fundo; preto: soma) e diz o que encontrou. Leva alguns segundos.')
+        self.btn_dual_diag.toggled.connect(lambda _: self._show_dual_results())
+        self.btn_dual_diag.setEnabled(False)
+        excl_row.addWidget(self.btn_dual_diag)
+        excl_row.addSpacing(16)
+        self.chk_dual_norm = QtWidgets.QCheckBox('Normalizar pelo OPT101')
+        self.chk_dual_norm.setChecked(True)
+        self.chk_dual_norm.setToolTip(
+            'Varredura em frequência. Marcado: S = R_INMP441 / R_OPT101 e Δφ = φ_INMP441 − φ_OPT101 (desconta a\n'
+            'variação da potência e da fase da luz com a frequência). Desmarcado: só o INMP441 (R e fase brutos).\n'
+            'Fitar padrão, gerar calibração e aplicar a calibração pedem a normalização. Os CSV guardam sempre os dois sensores.')
+        self.chk_dual_norm.toggled.connect(lambda _: self._show_dual_results())
+        excl_row.addWidget(self.chk_dual_norm)
+        self.chk_dual_sensors = QtWidgets.QCheckBox('Mostrar sinais de cada sensor')
+        self.chk_dual_sensors.setToolTip('Mostra abaixo, além da curva principal, a amplitude R e a fase de cada sensor\n'
+                                         '(INMP441 e OPT101) em função da variável da varredura.')
+        self.chk_dual_sensors.toggled.connect(self._on_dual_sensors)
+        excl_row.addWidget(self.chk_dual_sensors)
         excl_row.addStretch(1)
         lay.addLayout(excl_row)
         lay.addWidget(self.dual_plots, 1)
+        # Sinais de cada sensor (recolhível): amplitude relativa (÷ mediana) e fase de cada um
+        self.dual_sensor_plots = QtWidgets.QWidget()
+        sl = QtWidgets.QHBoxLayout(self.dual_sensor_plots)
+        sl.setContentsMargins(0, 0, 0, 0)
+        self.pw_dual_c, self.pw_dual_d = pg.PlotWidget(), pg.PlotWidget()
+        for pw in (self.pw_dual_c, self.pw_dual_d):
+            pw.showGrid(x=True, y=True, alpha=0.3)
+            pw.addLegend(offset=(10, 10))
+            sl.addWidget(pw, 1)
+        self.pw_dual_c.setTitle('Amplitude de cada sensor (R ÷ mediana da varredura)')
+        self.pw_dual_c.setLabel('left', 'R relativo')
+        self.pw_dual_d.setTitle('Fase de cada sensor (desenrolada)')
+        self.pw_dual_d.setLabel('left', 'fase (graus)')
+        sty = {'INMP441': ('#c0392b', 'o'), 'OPT101': ('#1f77b4', 's')}
+        self.c_dual_sens = {}
+        for name, (col, sym) in sty.items():
+            self.c_dual_sens[name] = (
+                self.pw_dual_c.plot([], [], pen=pg.mkPen(col, width=1.5), symbol=sym, symbolSize=5,
+                                    symbolBrush=col, symbolPen=col, name=name),
+                self.pw_dual_d.plot([], [], pen=pg.mkPen(col, width=1.5), symbol=sym, symbolSize=5,
+                                    symbolBrush=col, symbolPen=col, name=name))
+        self.dual_sensor_plots.setVisible(False)
+        lay.addWidget(self.dual_sensor_plots, 1)
         # Aviso enquanto não há resultados (posição fixa em pixels, como o texto do fit da FFT)
         self.txt_dual_empty = []
         for pw in (self.pw_dual_a, self.pw_dual_b):
@@ -2636,87 +4164,131 @@ class LockInWindow(QtWidgets.QMainWindow):
             t.setPos(12, 12)
             self.txt_dual_empty.append(t)
 
-        # Calibração do microfone em passos numerados, num painel recolhível: o modelo do ajuste
-        # (folha de alumínio fina e livre) só vale com esse padrão
-        cal_row = QtWidgets.QHBoxLayout()
-        self.btn_dual_cal_panel = QtWidgets.QPushButton('Calibração de papel alumínio ▸')
+        # Calibração do microfone em passos numerados, num painel recolhível. A referência escolhida define a
+        # curva teórica (S ∝ f^-n, fase constante) e a célula (OPC ou câmara) em que a calibração vale.
+        self.btn_dual_cal_panel = QtWidgets.QPushButton('Calibração do microfone ▸')
         self.btn_dual_cal_panel.setCheckable(True)
         self.btn_dual_cal_panel.setToolTip(
             'Mostra ou esconde a calibração do microfone.\n'
-            'O ajuste usado nela (folha de alumínio fina e livre, S ∝ f⁻¹·⁵) só vale com o padrão de papel alumínio:\n'
-            'com outras amostras ele dá parâmetros sem sentido físico. Com o painel fechado, "Fitar padrão" não é aplicado.')
+            'Escolha a referência (padrão de calibração): ela define a curva teórica esperada e a célula (OPC ou câmara).\n'
+            'Com o painel fechado, "Fitar padrão" não é aplicado.')
         self.btn_dual_cal_panel.toggled.connect(self.on_dual_cal_panel)
-        cal_row.addWidget(self.btn_dual_cal_panel)
-        cal_row.addStretch(1)
-        lay.addLayout(cal_row)
-        cal_box = self._group('Calibração de papel alumínio (o modelo só vale para esse padrão)')
+        self.btn_dual_cal_panel.setParent(page)
+        self.btn_dual_cal_panel.setVisible(False)      # o estado segue o botão "Calibração" do topo
+        cal_box = self._group('Calibração do microfone (com uma referência de comportamento conhecido)')
         self.dual_cal_box = cal_box
-        cal_box.setVisible(False)
-        # Duas linhas (passos 1–2 e 3–4): numa só, a caixa exigia ~1600 px e a janela não cabia na tela
-        cal_v = QtWidgets.QVBoxLayout(cal_box)
-        cal_v.setContentsMargins(6, 2, 6, 2)
+        # Passos à esquerda (referência + duas linhas: 1–2 e 3–4); esquema da montagem à direita
+        cal_h = QtWidgets.QHBoxLayout(cal_box)
+        cal_h.setContentsMargins(6, 2, 6, 2)
+        cal_v = QtWidgets.QVBoxLayout()
         cal_v.setSpacing(2)
+        cal_h.addLayout(cal_v, 1)
+        rrow = QtWidgets.QHBoxLayout()
+        cal_v.addLayout(rrow)
+        rrow.addWidget(QtWidgets.QLabel('<b>Referência:</b>'))
+        self.cmb_cal_ref = QtWidgets.QComboBox()
+        for key, ref in CAL_REFS.items():
+            self.cmb_cal_ref.addItem(ref['name'], key)
+            self.cmb_cal_ref.setItemData(self.cmb_cal_ref.count() - 1, ref['tips'], QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.cmb_cal_ref.setToolTip('Padrão usado na calibração. Cada um tem a sua curva teórica (S ∝ f⁻ⁿ, fase constante)\n'
+                                    'e vale numa configuração da célula (escolhida automaticamente em "Célula", no topo).')
+        rrow.addWidget(self.cmb_cal_ref)
+        self.lbl_cal_L = QtWidgets.QLabel('L:')
+        rrow.addWidget(self.lbl_cal_L)
+        self.sp_cal_L = self._dspin(0.1, 100000.0, 12.0, 1, 1.0, lambda _: self._on_cal_ref_params(), 100, ' µm')
+        self.sp_cal_L.setToolTip('Espessura da referência (micrômetro). No modo OPC define f₁ = α/(πL²), o limite da\n'
+                                 'folha termicamente fina; dentro da câmara é só informativa (opaca: f⁻¹ nos dois regimes).')
+        rrow.addWidget(self.sp_cal_L)
+        self.lbl_cal_alpha = QtWidgets.QLabel('α:')
+        rrow.addWidget(self.lbl_cal_alpha)
+        self.sp_cal_alpha = self._dspin(0.001, 10.0, 0.97, 3, 0.01, lambda _: self._on_cal_ref_params(), 110, ' cm²/s')
+        self.sp_cal_alpha.setToolTip('Difusividade térmica da referência. Alumínio puro ≈ 0,97 cm²/s; ligas de folha\n'
+                                     '(1235, 8079) ≈ 0,9; liga 6061 ≈ 0,65 cm²/s.')
+        rrow.addWidget(self.sp_cal_alpha)
+        self.lbl_cal_n = QtWidgets.QLabel('n:')
+        rrow.addWidget(self.lbl_cal_n)
+        self.sp_cal_n = self._dspin(0.0, 3.0, 1.0, 2, 0.05, lambda _: self._on_cal_ref_params(), 80)
+        self.sp_cal_n.setToolTip('Expoente esperado da referência personalizada: S ∝ f⁻ⁿ com fase constante.')
+        rrow.addWidget(self.sp_cal_n)
+        rrow.addStretch(1)
+        self.lbl_cal_ref_info = QtWidgets.QLabel('')
+        self.lbl_cal_ref_info.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_cal_ref_info.setWordWrap(True)
+        cal_v.addWidget(self.lbl_cal_ref_info)
+        sch_v = QtWidgets.QVBoxLayout()
+        sch_v.setSpacing(2)
+        self.cal_schematic = CellSchematic()
+        sch_v.addWidget(self.cal_schematic)
+        sch_v.addStretch(1)
+        # Dicas de montagem na coluna da esquerda (largura livre): nunca invadem o desenho
+        self.lbl_cal_tips = QtWidgets.QLabel('')
+        self.lbl_cal_tips.setWordWrap(True)
+        self.lbl_cal_tips.setStyleSheet('color:#404040;')
+        cal_v.addWidget(self.lbl_cal_tips)
+        cal_h.addLayout(sch_v)
+        # Widgets do antigo "Fitar padrão" (fora do layout): a calibração agora é M = S·fⁿ, sem ajuste de modelo,
+        # e a faixa com S ∝ f⁻ⁿ é procurada no painel Ajuste
+        self.chk_dual_std = QtWidgets.QCheckBox()
+        self.chk_dual_std.setChecked(True)
+        self.chk_dual_std_phase = QtWidgets.QCheckBox()
+        self.sp_dual_std_fmin = self._dspin(0.0, 5000.0, 0.0, 0, 10.0, None, 90, ' Hz')
+        self.sp_dual_std_fmax = self._dspin(0.0, 5000.0, 0.0, 0, 10.0, None, 90, ' Hz')
         frow = QtWidgets.QHBoxLayout()
         cal_v.addLayout(frow)
-        self.lbl_cal_step1 = QtWidgets.QLabel('<b>1.</b> Varredura em frequência')
-        self.lbl_cal_step1.setToolTip('Rode a varredura em frequência acima com o padrão de alumínio na célula.')
-        frow.addWidget(self.lbl_cal_step1)
-        self.btn_cal_preset = QtWidgets.QPushButton('Parâmetros de calibração')
-        self.btn_cal_preset.setToolTip(
-            f'Preenche a varredura em frequência com os valores recomendados para a calibração:\n'
-            f'{CAL_SWEEP_F0:g} a {CAL_SWEEP_F1:g} Hz, {CAL_SWEEP_N} pontos logarítmicos, integração longa com '
-            f'τ = {CAL_SWEEP_TAU:g} s,\nPWM {CAL_SWEEP_PWM:g} %, Filtro 60 Hz desligado nos dois lock-ins e '
-            f'"Usar" da calibração (linha superior) desmarcado.\nOs campos continuam editáveis. Confira o %ADC do OPT101 '
-            f'(aba OPT101) antes de rodar.')
-        self.btn_cal_preset.clicked.connect(self.apply_cal_preset)
-        frow.addWidget(self.btn_cal_preset)
-        frow.addWidget(QtWidgets.QLabel('→ <b>2.</b>'))
-        self.chk_dual_std = QtWidgets.QCheckBox('Fitar padrão')
-        self.chk_dual_std.setToolTip(
-            'Disponível depois de uma varredura em frequência.\n\n'
-            'Padrão de papel alumínio (termicamente fino, opaco): S(f) = A·f⁻ⁿ·H(f), com H um passa-altas de 1ª ordem\n'
-            '(microfone/célula) de corte fc; fase Δφ(f) = φ0 + atan(fc/f) − 360°·f·td (td = atraso entre a luz e o sinal do microfone: propagação do som + eletrônica).\n'
-            'n ≈ 1: amostra fina sobre suporte espesso; n ≈ 1,5: folha fina livre (limitada pela capacidade térmica).\nResíduos atípicos ou SNR baixo marcam os pontos fora da faixa confiável (x vermelho).')
-        self.chk_dual_std.toggled.connect(lambda _: self._show_dual_results())
-        frow.addWidget(self.chk_dual_std)
-        self.chk_dual_std_phase = QtWidgets.QCheckBox('Incluir fase')
-        self.chk_dual_std_phase.setChecked(True)
-        self.chk_dual_std_phase.setToolTip('Usa a diferença de fase INMP441 − OPT101 no ajuste '
-                                           '(precisa do firmware com o marcador de modulação).')
-        self.chk_dual_std_phase.toggled.connect(lambda _: self._show_dual_results())
-        frow.addWidget(self.chk_dual_std_phase)
-        self.chk_dual_opt_tau = QtWidgets.QCheckBox('Descontar τ do sensor:')
-        self.chk_dual_opt_tau.setChecked(True)
-        tau_tip = ('Polo do OPT101 (depende do resistor de realimentação), descontado do OPT101 antes de S e Δφ:\n'
-                   'fase + atan(2π·f·τ) e amplitude × √(1 + (2π·f·τ)²). Assim a calibração vale para qualquer resistor.\n'
-                   'O atraso do driver/laser não entra: é comum ao microfone e já se cancela em Δφ.\n'
-                   'Vale para o resistor montado agora; troque o valor ao trocar o resistor (0 = sem correção).\n'
-                   'Medir…: compara a varredura em frequência atual com outra (mesma luz, outro resistor) e preenche o τ.')
-        self.chk_dual_opt_tau.setToolTip(tau_tip)
-        self.chk_dual_opt_tau.toggled.connect(lambda _: self._show_dual_results())
-        frow.addWidget(self.chk_dual_opt_tau)
-        self.sp_dual_tau_sensor = self._dspin(0.0, 500.0, 0.0, 2, 0.5, lambda _: self._show_dual_results(), 90, ' µs')
+        self.lbl_cal_steps = QtWidgets.QLabel(
+            'Monte a referência como no esquema, rode a <b>Varredura</b> e clique em <b>Gerar curva de calibração</b>. '
+            'Para conferir: monte outra referência, escolha-a acima, meça com <b>Usar</b> marcado e clique em <b>Verificar</b>.')
+        self.lbl_cal_steps.setWordWrap(True)
+        frow.addWidget(self.lbl_cal_steps, 1)
+        frow = QtWidgets.QHBoxLayout()
+        cal_v.addLayout(frow)
+        self.btn_dual_adv = QtWidgets.QPushButton('Avançado ▸')
+        self.btn_dual_adv.setCheckable(True)
+        self.btn_dual_adv.setFlat(True)
+        self.btn_dual_adv.setToolTip('Correção do polo do OPT101: só é necessária se você trocar o resistor de\n'
+                                     'realimentação do OPT101 entre a calibração e a medida.')
+        # Linha avançada (oculta): τ do sensor OPT101
+        self.dual_adv_row = QtWidgets.QWidget()
+        arow = QtWidgets.QHBoxLayout(self.dual_adv_row)
+        arow.setContentsMargins(16, 0, 0, 0)
+        tau_tip = ('Polo do OPT101, que depende do resistor de realimentação. É descontado do OPT101 antes de S e Δφ:\n'
+                   'fase + atan(2π·f·τ) e amplitude × √(1 + (2π·f·τ)²).\n'
+                   'Não precisa ser calibrado no uso normal: com o mesmo resistor na calibração e na medida, a calibração\n'
+                   'do microfone já absorve esse polo. Preencha só se trocar o resistor (0 = sem correção), e então\n'
+                   'gere a calibração de novo com o mesmo valor.\n'
+                   'Medir…: compara a varredura em frequência atual com outra já salva (mesma luz, outro resistor) e preenche τ.\n'
+                   'O atraso do driver/laser não entra aqui: é comum ao microfone e se cancela em Δφ.')
+        lbl = QtWidgets.QLabel('τ do sensor OPT101:')
+        lbl.setToolTip(tau_tip)
+        arow.addWidget(lbl)
+        self.sp_dual_tau_sensor = self._dspin(0.0, 500.0, 0.0, 2, 0.5, lambda _: self._show_dual_results(), 110, ' µs')
+        self.sp_dual_tau_sensor.setSpecialValueText('0 (sem correção)')
         self.sp_dual_tau_sensor.setToolTip(tau_tip)
-        frow.addWidget(self.sp_dual_tau_sensor)
+        arow.addWidget(self.sp_dual_tau_sensor)
         self.btn_dual_tau_measure = QtWidgets.QPushButton('Medir…')
         self.btn_dual_tau_measure.setToolTip(tau_tip)
         self.btn_dual_tau_measure.clicked.connect(self.measure_sensor_tau)
-        frow.addWidget(self.btn_dual_tau_measure)
-        frow.addStretch(1)
-        frow = QtWidgets.QHBoxLayout()
-        cal_v.addLayout(frow)
-        frow.addWidget(QtWidgets.QLabel('→ <b>3.</b>'))
-        self.btn_dual_cal = QtWidgets.QPushButton('Gerar calibração do microfone')
+        arow.addWidget(self.btn_dual_tau_measure)
+        hint = QtWidgets.QLabel('Só se trocar o resistor do OPT101 entre a calibração e a medida; '
+                                'com o mesmo resistor, deixe 0.')
+        hint.setStyleSheet('color:#606060;')
+        arow.addWidget(hint)
+        arow.addStretch(1)
+        self.dual_adv_row.setVisible(False)
+        self.btn_dual_adv.toggled.connect(self._on_dual_adv)
+        self.btn_dual_cal = QtWidgets.QPushButton('Gerar curva de calibração')
         self.btn_dual_cal.setToolTip(
-            'Disponível depois de uma varredura em frequência com "Fitar padrão" ligado '
-            '(e com "Usar" da calibração, na linha superior, desmarcado).\n\n'
-            'Usa a varredura em frequência do padrão de alumínio (folha fina livre, S ∝ f⁻¹·⁵ em teoria) para obter\n'
-            'a resposta relativa do sistema microfone + célula: M(f) = S(f)·f¹·⁵, normalizada (máximo da curva ajustada = 1).\n'
-            'A fase do sistema é Δφ(f) − φ0 do fit. Salva CSV e PNG na pasta Medidas (prefixo CAL_).')
+            'Disponível depois de uma varredura em frequência da referência, com "Usar" (linha superior) desmarcado.\n\n'
+            'Em teoria a referência dá S ∝ f⁻ⁿ (n da referência escolhida); então M(f) = S(f)·fⁿ é a resposta relativa\n'
+            'do sistema microfone + célula, normalizada pela faixa plana. A fase do sistema é Δφ(f) − φ0, com φ0 a fase\n'
+            'média na faixa plana. Entram todos os pontos com SNR suficiente (inclusive a ressonância).\n'
+            'O arquivo registra a referência, a célula e se o comportamento foi verificado.\n'
+            'Salva CSV e PNG na pasta Medidas (prefixo CAL_). Nada é guardado sem este clique: guarde só as\n'
+            'calibrações que valerem a pena (curva limpa, repetível).')
         self.btn_dual_cal.setEnabled(False)
         self.btn_dual_cal.clicked.connect(self._make_dual_calibration)
         frow.addWidget(self.btn_dual_cal)
-        frow.addWidget(QtWidgets.QLabel('Faixa plana ±'))
+        self.lbl_flat_tol = QtWidgets.QLabel('Faixa plana ±')
         self.sp_dual_flat_tol = QtWidgets.QDoubleSpinBox()
         self.sp_dual_flat_tol.setRange(0.1, 6.0)
         self.sp_dual_flat_tol.setDecimals(1)
@@ -2725,24 +4297,36 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.sp_dual_flat_tol.setSuffix(' dB')
         self.sp_dual_flat_tol.setToolTip('Tolerância para a faixa em que a sensibilidade do microfone é constante '
                                          '(±1 dB ≈ ±12 %). A calibração procura o maior trecho de frequências dentro dela.')
-        frow.addWidget(self.sp_dual_flat_tol)
-        lbl_step4 = QtWidgets.QLabel('→ <b>4.</b> Escolha a calibração em <b>Calibração:</b> (linha superior) e marque <b>Usar</b>')
-        lbl_step4.setToolTip('A calibração nova já aparece selecionada no topo da janela.')
-        frow.addWidget(lbl_step4)
+        arow.insertWidget(arow.count() - 1, self.lbl_flat_tol)      # tolerância da faixa plana: no Avançado
+        arow.insertWidget(arow.count() - 1, self.sp_dual_flat_tol)
+        self.btn_cal_verify = QtWidgets.QPushButton('Verificar com esta medida')
+        self.btn_cal_verify.setToolTip(
+            'Com a calibração em uso ("Usar"), meça uma SEGUNDA referência (escolha-a em Referência: ex. calibrou com o\n'
+            'negro de fumo, confira com a fita preta). Corrigida, ela deve seguir f⁻ⁿ com fase constante numa faixa\n'
+            f'de pelo menos uma década (|n − n esperado| ≤ {CAL_N_TOL:g}, ≤ {CAL_VER_DB:g} dB rms, fase ± {CAL_VER_DEG:g}° rms).\n'
+            'Se seguir, a calibração passa a "verificada" e a faixa fica registrada no arquivo dela.')
+        self.btn_cal_verify.setEnabled(False)
+        self.btn_cal_verify.clicked.connect(self._verify_calibration)
+        frow.addWidget(self.btn_cal_verify)
+        frow.addWidget(self.btn_dual_adv)
         frow.addStretch(1)
-        lay.addWidget(cal_box)
+        self.lbl_cal_verify = QtWidgets.QLabel('')
+        self.lbl_cal_verify.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_cal_verify.setWordWrap(True)
+        cal_v.addWidget(self.lbl_cal_verify)
+        cal_v.addWidget(self.dual_adv_row)
+        cal_v.addStretch(1)                  # passos no alto; o esquema define a altura da caixa
+        self.dual_cal_boxes.addWidget(cal_box, 1)
 
         # Ajuste da varredura em frequência com modelos físicos conhecidos (painel recolhível)
-        model_row = QtWidgets.QHBoxLayout()
-        self.btn_dual_model_panel = QtWidgets.QPushButton('Ajuste com modelos ▸')
+        self.btn_dual_model_panel = QtWidgets.QPushButton('Ajuste ▸')
         self.btn_dual_model_panel.setCheckable(True)
         self.btn_dual_model_panel.setToolTip('Ajusta a varredura em frequência (magnitude, fase ou as duas) com modelos\n'
                                              'físicos de célula aberta. Use com a calibração aplicada ("Usar").')
         self.btn_dual_model_panel.toggled.connect(self.on_dual_model_panel)
-        model_row.addWidget(self.btn_dual_model_panel)
-        model_row.addStretch(1)
-        lay.addLayout(model_row)
-        self.dual_model_box = self._group('Ajuste com modelos (varredura em frequência)')
+        # No topo, depois de "Calibração" e "Varreduras"; o quadro abre acima dos gráficos
+        self.dual_top_row.insertWidget(self.dual_top_row.indexOf(self.btn_dual_sweeps_panel) + 1, self.btn_dual_model_panel)
+        self.dual_model_box = self._group('Ajuste da varredura em frequência')
         self.dual_model_box.setVisible(False)
         mv = QtWidgets.QVBoxLayout(self.dual_model_box)
         mv.setContentsMargins(6, 2, 6, 2)
@@ -2776,6 +4360,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                                       'de f1: α = π·f1·L². Referências: Ti puro ≈ 9,3e-6 m²/s; Ti-6Al-4V ≈ 2,9e-6 m²/s;\n'
                                       'aço inox ≈ 4e-6 m²/s; alumínio ≈ 9,7e-5 m²/s; cobre ≈ 1,1e-4 m²/s.')
         mrow.addWidget(self.sp_dual_thick)
+        self.lbl_dual_model_n = QtWidgets.QLabel('n esperado:')
+        mrow.addWidget(self.lbl_dual_model_n)
+        self.sp_dual_model_n = self._dspin(0.0, 3.0, 1.0, 2, 0.5, lambda _: self._show_dual_results(), 70)
+        self.sp_dual_model_n.setToolTip('Expoente esperado da amostra: 1 (opaca na câmara) ou 1,5 (folha fina em OPC).')
+        mrow.addWidget(self.sp_dual_model_n)
+        self.lbl_dual_model_n.setVisible(False)
+        self.sp_dual_model_n.setVisible(False)
         mrow.addSpacing(10)
         mrow.addWidget(QtWidgets.QLabel('Faixa: de'))
         range_tip = ('Limita o ajuste do modelo a esta faixa de frequência (os outros pontos continuam no gráfico).\n'
@@ -2790,20 +4381,38 @@ class LockInWindow(QtWidgets.QMainWindow):
         mrow.addWidget(self.sp_dual_model_f0)
         mrow.addWidget(QtWidgets.QLabel('a'))
         mrow.addWidget(self.sp_dual_model_f1)
+        self.btn_dual_peak = QtWidgets.QPushButton('Marcar pico (2 cliques)')
+        self.btn_dual_peak.setCheckable(True)
+        self.btn_dual_peak.setToolTip('Para o modelo de ressonância: clique no gráfico da esquerda um pouco abaixo e um pouco\n'
+                                      'acima do pico; os dois cliques preenchem a Faixa. Com a Faixa vazia (início/fim),\n'
+                                      'o pico é achado sozinho.')
+        self.btn_dual_peak.toggled.connect(self._on_dual_peak_mode)
+        self.btn_dual_peak.setEnabled(False)
+        mrow.addWidget(self.btn_dual_peak)
         mrow.addStretch(1)
         mv.addLayout(mrow)
         self.lbl_dual_model = QtWidgets.QLabel('')
         self.lbl_dual_model.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_model.setWordWrap(True)
         mv.addWidget(self.lbl_dual_model)
-        lay.addWidget(self.dual_model_box)
+        lay.insertWidget(lay.indexOf(self.dual_pwm_panel) + 1, self.dual_model_box)
         self.dual_model_txt = None
         pen_model = pg.mkPen('#2e7d32', width=2, style=QtCore.Qt.PenStyle.DashLine)
         self.c_dual_a_model = self.pw_dual_a.plot([], [], pen=pen_model)
         self.c_dual_b_model = self.pw_dual_b.plot([], [], pen=pen_model)
+        self.reg_dual = []
+        for pw in (self.pw_dual_a, self.pw_dual_b):        # faixa encontrada pelo modelo "Faixa com S ∝ f⁻ⁿ"
+            reg = pg.LinearRegionItem((0, 1), movable=False, brush=pg.mkBrush(46, 125, 50, 35),
+                                      pen=pg.mkPen(46, 125, 50, 110))
+            reg.setZValue(-10)
+            reg.setVisible(False)
+            pw.addItem(reg, ignoreBounds=True)
+            self.reg_dual.append(reg)
         self.ln_dual_break = pg.InfiniteLine(angle=90, pen=pg.mkPen('#2e7d32', width=1, style=QtCore.Qt.PenStyle.DotLine))
         self.ln_dual_break.setVisible(False)
         self.pw_dual_a.addItem(self.ln_dual_break, ignoreBounds=True)
+        self.dual_peak_clicks = None        # lista de frequências enquanto "Marcar pico" está ativo
+        self.pw_dual_a.scene().sigMouseClicked.connect(self._on_dual_plot_clicked)
         self.lbl_dual_tau = QtWidgets.QLabel('')
         self.lbl_dual_tau.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_tau.setWordWrap(True)
@@ -2812,17 +4421,63 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_fit.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_fit.setWordWrap(True)
         lay.addWidget(self.lbl_dual_fit)
+        self.lbl_dual_diag = QtWidgets.QLabel('')
+        self.lbl_dual_diag.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_diag.setWordWrap(True)
+        self.lbl_dual_diag.setVisible(False)
+        lay.addWidget(self.lbl_dual_diag)
+        self.dual_diag = None               # (chave dos dados, resultado de diagnose_freq)
+        self.dual_diag_txt = None
+        pen = lambda c, st: pg.mkPen(c, width=2, style=st)
+        D, S_ = QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.SolidLine
+        self.c_dual_diag = (self.pw_dual_a.plot([], [], pen=pen('#202020', S_)),
+                            self.pw_dual_a.plot([], [], pen=pen('#c0392b', D)),
+                            self.pw_dual_a.plot([], [], pen=pen('#8e44ad', D)),
+                            self.pw_dual_b.plot([], [], pen=pen('#202020', S_)))
+        # Legendas do Diagnóstico (só aparecem com ele ligado)
+        self.dual_diag_leg = tuple(pw.getPlotItem().addLegend(offset=(-10, 10), brush=(255, 255, 255, 220),
+                                                              pen=(160, 160, 160))
+                                   for pw in (self.pw_dual_a, self.pw_dual_b))
+        for lg in self.dual_diag_leg:
+            lg.setVisible(False)
         self.lbl_dual_cal = QtWidgets.QLabel('')
         self.lbl_dual_cal.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_cal.setWordWrap(True)
         lay.addWidget(self.lbl_dual_cal)
         self.dual_cal = None
+        # Gráficos em cima e, embaixo, os resultados em texto (os painéis abrem no topo da aba)
+        idx = lay.indexOf(self.dual_plots)
+        taken = [lay.takeAt(idx) for _ in range(lay.count() - idx)]
+        results = (self.lbl_dual_fit, self.lbl_dual_diag, self.lbl_dual_cal, self.lbl_dual_tau)
+        top = QtWidgets.QWidget()
+        tv = QtWidgets.QVBoxLayout(top)
+        tv.setContentsMargins(0, 0, 0, 0)
+        tv.addWidget(self.dual_plots, 1)
+        tv.addWidget(self.dual_sensor_plots, 1)
+        bottom = QtWidgets.QWidget()
+        bv = QtWidgets.QVBoxLayout(bottom)
+        bv.setContentsMargins(0, 2, 4, 0)
+        # Resultados num quadro flutuante sobre os gráficos (arrastável): os gráficos ficam fixos
+        self.dual_float = FloatingResults(self.dual_plots, results)
+        for it in taken:
+            wdg, sub = it.widget(), it.layout()
+            if wdg is not None and wdg not in results and wdg not in (self.dual_plots, self.dual_sensor_plots):
+                bv.addWidget(wdg)
+            elif sub is not None:
+                bv.addLayout(sub)
+        # Embaixo só há texto: ele ocupa a altura que precisa e os gráficos ficam com o resto da tela
+        bottom.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
+        top.setMinimumHeight(220)
+        lay.addWidget(top, 1)
+        lay.addWidget(bottom, 0)
         tabs.addTab(page, 'Modo Duplo')
 
         for sb in (self.sp_dual_p0, self.sp_dual_p1, self.sp_dual_dp,
-                   self.sp_dual_f0, self.sp_dual_f1, self.sp_dual_fn):
+                   self.sp_dual_f0, self.sp_dual_f1, self.sp_dual_fn,
+                   self.sp_dual_m_f0, self.sp_dual_m_f1, self.sp_dual_m_fn):
             sb.valueChanged.connect(self.update_dual_eta)
         self.cmb_dual_fspace.currentIndexChanged.connect(self.update_dual_eta)
+        self.cmb_dual_m_fspace.currentIndexChanged.connect(self.update_dual_eta)
         # τ escolhido para a integração longa de cada varredura
         self.dual_user_tau = {k: w.value() for k, w in self.dual_tau_w.items()}
         for kind in ('P', 'F'):
@@ -2830,9 +4485,71 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dual_tau_w[kind].valueChanged.connect(lambda v, k=kind: self._on_dual_tau(k, v))
             self.dual_mode_w[kind].currentIndexChanged.connect(lambda i, k=kind: self._on_dual_mode(k, i))
             self.dual_tau_w[kind].setEnabled(False)
-        self._setup_dual_plots('P')
+        # Varreduras em frequência (calibração e medidas): sem a escolha de "Medida"; sempre integração longa,
+        # com o τ ligado ao τ do INMP441: mudar qualquer um dos três campos muda os outros
+        for kind in ('F', 'M'):
+            self.dual_mode_w[kind].setCurrentIndex(1)
+            sp = self.dual_tau_w[kind]
+            self._set_spin(sp, self.sp_audio_tau.value())
+            self.dual_user_tau[kind] = sp.value()
+            sp.setEnabled(True)
+            sp.setToolTip('τ dos dois lock-ins durante a varredura (integração longa): espera 9τ e faz a média por 1τ em\n'
+                          'cada ponto. É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa (e na outra varredura).')
+            sp.valueChanged.connect(lambda v, k=kind: self._on_sweep_tau_edit(k, v))
+        self.dual_tau_w['M'].valueChanged.connect(self.update_dual_eta)
+        self.sp_audio_tau.valueChanged.connect(self._sync_sweep_tau)
+        self.cmb_cal_ref.currentIndexChanged.connect(self._on_cal_ref)
+        self.cmb_cell.currentIndexChanged.connect(lambda _: self._on_cal_ref_params(refresh=False))
+        self._on_cal_ref()
+        self._setup_dual_plots('F')
         self.update_dual_eta()
         self.refresh_mic_cal()
+
+    def _cal_freq_range(self):
+        '''Faixa da varredura em frequência atual (ou da planejada, se não houver resultados).'''
+        if self.dual_kind == 'F' and getattr(self, 'dual_results', None):
+            x = np.array([r[0] for r in self.dual_results], dtype=float)
+            return float(x.min()), float(x.max())
+        return self.sp_dual_f0.value(), self.sp_dual_f1.value()
+
+    def _cal_ref(self):
+        '''Referência escolhida no painel de calibração: (chave, dict, n esperado, texto da curva, ok, célula).'''
+        key = self.cmb_cal_ref.currentData() or 'al_opc'
+        ref = CAL_REFS[key]
+        fmin, fmax = self._cal_freq_range()
+        n, txt, ok = cal_ref_info(key, self.sp_cal_L.value(), self.sp_cal_alpha.value(), self.sp_cal_n.value(),
+                                  fmin, fmax)
+        return key, ref, n, txt, ok, ref['cell'] or self.cmb_cell.currentData()
+
+    def _on_cal_ref(self, _=None):
+        '''Troca de referência: mostra os parâmetros que ela usa, carrega os valores típicos e escolhe a célula.'''
+        key = self.cmb_cal_ref.currentData() or 'al_opc'
+        ref = CAL_REFS[key]
+        for name, ws in (('L', (self.lbl_cal_L, self.sp_cal_L)), ('alpha', (self.lbl_cal_alpha, self.sp_cal_alpha)),
+                         ('n', (self.lbl_cal_n, self.sp_cal_n))):
+            for w in ws:
+                w.setVisible(name in ref['params'])
+        for sp, v in ((self.sp_cal_L, ref['L_um']), (self.sp_cal_alpha, ref['alpha'])):
+            if v > 0:
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
+        if ref['cell']:
+            self.cmb_cell.blockSignals(True)
+            self.cmb_cell.setCurrentIndex(self.cmb_cell.findData(ref['cell']))
+            self.cmb_cell.blockSignals(False)
+        self._on_cal_ref_params()
+
+    def _on_cal_ref_params(self, refresh=True):
+        '''Atualiza esquema, dicas e curva esperada da referência; refresh = recalcula o ajuste.'''
+        if not hasattr(self, 'cal_schematic'):
+            return
+        key, ref, n, txt, ok, cell = self._cal_ref()
+        self.cal_schematic.set_setup(cell, ref['sample'])
+        self.lbl_cal_tips.setText(ref['tips'])
+        self.lbl_cal_ref_info.setText(f'{txt} &nbsp; <b>Célula:</b> {CELLS.get(cell, cell)}')
+        if refresh:
+            self._show_dual_results()
 
     def apply_cal_preset(self):
         '''Carrega na varredura em frequência do Modo Duplo os parâmetros recomendados para a calibração.'''
@@ -2853,6 +4570,24 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_sweeps_panel.setChecked(True)      # mostra os campos preenchidos
         self.flash(f'Parâmetros de calibração carregados (PWM {CAL_SWEEP_PWM:g} %): '
                    f'confira o %ADC do OPT101 antes de rodar a varredura.', 6.0)
+
+    def _sync_sweep_tau(self, v):
+        '''τ do INMP441 mudou: as varreduras em frequência passam a usar o mesmo τ (fora de uma varredura:
+        durante ela os cortes são trocados pela própria varredura).'''
+        if getattr(self, "dual_active", False) or not hasattr(self, "dual_tau_w"):
+            return
+        for k in ('F', 'M'):
+            self._set_spin(self.dual_tau_w[k], v)
+            self.dual_user_tau[k] = float(v)
+        self.update_dual_eta()
+
+    def _on_sweep_tau_edit(self, kind, v):
+        if self.dual_active:
+            return
+        if abs(self.sp_audio_tau.value() - v) > 1e-9:
+            self.sp_audio_tau.setValue(v)       # aplica no INMP441 e, por _sync_sweep_tau, na outra varredura
+        else:
+            self._sync_sweep_tau(v)
 
     def _on_dual_tau(self, kind, val):
         if self.dual_mode_w[kind].currentIndex() == 1:
@@ -2877,15 +4612,22 @@ class LockInWindow(QtWidgets.QMainWindow):
             b.setLabel('bottom', 'PWM do laser (%)')
             a.setLogMode(x=False, y=False)
             b.setLogMode(x=False, y=False)
+            self._apply_dual_layout()
         else:
-            a.setTitle('Sinal fotoacústico normalizado (INMP441 R / OPT101 R)')
-            a.setLabel('left', 'S = R_INMP441 / R_OPT101')
+            self._set_dual_f_titles()
             a.setLabel('bottom', 'Frequência (Hz)')
-            b.setTitle('Diferença de fase INMP441 − OPT101')
-            b.setLabel('left', 'Δφ (graus)')
             b.setLabel('bottom', 'Frequência (Hz)')
             a.setLogMode(x=True, y=True)
             b.setLogMode(x=True, y=False)
+        xl = 'PWM do laser (%)' if kind == 'P' else 'Frequência (Hz)'
+        for pw in (self.pw_dual_c, self.pw_dual_d):
+            pw.setLabel('bottom', xl)
+        self.pw_dual_c.setLogMode(x=kind == 'F', y=kind == 'F')
+        self.pw_dual_d.setLogMode(x=kind == 'F', y=False)
+        for cc in self.c_dual_sens.values():
+            for c in cc:
+                c.setData([], [])
+        self.chk_dual_norm.setEnabled(kind == 'F')
         # Barras de erro só nos eixos lineares (o pyqtgraph não as transforma em escala log)
         self.e_dual_a.setVisible(kind == 'P')
         self.e_dual_b.setVisible(kind == 'P')
@@ -2898,12 +4640,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             a.setRange(xRange=(0, 1), yRange=(0, 1), padding=0)
             b.setRange(xRange=(0, 100), yRange=(0, 1), padding=0)
         else:
-            lf = np.log10(sorted((max(self.sp_dual_f0.value(), 0.1), max(self.sp_dual_f1.value(), 0.1))))
+            fw = self.dual_fw['M' if self.dual_src == 'M' else 'F']
+            lf = np.log10(sorted((max(fw[0].value(), 0.1), max(fw[1].value(), 0.1))))
             a.setRange(xRange=tuple(lf), yRange=(-3, 0), padding=0)
             b.setRange(xRange=tuple(lf), yRange=(-180, 180), padding=0)
         self.chk_dual_std.setEnabled(kind == 'F')
         self.chk_dual_std_phase.setEnabled(kind == 'F')
-        for w in (self.chk_dual_opt_tau, self.sp_dual_tau_sensor, self.btn_dual_tau_measure):
+        for w in (self.sp_dual_tau_sensor, self.btn_dual_tau_measure):
             w.setEnabled(kind == 'F')
         self.btn_dual_cal.setEnabled(False)
         self.dual_std = None
@@ -2912,21 +4655,200 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_fit.setText('')
         self.lbl_dual_tau.setText('')
 
+    def _place_dual_plots(self):
+        '''Coloca os dois gráficos na grade conforme o arranjo (a varredura casada em PWM fica sempre lado a lado:
+        os eixos x dos dois gráficos são diferentes).'''
+        g, a, b = self.dual_plot_grid, self.pw_dual_a, self.pw_dual_b
+        mode = self.dual_layout if self.dual_kind == 'F' else 'side'
+        for pw in (a, b):
+            g.removeWidget(pw)
+        for i in range(3):
+            g.setRowStretch(i, 0)
+            g.setColumnStretch(i, 0)
+        g.setVerticalSpacing(0 if mode == 'stacked' else -1)
+        if mode == 'stacked':
+            g.addWidget(a, 0, 0)
+            g.addWidget(b, 1, 0)
+            g.setRowStretch(0, 1)
+            g.setRowStretch(1, 1)
+            g.setColumnStretch(0, 1)
+        elif mode == 'overlay':
+            g.addWidget(a, 0, 0)
+            g.addWidget(b, 0, 0)                    # mesma célula: b fica por cima, transparente
+            g.setRowStretch(0, 1)
+            g.setColumnStretch(0, 1)
+        else:
+            g.addWidget(a, 0, 0)
+            g.addWidget(b, 0, 1)
+            g.setRowStretch(0, 1)
+            g.setColumnStretch(0, 1)
+            g.setColumnStretch(1, 1)
+        b.setXLink(a if mode in ('stacked', 'overlay') else None)
+        if hasattr(self, 'dual_float'):
+            self.dual_float.raise_()
+
+    def set_dual_layout(self, key):
+        '''Arranjo dos gráficos da varredura em frequência (menu do botão direito).'''
+        self.dual_layout = key if key in ('side', 'stacked', 'overlay') else 'side'
+        for k, acts in self.dual_layout_actions.items():
+            for act in acts:
+                act.setChecked(k == self.dual_layout)
+        if self.dual_kind == 'F':
+            self._set_dual_f_titles()
+        else:
+            self._apply_dual_layout()
+
+    def _apply_dual_layout(self):
+        '''Aplica o arranjo e, nos gráficos sobrepostos, deixa os dois com a mesma área de dados: o de fase fica
+        transparente por cima (sem receber o mouse), com o eixo à direita; o de magnitude reserva o espaço.'''
+        self._place_dual_plots()
+        a, b = self.pw_dual_a, self.pw_dual_b
+        pa, pb = a.getPlotItem(), b.getPlotItem()
+        over = self.dual_kind == 'F' and self.dual_layout == 'overlay'
+        stk = self.dual_kind == 'F' and self.dual_layout == 'stacked'
+        clear = QtGui.QColor(0, 0, 0, 0)
+        if over:
+            b_title = pb.titleLabel.text
+            b_left = pb.getAxis('left').labelText
+            if b_left:
+                self._dual_b_texts = (b_title, b_left)
+            b_title, b_left = getattr(self, '_dual_b_texts', (b_title, b_left))
+            a_title = pa.titleLabel.text.split('  +  ')[0]
+            both = f'{a_title}  +  fase (eixo da direita)'
+            a.setTitle(both)
+            b.setTitle(both, color='#00000000')
+            wl = max(pa.getAxis('left').width(), 60)
+            hb = max(pa.getAxis('bottom').height(), 36)
+            pa.showAxis('right')
+            ar = pa.getAxis('right')
+            ar.setStyle(showValues=False)
+            ar.setLabel('')
+            ar.setPen(pg.mkPen(None))
+            for ax in (ar, pb.getAxis('right')):
+                ax.setWidth(80)
+            pb.showAxis('right')
+            br = pb.getAxis('right')
+            br.setStyle(showValues=True)
+            br.setLabel(b_left)
+            bl = pb.getAxis('left')
+            bl.setStyle(showValues=False)
+            bl.setLabel('')
+            bl.setPen(pg.mkPen(None))
+            for ax in (pa.getAxis('left'), bl):
+                ax.setWidth(wl)
+            bb = pb.getAxis('bottom')
+            bb.setStyle(showValues=False)
+            bb.setPen(pg.mkPen(None))
+            bb.setTextPen(pg.mkPen(clear))
+            bb.label.setVisible(False)
+            for ax in (pa.getAxis('bottom'), bb):
+                ax.setHeight(hb)
+            b.showGrid(x=False, y=False)
+            b.setBackground(None)
+            b.setStyleSheet('background: transparent;')
+            b.viewport().setAutoFillBackground(False)
+            b.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        else:
+            if getattr(self, '_dual_b_texts', None) and not pb.getAxis('left').labelText:
+                b.setTitle(self._dual_b_texts[0])
+                pb.getAxis('left').setLabel(self._dual_b_texts[1])
+            fg = pg.getConfigOption('foreground')
+            a.setTitle(pa.titleLabel.text.split('  +  ')[0], color=fg)
+            b.setTitle(pb.titleLabel.text, color=fg)      # tira a cor transparente do modo sobreposto
+            pa.showAxis('right', False)
+            pb.showAxis('right', False)
+            for pi in (pa, pb):
+                for name in ('left', 'bottom', 'right'):
+                    ax = pi.getAxis(name)
+                    ax.setStyle(showValues=True)
+                    ax.setPen()
+                    ax.setTextPen()
+                    ax.label.setVisible(True)
+                    if name == 'bottom':
+                        ax.setHeight(None)
+                    else:
+                        ax.setWidth(None)
+            b.showGrid(x=True, y=True, alpha=0.3)
+            b.setBackground(pg.getConfigOption('background'))
+            b.setStyleSheet('')
+            b.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            pa.showAxis('top', False)
+            pa.showAxis('bottom', True)
+            if stk:
+                # Empilhado: escala de frequência em cima no gráfico de cima e embaixo no de baixo, sem repetir o
+                # nome do eixo e sem o título do de baixo (o nome do eixo y já diz o que é), para colar os dois
+                pa.showAxis('bottom', False)
+                pa.showAxis('top', True)
+                at = pa.getAxis('top')
+                at.setStyle(showValues=True)
+                at.setLabel('')
+                at.setLogMode(pa.getAxis('bottom').logMode)
+                b.setTitle(None)
+                wl = max(pa.getAxis('left').width(), pb.getAxis('left').width(), 60)
+                for pi in (pa, pb):
+                    pi.getAxis('left').setWidth(wl)
+        # Eixo de cada grandeza na cor da sua curva (S azul, fase vermelha) na varredura em frequência
+        fg = pg.getConfigOption('foreground')
+        col_a, col_b = ('royalblue', 'firebrick') if self.dual_kind == 'F' else (fg, fg)
+        axes = ((pa.getAxis('left'), col_a), (pb.getAxis('right' if over else 'left'), col_b))
+        for ax, col in axes:
+            ax.setPen(pg.mkPen(col))
+            ax.setTextPen(pg.mkPen(col))
+            ax.setLabel(ax.labelText, color=pg.mkColor(col).name())
+
+    def _set_dual_f_titles(self):
+        '''Títulos da varredura em frequência conforme a normalização pelo OPT101.'''
+        a, b = self.pw_dual_a, self.pw_dual_b
+        if self.chk_dual_norm.isChecked():
+            a.setTitle('Sinal fotoacústico normalizado (INMP441 R / OPT101 R)')
+            a.setLabel('left', 'S = R_INMP441 / R_OPT101')
+            b.setTitle('Diferença de fase INMP441 − OPT101')
+            b.setLabel('left', 'Δφ (graus)')
+        else:
+            a.setTitle('Sinal fotoacústico sem normalização (INMP441 R)')
+            a.setLabel('left', 'R_INMP441 (escala completa 24 bits)')
+            b.setTitle('Fase do INMP441 (sem descontar o OPT101)')
+            b.setLabel('left', 'φ_INMP441 (graus)')
+        self._apply_dual_layout()
+
+    def _on_dual_sensors(self, checked):
+        self.dual_sensor_plots.setVisible(checked)
+        self._show_dual_results()
+
+    def _update_dual_sensor_plots(self, x, ro, ra, pa, po):
+        '''Amplitude (÷ mediana) e fase desenrolada de cada sensor, com a mediana absoluta na legenda.'''
+        if not self.chk_dual_sensors.isChecked():
+            return
+        order = np.argsort(x)
+        xs = x[order]
+        for name, r, ph in (('INMP441', ra, pa), ('OPT101', ro, po)):
+            r, ph = r[order], ph[order]
+            ok = r > 0
+            med = float(np.median(r[ok])) if ok.any() else 1.0
+            ca, cp = self.c_dual_sens[name]
+            ca.setData(xs[ok], r[ok] / med)
+            cp.setData(xs, np.degrees(np.unwrap(np.radians(ph))))
+            leg = self.pw_dual_c.getPlotItem().legend
+            for sample, label in leg.items:
+                if label.text.startswith(name):
+                    label.setText(f'{name} (mediana R = {med:.4g})')
+
     def _dual_planned(self, kind):
         if kind == 'P':
             return self._planned_range(self.sp_dual_p0.value(), self.sp_dual_p1.value(), self.sp_dual_dp.value())
-        f0, f1 = sorted((self.sp_dual_f0.value(), self.sp_dual_f1.value()))
-        if self.cmb_dual_fspace.currentIndex() == 0:
-            n = max(2, int(round(self.sp_dual_fn.value())))
+        sp0, sp1, space, spn, _ = self.dual_fw[kind]
+        f0, f1 = sorted((sp0.value(), sp1.value()))
+        if space.currentIndex() == 0:
+            n = max(2, int(round(spn.value())))
             return [round(float(v), 3) for v in np.geomspace(f0, f1, n)]
-        return self._planned_range(f0, f1, self.sp_dual_fn.value())
+        return self._planned_range(f0, f1, spn.value())
 
     def _dual_times(self, kind, value):
         '''(espera, medida) do ponto. O LP de 2 polos chega a ~1e-3 do degrau em 9τ.'''
         if self.dual_mode_w[kind].currentIndex() == 1:
             tau = self.dual_tau_w[kind].value()
             return 9.0 * tau + 0.3, max(0.5, tau)
-        if kind == 'F':
+        if kind in ('F', 'M'):
             # A troca de frequência aplica os cortes automáticos nos dois lock-ins (apply_frequency)
             lp = get_effective_cutoffs(value)[0]
             tau = max(lp_tau(lp, FS), lp_tau(lp, AUDIO_FS_REAL))
@@ -2948,13 +4870,90 @@ class LockInWindow(QtWidgets.QMainWindow):
             lbl.setToolTip(f'{len(values)} pontos')
 
     def _dual_set_long_tau(self, kind=None):
-        fc = 1.0 / (2.0 * np.pi * self.dual_tau_w[kind or self.dual_kind].value())
-        self.sp_lp.setValue(fc)
-        self.sp_audio_lp.setValue(fc)
+        tau = self.dual_tau_w[kind or self.dual_src].value()
+        self.sp_tau.setValue(tau)
+        self.sp_audio_tau.setValue(tau)
 
-    def toggle_dual_sweep(self, kind):
+    def refine_dual_resonance(self):
+        '''Ajusta a ressonância na varredura em frequência atual e mede mais pontos em volta do f0 ajustado.'''
         if self.dual_active:
-            if kind == self.dual_kind:
+            self.flash('Espere a varredura atual terminar (ou cancele) antes de refinar.')
+            return
+        if not getattr(self, 'dual_results', None) or self.dual_kind != 'F':
+            self.flash('Rode (ou abra) uma varredura em frequência antes de refinar a ressonância.')
+            return
+        x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
+        keep = np.ones(x.size, dtype=bool)
+        keep[[i for i in self.dual_excluded if i < x.size]] = False
+        ok = keep & (ro > 0) & (ra > 0) & (x >= 250.0)
+        k = np.flatnonzero(ok)[np.argsort(x[ok])]
+        f, s = x[k], ra[k] / ro[k]
+        s_rel = np.sqrt((ra_e[k] / ra[k]) ** 2 + (ro_e[k] / ro[k]) ** 2)
+        dphi = np.degrees(np.unwrap(np.radians(pa[k] - po[k])))
+        dphi_e = np.hypot(pa_e[k], po_e[k])
+        found = find_resonance(f, s) if f.size >= 6 else None
+        if found is None:
+            self.flash('Não achei um pico de ressonância acima de 250 Hz nesta varredura.')
+            self.lbl_dual_refine.setText('sem pico claro acima de 250 Hz')
+            return
+        f0, width, how = found[1], found[2], 'pelo pico'
+        fit = fit_resonance(f, s, s_rel, dphi, dphi_e, target='mag', window=found[3])
+        if fit is not None and found[3][0] <= fit['f0'] <= found[3][1] and np.isfinite(fit['fwhm']) and fit['fwhm'] > 0:
+            f0, width, how = fit['f0'], fit['fwhm'], f"ajuste: Q = {fit['q']:.3g}"
+        half = float(np.clip(0.5 * width, 0.02 * f0, 0.25 * f0))   # banda de meia potência (f0 ± f0/2Q)
+        lo, hi = max(0.1, f0 - half), min(5000.0, f0 + half)
+        n = int(round(self.sp_dual_refine_n.value()))
+        new = [round(float(v), 2) for v in np.linspace(lo, hi, n)]
+        have = np.sort(x)
+        new = [v for v in new if have.size == 0 or np.min(np.abs(have - v)) > 0.005 * v]
+        if not new:
+            self.flash('Os pontos em volta da ressonância já foram medidos.')
+            return
+        kind = self.dual_src if self.dual_src in ('F', 'M') else 'F'
+        info = (f'Refino da ressonância: +{len(new)} pontos de {new[0]:g} a {new[-1]:g} Hz em torno de '
+                f'f0 = {f0:.4g} Hz (largura {width:.3g} Hz, {how}); medidos com {DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()]}'
+                + (f', τ = {self.dual_tau_w[kind].value():g} s' if self.dual_mode_w[kind].currentIndex() == 1 else ''))
+        self.lbl_dual_refine.setText(f'f0 ≈ {f0:.4g} Hz ({new[0]:.4g}–{new[-1]:.4g} Hz)')
+        self.lbl_dual_refine.setToolTip(info)
+        self.toggle_dual_sweep(kind, refine=(new, info))
+
+    def _check_cal_conditions(self):
+        '''Antes da varredura da calibração: avisa se o PWM não está em 100 %, se algum filtro de 60 Hz está ligado
+        ou se "Usar" (calibração aplicada) está marcado. Devolve False se o usuário cancelar.'''
+        issues = []
+        if self.sp_power.value() < CAL_SWEEP_PWM - 1e-6:
+            issues.append(f'PWM do laser em {self.sp_power.value():g} % (recomendado {CAL_SWEEP_PWM:g} %, mais sinal).')
+        on = [n for n, c in (('OPT101', self.chk_mains), ('INMP441', self.chk_audio_mains)) if c.isChecked()]
+        if on:
+            issues.append('Filtro de 60 Hz ligado (' + ' e '.join(on) + '): desloca a fase'
+                          + (' de um lock-in e contamina Δφ.' if len(on) == 1 else ' e a amplitude perto de 60 Hz.'))
+        if self.chk_mic_cal.isChecked():
+            issues.append('"Usar" da calibração marcado: a calibração nova precisa dos dados brutos.')
+        if not issues:
+            return True
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle('Varredura da calibração')
+        box.setText('Antes de calibrar, confira:')
+        box.setInformativeText('\n'.join('• ' + t for t in issues))
+        fix = box.addButton('Corrigir e rodar', QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton('Rodar assim', QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton('Cancelar', QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(fix)
+        box.exec()
+        if box.clickedButton() is fix:
+            if self.sp_power.value() < CAL_SWEEP_PWM - 1e-6:
+                self.sp_power.setValue(CAL_SWEEP_PWM)
+            self.chk_mains.setChecked(False)
+            self.chk_audio_mains.setChecked(False)
+            self.chk_mic_cal.setChecked(False)
+            self.flash(f'PWM {CAL_SWEEP_PWM:g} %, filtros de 60 Hz desligados e calibração desmarcada: confira o %ADC do OPT101.', 6.0)
+            return True
+        return box.clickedButton() is keep
+
+    def toggle_dual_sweep(self, kind, refine=None):
+        if self.dual_active:
+            if kind == self.dual_src:
                 self._end_dual_sweep()
                 self.flash('Varredura do Modo Duplo cancelada pelo usuário.')
             return
@@ -2964,38 +4963,51 @@ class LockInWindow(QtWidgets.QMainWindow):
         if self.sweep_active:
             self.flash('Já existe uma varredura em andamento.')
             return
-        values = self._dual_planned(kind)
+        values = list(refine[0]) if refine else self._dual_planned(kind)
         if not values:
+            return
+        if kind == 'F' and self.btn_dual_sweeps_panel.isChecked() and not self._check_cal_conditions():
             return
         if not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
             self.chk_audio_lockin.setChecked(True)     # o lock-in do INMP441 precisa estar rodando
-        self.dual_restore = self._excitation_snapshot() if kind == 'F' else None
+        self.dual_restore = self._excitation_snapshot() if kind != 'P' else None
         long_tau = self.dual_mode_w[kind].currentIndex() == 1
         if long_tau:
-            self.dual_saved_cutoffs = (self.cutoff_lp, self.audio_cutoff_lp)
+            self.dual_saved_cutoffs = (self.sp_tau.value(), self.sp_audio_tau.value())   # τ (s)
             self._dual_set_long_tau(kind)
-        self.dual_kind = kind
+        self.dual_src = kind
+        self.dual_kind = 'F' if kind == 'M' else kind     # 'M' é uma varredura em frequência como a 'F'
         self.dual_values = values
         self.dual_idx = 0
-        self.dual_results = []
-        self.dual_excluded = set()
-        self.dual_ref_cfg = []
-        self.dual_fit = None
-        self.dual_params = {'kind': kind, 'values': values, 'freq': self.ref_freq, 'pwm': self.laser_power,
-                            'mode': self.dual_mode_w[kind].currentText(),
-                            'tau': self.dual_tau_w[kind].value() if long_tau else None}
+        self.dual_refine = bool(refine)
+        if refine:          # pontos novos entram na varredura atual, que é mantida (com as exclusões)
+            q = dict(self.dual_params)
+            q['values'] = sorted(set(q.get('values', [r[0] for r in self.dual_results])) | set(values))
+            q['refine'] = ((q['refine'] + ' | ') if q.get('refine') else '') + refine[1]
+            self.dual_params = q
+        else:
+            self.dual_results = []
+            self.dual_excluded = set()
+            self.dual_ref_cfg = []
+            self.dual_fit = None
+            self.dual_params = {'kind': self.dual_kind, 'values': values, 'freq': self.ref_freq, 'pwm': self.laser_power,
+                                'mode': DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()],
+                                'tau': self.dual_tau_w[kind].value() if long_tau else None}
         self.dual_active = True
         btn = self.dual_btns[kind]
         btn.setText('⏹ Cancelar')
         btn.setStyleSheet('background:#f8d7da;')
-        self.dual_btns['F' if kind == 'P' else 'P'].setEnabled(False)
-        for w in ((self.sp_freq, self.sp_power, self.sp_lp, self.sp_audio_lp)
+        for k, b in self.dual_btns.items():
+            if k != kind:
+                b.setEnabled(False)
+        for w in ((self.sp_freq, self.sp_power, self.sp_tau, self.sp_audio_tau)
                   + tuple(self.dual_mode_w.values()) + tuple(self.dual_tau_w.values())):
             w.setEnabled(False)
         for b in list(self.btn_sweeps.values()) + list(self.btn_sweeps_aud.values()):
             b.setEnabled(False)
         self.dual_etas[kind].setStyleSheet('font-weight:bold;font-family:Consolas,monospace;color:#d00000;')
-        self._setup_dual_plots(kind)
+        if not refine:
+            self._setup_dual_plots(self.dual_kind)
         self.dual_remaining = sum(sum(self._dual_times(kind, v)) for v in values)
         self.dual_bars[kind].setValue(0)
         self.dual_bars[kind].setVisible(True)
@@ -3011,7 +5023,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.apply_frequency(value)        # reinicia a modulação (novo marcador de fase)
             if self.dual_saved_cutoffs is not None:
                 self._dual_set_long_tau()      # apply_frequency volta aos cortes automáticos
-        self.dual_settle, self.dual_measure = self._dual_times(self.dual_kind, value)
+        self.dual_settle, self.dual_measure = self._dual_times(self.dual_src, value)
         self.dual_state = 'SETTLING'
         self.dual_timer = now
         self.dual_opt = []
@@ -3023,8 +5035,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_state = 'IDLE'
         self.btn_dual_resave.setEnabled(bool(self.dual_results))
         if self.dual_saved_cutoffs is not None:
-            self.sp_lp.setValue(self.dual_saved_cutoffs[0])
-            self.sp_audio_lp.setValue(self.dual_saved_cutoffs[1])
+            self.sp_tau.setValue(self.dual_saved_cutoffs[0])
+            self.sp_audio_tau.setValue(self.dual_saved_cutoffs[1])
             self.dual_saved_cutoffs = None
         if getattr(self, 'dual_restore', None) is not None:     # varredura em frequência: volta ao início
             self._restore_excitation(self.dual_restore)
@@ -3033,7 +5045,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             btn.setText('▶ Varredura')
             btn.setStyleSheet('background:#cfe2ff;')
             btn.setEnabled(True)
-        for w in (self.sp_freq, self.sp_power, self.sp_lp, self.sp_audio_lp) + tuple(self.dual_mode_w.values()):
+        for w in (self.sp_freq, self.sp_power, self.sp_tau, self.sp_audio_tau) + tuple(self.dual_mode_w.values()):
             w.setEnabled(True)
         for kind, sp in self.dual_tau_w.items():
             sp.setEnabled(self.dual_mode_w[kind].currentIndex() == 1)
@@ -3050,11 +5062,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         elapsed = now - self.dual_timer
         n = len(self.dual_values)
         v = self.dual_values[self.dual_idx]
-        rest = sum(sum(self._dual_times(self.dual_kind, x)) for x in self.dual_values[self.dual_idx:]) - elapsed
+        rest = sum(sum(self._dual_times(self.dual_src, x)) for x in self.dual_values[self.dual_idx:]) - elapsed
         self.dual_rest = rest
-        self.dual_bars[self.dual_kind].setValue(
+        self.dual_bars[self.dual_src].setValue(
             int(1000 * min(1.0, max(0.0, 1.0 - rest / max(self.dual_remaining, 1e-6)))))
-        self.dual_etas[self.dual_kind].setText(f'Restante: {self._fmt_time(rest)}')
+        self.dual_etas[self.dual_src].setText(f'Restante: {self._fmt_time(rest)}')
         head = f'[{self.dual_idx + 1}/{n}] ' + (f'PWM {v:.1f} %' if self.dual_kind == 'P' else f'{v:g} Hz')
         if self.dual_state == 'SETTLING':
             self.lbl_dual_status.setText(f'{head} | estabilizando os lock-ins ({elapsed:.1f}/{self.dual_settle:.1f} s)')
@@ -3078,10 +5090,23 @@ class LockInWindow(QtWidgets.QMainWindow):
                 r_o = r_o * np.maximum(np.concatenate([c[2] for c in self.dual_opt]), 1.0) / 100.0
             r_a = np.concatenate([c[0] for c in aud])
             p_a = np.concatenate([c[1] for c in aud])
-            self.dual_results.append((v, float(r_o.mean()), float(r_o.std()),
-                                      float(r_a.mean()), float(r_a.std()),
-                                      *circ_stats_deg(p_a), *circ_stats_deg(p_o)))
-            self.dual_ref_cfg.append((self.cutoff_hp, self.chk_mains.isChecked()))
+            row = (v, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
+                   *circ_stats_deg(p_a), *circ_stats_deg(p_o))
+            cfg = (self.cutoff_hp, self.chk_mains.isChecked())
+            if getattr(self, 'dual_refine', False):
+                # refino: insere em ordem de frequência e desloca os índices dos pontos excluídos
+                xs = [r[0] for r in self.dual_results]
+                j = bisect.bisect(xs, v)
+                self.dual_results = list(self.dual_results)
+                self.dual_results.insert(j, row)
+                if len(self.dual_ref_cfg) == len(xs):
+                    self.dual_ref_cfg.insert(j, cfg)
+                else:
+                    self.dual_ref_cfg = []
+                self.dual_excluded = {i + 1 if i >= j else i for i in self.dual_excluded}
+            else:
+                self.dual_results.append(row)
+                self.dual_ref_cfg.append(cfg)
             self._show_dual_results()
         else:
             self.flash(f'Modo Duplo: sem dados em {head} (OPT101 e INMP441 conectados?)')
@@ -3105,10 +5130,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.pw_dual_a.enableAutoRange()      # a faixa neutra desligou o ajuste automático
             self.pw_dual_b.enableAutoRange()
         x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
+        self._update_dual_sensor_plots(x, ro, ra, pa, po)
         self.dual_fit = None
         self.dual_std = None
         self.dual_cal = None        # só a varredura em frequência aplica a calibração (o CSV registra isso)
         self.btn_dual_cal.setEnabled(False)
+        self.dual_corr = None
+        self.btn_cal_verify.setEnabled(False)
         keep = np.ones(x.size, dtype=bool)                # pontos não excluídos com clique
         keep[[i for i in self.dual_excluded if i < x.size]] = False
         self.btn_dual_incl.setEnabled(bool(self.dual_excluded))
@@ -3116,6 +5144,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         excl_txt = self._dual_excluded_text()
         if self.dual_kind == 'P':
             self._fit_dual_model(np.empty(0), np.empty(0), np.empty(0), np.empty(0), np.empty(0))
+            self._dual_diagnose(None, None, None)
             if self.btn_dual_model_panel.isChecked() and self.cmb_dual_model.currentData() is not None:
                 self.lbl_dual_model.setText('O ajuste com modelos vale só para a varredura em frequência.')
             self._set_dual_points(ro, ra, np.arange(x.size), keep)
@@ -3142,19 +5171,21 @@ class LockInWindow(QtWidgets.QMainWindow):
         if len(self.dual_ref_cfg) == x.size and x.size >= 4:
             hp, mains = (np.array(c) for c in zip(*self.dual_ref_cfg))
             self.dual_opt_tau = fit_opt_tau(fa, po, po_e, opt_digital_phase(fa, hp, mains), ro)
-            if self.dual_opt_tau is not None:
-                lines.append(self.dual_opt_tau['text'])
+        summ, details = opt_channel_summary(fa, ro, self.dual_opt_tau)
+        if summ:
+            lines.append(summ)
         # Correção pelo polo do sensor (OPT101), na fase e na amplitude da referência óptica
         self.dual_tau_sensor = self._tau_sensor()
         if self.dual_tau_sensor > 0:
             xs = 2.0 * np.pi * fa * self.dual_tau_sensor
             po = po + np.degrees(np.arctan(xs))
             ro, ro_e = ro * np.sqrt(1.0 + xs * xs), ro_e * np.sqrt(1.0 + xs * xs)
-            lines.append(f'OPT101 corrigido pelo τ do sensor = {self.dual_tau_sensor * 1e6:.3g} µs '
-                         f'(fase e amplitude) antes de S e Δφ.')
+            lines.append(f'<span style="color:#606060;">OPT101 corrigido pelo τ do sensor = '
+                         f'{self.dual_tau_sensor * 1e6:.3g} µs (Calibração do microfone → Avançado).</span>')
         if getattr(self, 'dual_sensor_fit_txt', None):
             lines.append(self.dual_sensor_fit_txt)
         self.lbl_dual_tau.setText('<br>'.join(lines))
+        self.lbl_dual_tau.setToolTip(details)
         ok = (ro > 0) & (ra > 0)
         s = np.where(ok, ra / np.where(ok, ro, 1.0), np.nan)
         s_rel = np.sqrt((ra_e / np.maximum(ra, 1e-30)) ** 2 + (ro_e / np.maximum(ro, 1e-30)) ** 2)
@@ -3163,8 +5194,20 @@ class LockInWindow(QtWidgets.QMainWindow):
         dphi = np.empty_like(x)
         dphi[order] = np.degrees(np.unwrap(np.radians(wrap_deg(pa - po)[order])))
         dphi_e = np.hypot(pa_e, po_e)
+        norm = self.chk_dual_norm.isChecked()
+        self._set_dual_f_titles()
+        if not norm:
+            # Só o INMP441: R e fase brutos (a luz não é descontada); sem calibração nem fit do padrão
+            ok = ra > 0
+            s = np.where(ok, ra, np.nan)
+            s_rel = ra_e / np.maximum(ra, 1e-30)
+            dphi[order] = np.degrees(np.unwrap(np.radians(wrap_deg(pa)[order])))
+            dphi_e = np.asarray(pa_e, dtype=float)
         cal_txt = ''
-        if self.chk_mic_cal.isChecked():
+        if self.chk_mic_cal.isChecked() and not norm:
+            cal_txt = ('<span style="color:#606060;">Calibração não aplicada: ela vale para o sinal normalizado '
+                       '(marque "Normalizar pelo OPT101").</span>')
+        elif self.chk_mic_cal.isChecked():
             self.dual_cal = load_mic_calibration(self.cmb_mic_cal.currentData())
             if self.dual_cal is None:
                 cal_txt = '<b>Calibração INMP441:</b> nenhuma calibração válida selecionada na linha superior.'
@@ -3172,6 +5215,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 c = self.dual_cal
                 lf, lc = np.log(np.maximum(x, 1e-9)), np.log(c['f'])
                 inside = (x >= c['f'][0] * 0.999) & (x <= c['f'][-1] * 1.001)
+                s_raw = s.copy()
                 s = s / np.exp(np.interp(lf, lc, np.log(c['sens'])))
                 dphi = dphi - np.interp(lf, lc, c['phase'])
                 ok &= inside
@@ -3188,44 +5232,86 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 + ' a correção pelo τ do sensor, e esta varredura está '
                                 + ('com' if self.dual_tau_sensor > 0 else 'sem')
                                 + ' ela: S e a fase do sistema ficam inconsistentes.</span>')
+                cell = self.cmb_cell.currentData()
+                if c['cell'] != cell:
+                    cal_txt += (f'<br><span style="color:#d00000;">⚠ A calibração foi feita na configuração '
+                                f'{CELLS.get(c["cell"], c["cell"])} e a célula escolhida é {CELLS.get(cell, cell)}: '
+                                'a acústica muda e a correção não vale. Gere uma calibração nesta configuração.</span>')
+                # Ressonância da célula: muda com o volume livre (altura da amostra). Longe da f0 da calibração,
+                # a correção perto do pico não vale
+                if c.get('f0'):
+                    fr = cell_resonance_f0(x[ok & inside], s_raw[ok & inside])
+                    if fr is not None and abs(fr / c['f0'] - 1.0) > 0.03:
+                        cal_txt += (f'<br><span style="color:#d00000;">⚠ A ressonância desta medida ({fmt_freq(fr)}) '
+                                    f'difere da calibração ({fmt_freq(c["f0"])}): perto dela a correção não vale. A '
+                                    'amostra tem altura diferente da referência? Use amostras da mesma altura ou '
+                                    'ignore a região da ressonância.</span>')
+                if c['verified'] is False:
+                    cal_txt += ('<br><span style="color:#d00000;">⚠ Calibração ainda não verificada experimentalmente: '
+                                'confira com uma segunda referência ("Verificar com esta medida", no painel Calibração).</span>')
         self.lbl_dual_cal.setText(cal_txt)
+        snr_ok = ra / np.maximum(ra_e, 1e-30) >= 10.0 ** (self.audio_snr_alert / 20.0)
+        vm = ok & keep & snr_ok
+        self.dual_corr = (x[vm], s[vm], dphi[vm]) if self.dual_cal is not None else None
+        self.btn_cal_verify.setEnabled(self.dual_corr is not None and not self.dual_active)
         self._set_dual_points(x[ok], s[ok], np.flatnonzero(ok), keep[ok])
         self.c_dual_b.setData(x[ok] if self.dual_cal else x, dphi[ok] if self.dual_cal else dphi)
         self.c_dual_a_fit.setData([], [])
         self.c_dual_b_fit.setData([], [])
         self.c_dual_a_bad.setData([], [])
+        self.c_dual_a_theory.setData([], [])
         m = ok & keep                                     # pontos que entram no ajuste
         self._fit_dual_model(x[m], s[m], s_rel[m], dphi[m], dphi_e[m])
-        # O fit do padrão só roda com o painel "Calibração de papel alumínio" aberto (modelo só do alumínio)
-        std_on = self.chk_dual_std.isChecked() and self.btn_dual_cal_panel.isChecked()
-        if not std_on or m.sum() < 4:
-            self.lbl_dual_fit.setText(('' if not std_on
-                                       else 'Fit padrão: são necessários pelo menos 4 pontos.') + excl_txt)
+        self._dual_diagnose(x[m], s[m], dphi[m])
+        # Calibração (painel aberto): M(f) = S(f)·fⁿ da referência, sem ajuste de modelo; a faixa plana de M é onde
+        # o sistema não distorce (lá S segue f⁻ⁿ). Pronta para "Gerar curva de calibração".
+        cal_on = self.btn_dual_cal_panel.isChecked()
+        if not cal_on:
+            self.lbl_dual_fit.setText(excl_txt)
             return
+        if not norm:
+            self.lbl_dual_fit.setText('Calibração: marque "Normalizar pelo OPT101" (a referência é comparada com o '
+                                      'sinal normalizado).' + excl_txt)
+            return
+        key, ref, n_exp, _, ref_ok, cell = self._cal_ref()
+        snr = ra / np.maximum(ra_e, 1e-30)
         snr_min = 10.0 ** (self.audio_snr_alert / 20.0)
-        res = fit_pa_standard(x[m], s[m], s_rel[m], dphi[m], dphi_e[m],
-                              ra[m] / np.maximum(ra_e[m], 1e-30), snr_min, self.chk_dual_std_phase.isChecked())
-        if res is None:
-            self.lbl_dual_fit.setText('Fit padrão: o ajuste não convergiu.' + excl_txt)
+        cal_valid = (snr >= snr_min)[ok] & keep[ok]
+        if cal_valid.sum() < 4:
+            self.lbl_dual_fit.setText('Calibração: são necessários pelo menos 4 pontos com SNR suficiente.' + excl_txt)
             return
-        ff = np.geomspace(float(x[m].min()), float(x[m].max()), 300)
-        self.c_dual_a_fit.setData(ff, res['amp'](ff))
-        if res['phase'] is not None:
-            model = res['phase'](ff)
-            # alinha o modelo (definido a menos de 360°) com a fase desenrolada dos dados
-            shift = 360.0 * np.round(np.mean(dphi[m] - res['phase'](x[m])) / 360.0)
-            self.c_dual_b_fit.setData(ff, model + shift)
-        # 'good' nos pontos exibidos (ok): os excluídos com clique contam como fora da faixa confiável
-        good = np.zeros(ok.sum(), dtype=bool)
-        good[keep[ok]] = res['good']
-        bad = ~good & keep[ok]                            # rejeitados pelo próprio ajuste (x vermelho)
-        self.c_dual_a_bad.setData(x[ok][bad], s[ok][bad])
-        self.dual_std = {'f': x[ok], 's': s[ok], 's_rel': s_rel[ok], 'dphi': dphi[ok], 'dphi_e': dphi_e[ok],
-                         'res': dict(res, good=good)}
-        # a calibração deve ser gerada com os dados brutos, não com dados já corrigidos
+        fv, sv = x[ok], s[ok]
+        mv = sv * fv ** n_exp
+        m_ref = float(np.median(mv[cal_valid]))
+        tol = self.sp_dual_flat_tol.value()
+        order = np.argsort(fv)
+        flat = find_flat_band(fv[order], mv[order] / m_ref, cal_valid[order], tol)
+        if flat is not None and flat[1] > flat[0]:
+            f_lo, f_hi = float(fv[order][flat[0]]), float(fv[order][flat[1]])
+            band = (fv >= f_lo) & (fv <= f_hi)
+            amp = float(np.mean(mv[band & cal_valid])) if (band & cal_valid).any() else m_ref
+            flat_txt = f'sistema plano (±{tol:g} dB) de {f_lo:.4g} a {f_hi:.4g} Hz'
+            ff = np.geomspace(f_lo, f_hi, 100)
+            self.c_dual_a_fit.setData(ff, amp * ff ** -n_exp) if self.dual_cal is None else self.c_dual_a_fit.setData([], [])
+        else:
+            amp = m_ref
+            flat_txt = f'nenhuma faixa com o sistema plano (±{tol:g} dB)'
+            self.c_dual_a_fit.setData([], [])
+        self.c_dual_a_bad.setData(fv[~cal_valid], sv[~cal_valid])
+        self.dual_std = {'f': fv, 's': sv, 's_rel': s_rel[ok], 'dphi': dphi[ok], 'dphi_e': dphi_e[ok],
+                         'cal_valid': cal_valid, 'key': key, 'ref': ref, 'n_exp': n_exp, 'cell': cell,
+                         'L_um': self.sp_cal_L.value(), 'alpha': self.sp_cal_alpha.value()}
         self.btn_dual_cal.setEnabled(not self.dual_active and self.dual_cal is None)
-        self.dual_fit = res['text'].replace('<br>', '; ').replace('<b>', '').replace('</b>', '')
-        self.lbl_dual_fit.setText(f'<span style="color:#b35c00;">{res["text"]}</span>' + excl_txt)
+        if self.dual_cal is not None:
+            txt = (f'<b>Calibração em uso</b> ({os.path.basename(self.dual_cal.get("path", ""))}): os dados já estão '
+                   'corrigidos. Para guardar uma calibração nova, desmarque "Usar".')
+        else:
+            txt = (f'<b>Referência {ref["name"]}</b> (S ∝ f<sup>−{n_exp:g}</sup>): a calibração guarda M = S·f<sup>{n_exp:g}</sup> '
+                   f'({int(cal_valid.sum())} pontos com SNR suficiente), normalizada onde o {flat_txt} (linha laranja, f<sup>−{n_exp:g}</sup>). '
+                   'O resto da forma é a resposta da célula, que a calibração corrige.')
+        self.dual_fit = self._plain(txt)
+        self.lbl_dual_fit.setText(f'<span style="color:#1f4e9c;">{txt}</span>' + excl_txt)
+        self.lbl_dual_fit.setToolTip('')
 
     def _set_dual_points(self, x, y, idx, keep):
         '''Pontos do gráfico principal do Modo Duplo: incluídos cheios, excluídos do ajuste vazados.
@@ -3244,6 +5330,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             sx, sy = self.pw_dual_a.getPlotItem().vb.viewPixelSize()
             c = ev.pos()
             pt = min(points, key=lambda q: ((q.pos().x() - c.x()) / sx) ** 2 + ((q.pos().y() - c.y()) / sy) ** 2)
+        if self.dual_peak_clicks is not None:      # marcando o pico: o clique vale para a faixa, não exclui
+            return
         i = int(pt.data())
         self.dual_excluded ^= {i}
         self._show_dual_results()
@@ -3271,8 +5359,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         cmb.clear()
         for p in paths:
             # Sem as partes comuns a todas (CAL_, microfone_, .csv): cabe na linha superior
-            cmb.addItem(os.path.basename(p)[4:-4].replace('microfone_', ''), p)
-            cmb.setItemData(cmb.count() - 1, p, QtCore.Qt.ItemDataRole.ToolTipRole)
+            c = load_mic_calibration(p)
+            name = os.path.basename(p)[4:-4].replace('microfone_', '')
+            name = re.sub(r'(^|_)(OPC|Camara)_', r'\1', name, count=1)    # a célula já vai na etiqueta
+            cmb.addItem(f"[{CELLS.get(c['cell'], c['cell'])}] {'⚠ ' if c['verified'] is False else ''}{name}", p)
+            cmb.setItemData(cmb.count() - 1, f"{p}\nReferência: {c['ref']}; célula: {CELLS.get(c['cell'], c['cell'])}"
+                            + ('; NÃO verificada' if c['verified'] is False else ''), QtCore.Qt.ItemDataRole.ToolTipRole)
         if not paths:
             cmb.addItem('(nenhuma calibração na pasta Medidas)', None)
         cmb.setCurrentIndex(paths.index(current) if current in paths and not select_latest else 0)
@@ -3283,7 +5375,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.chk_mic_cal.setChecked(False)
             cmb.setToolTip('Nenhuma calibração encontrada (CAL_*microfone_*.csv na pasta Medidas).\n'
                            'Gere uma na aba Modo Duplo: varredura em frequência → Fitar padrão → '
-                           'Gerar calibração do microfone.')
+                           'Gerar curva de calibração.')
         else:
             cmb.setToolTip(f'{cmb.currentData()}\nA lista é relida da pasta Medidas ao abrir.')
         if cmb.currentData() != current:
@@ -3295,21 +5387,23 @@ class LockInWindow(QtWidgets.QMainWindow):
         return (path, png) if os.path.isfile(png) else (path,)
 
     def _make_dual_calibration(self):
-        '''Curva de sensibilidade relativa do microfone + célula a partir da varredura do padrão de alumínio:
-        a folha fina livre dá S ∝ f^-1,5 (Rosencwaig-Gersho), então M(f) = S(f)·f^1,5 é a resposta do sistema.'''
+        '''Curva de sensibilidade relativa do microfone + célula a partir da varredura da referência escolhida:
+        em teoria S ∝ f^-n (folha fina em OPC: n = 1,5; opaca na câmara: n = 1), então M(f) = S(f)·f^n é a
+        resposta do sistema. Entram todos os pontos com SNR suficiente (inclusive a ressonância da célula);
+        o ajuste e a verificação usam só a "Faixa" (de … até).'''
         d = self.dual_std
         if d is None:
             return
-        res, f = d['res'], d['f']
-        good = res['good']
+        f, n = d['f'], d['n_exp']
         k = np.argsort(f)
-        f, good = f[k], good[k]
-        m = d['s'][k] * f ** 1.5
-        ff = np.geomspace(float(f.min()), float(f.max()), 300)
-        model = res['amp'](ff) * ff ** 1.5             # fit padrão × f^1,5 = curva suave da sensibilidade
-        m_ref = float(model.max())                     # normaliza: máximo da curva ajustada = 1
+        f, valid = f[k], d['cal_valid'][k]
+        # A verificação vem da segunda referência: toda calibração nova nasce "não verificada".
+        verified = False
+        m = d['s'][k] * f ** n                         # M(f) = S(f)·fⁿ: a resposta do sistema (sem ajuste de modelo)
+        res_f0 = cell_resonance_f0(f, d['s'][k])
+        m_ref = float(np.median(m[valid])) if valid.any() else float(np.median(m))
         tol = self.sp_dual_flat_tol.value()
-        flat = find_flat_band(f, m / m_ref, good, tol)
+        flat = find_flat_band(f, m / m_ref, valid, tol)
         if flat is not None and flat[1] > flat[0]:
             m_ref *= flat[2]                           # com faixa plana: média da faixa plana = 1
             f_lo, f_hi = float(f[flat[0]]), float(f[flat[1]])
@@ -3318,38 +5412,39 @@ class LockInWindow(QtWidgets.QMainWindow):
         else:
             flat = None
             in_flat = np.zeros(f.size, dtype=bool)
-            flat_txt = f'Faixa plana (±{tol:g} dB): não encontrada (menos de 2 pontos seguidos dentro da tolerância)'
-        model = res['amp'](ff) * ff ** 1.5 / m_ref
+            flat_txt = f'Faixa plana (±{tol:g} dB): não encontrada (normalizada pela mediana)'
         sens, sens_e = m / m_ref, m / m_ref * d['s_rel'][k]
-        p = res['params']
-        use_phase = res['phase'] is not None
-        ph = d['dphi'][k] - (p[4] if use_phase else float(np.median(d['dphi'][k][good])))
-        ph -= 360.0 * np.round(np.median(ph[good]) / 360.0)
+        ph = d['dphi'][k]
+        ref_ph = in_flat & valid if (in_flat & valid).any() else valid
+        phi0 = float(np.degrees(np.angle(np.mean(np.exp(1j * np.radians(ph[ref_ph])))))) if ref_ph.any() else 0.0
+        ph = ph - phi0
+        ph -= 360.0 * np.round(np.median(ph[ref_ph] if ref_ph.any() else ph) / 360.0)
         ph_e = d['dphi_e'][k]
-        fc = float(np.exp(p[2]))
 
         q = self.dual_params
         now_dt = datetime.now()
         # Calibração: CAL vem antes do nome da amostra (CAL_<amostra>_microfone_...)
-        stem = 'CAL_' + self._stem(f"microfone_{f.min():g}_{f.max():g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
+        stem = 'CAL_' + self._stem(f"microfone_{d['cell']}_{f.min():g}_{f.max():g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
+        n_txt = f'{n:g}'.replace('.', ',')
         os.makedirs(MEDIDAS_DIR, exist_ok=True)
         csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
 
         win = pg.GraphicsLayoutWidget()
         win.setBackground('w')
         win.resize(900, 650)
-        pa_ = win.addPlot(row=0, col=0, title=f'Sensibilidade relativa do microfone + célula (M = S·f¹·⁵)<br>'
-                                              f'<span style="color:#2e7d32;">{flat_txt}</span>')
+        ver_html = '<span style="color:#b35c00;">não verificada</span>'
+        pa_ = win.addPlot(row=0, col=0, title=f'Sensibilidade relativa do microfone + célula (M = S·f<sup>{n_txt}</sup>)'
+                                              f' — {d["ref"]["name"]}, célula {CELLS.get(d["cell"], d["cell"])}<br>'
+                                              f'<span style="color:#2e7d32;">{flat_txt}</span> &nbsp; {ver_html}')
         pa_.setLogMode(x=True, y=True)
         pa_.showGrid(x=True, y=True, alpha=0.3)
         pa_.setLabel('left', 'M(f) relativa')
         pa_.setLabel('bottom', 'Frequência (Hz)')
-        pa_.plot(f[good], sens[good], pen=pg.mkPen('#1f4e9c', width=1.5), symbol='o', symbolSize=6,
+        pa_.plot(f[valid], sens[valid], pen=pg.mkPen('#1f4e9c', width=1.5), symbol='o', symbolSize=6,
                  symbolBrush='#1f4e9c', symbolPen='#1f4e9c')
-        if (~good).any():
-            pa_.plot(f[~good], sens[~good], pen=None, symbol='x', symbolSize=9,
+        if (~valid).any():
+            pa_.plot(f[~valid], sens[~valid], pen=None, symbol='x', symbolSize=9,
                      symbolBrush='#d00000', symbolPen=pg.mkPen('#d00000', width=2))
-        pa_.plot(ff, model, pen=pg.mkPen('#e67e22', width=2, style=QtCore.Qt.PenStyle.DashLine))
         pb_ = win.addPlot(row=1, col=0, title='Fase do sistema (Δφ − φ0)')
         pb_.setLogMode(x=True, y=False)
         pb_.showGrid(x=True, y=True, alpha=0.3)
@@ -3357,9 +5452,6 @@ class LockInWindow(QtWidgets.QMainWindow):
         pb_.setLabel('bottom', 'Frequência (Hz)')
         pb_.plot(f, ph, pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=6,
                  symbolBrush='firebrick', symbolPen='firebrick')
-        if use_phase:
-            pb_.plot(ff, res['phase'](ff) - p[4] - 360.0 * np.round(np.median(ph[good]) / 360.0),
-                     pen=pg.mkPen('#e67e22', width=2, style=QtCore.Qt.PenStyle.DashLine))
         pb_.setXLink(pa_)
         if flat is not None:
             for plt in (pa_, pb_):
@@ -3372,10 +5464,15 @@ class LockInWindow(QtWidgets.QMainWindow):
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as fh:
                 fh.write(f"# Calibração relativa do microfone + célula - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                         f"# Padrão: folha de alumínio fina livre, S teórico ∝ f^-1.5; M(f) = S(f)*f^1.5, normalizada pela média da faixa plana (ou pelo máximo do fit, se não houver)\n"
-                         f"# Varredura {f.min():g} a {f.max():g} Hz ({f.size} pontos), PWM {q['pwm']:g} %; {q['mode']}\n"
-                         f"# Fase_Sistema = Δφ(INMP441 - OPT101) - φ0 do fit; Valido = 0 para pontos fora da faixa confiável\n"
-                         f"# Corte do microfone/célula (fc) = {fc:.4g} Hz\n# {flat_txt}\n")
+                         f"# Padrão: {d['ref']['name']}, S teórico ∝ f^-{n:g}; M(f) = S(f)*f^{n:g}, normalizada pela média da faixa plana (ou pela mediana, se não houver)\n"
+                         f"# Referencia = {d['ref']['name']}\n# Referencia_ID = {d['key']}\n# Celula = {d['cell']}\n"
+                         f"# Expoente_teorico = {n:g}\n"
+                         + (f"# L_um = {d['L_um']:g}\n# alpha_cm2_s = {d['alpha']:g}\n" if 'L' in CAL_REFS.get(d['key'], {}).get('params', ()) else '')
+                         + (f"# Ressonancia_f0_Hz = {res_f0:.1f}\n" if res_f0 is not None else '')
+                         + f"# Verificada = {'sim' if verified else 'nao'}\n"
+                         + f"# Varredura {f.min():g} a {f.max():g} Hz ({f.size} pontos), PWM {q['pwm']:g} %; {q['mode']}\n"
+                         f"# Fase_Sistema = Δφ(INMP441 - OPT101) - φ0 (φ0 = fase média na faixa plana); Valido = 0 para SNR baixo ou ponto excluído com clique; Sensibilidade_Fit = Sensibilidade_Rel e No_Ajuste = Faixa_Plana (colunas mantidas pelo formato)\n"
+                         f"# {flat_txt}\n")
                 if self.dual_excluded:
                     fh.write('# Pontos excluídos do ajuste com clique (Valido = 0): '
                              + ', '.join(f'{self.dual_results[i][0]:g}' for i in sorted(self.dual_excluded)) + ' Hz\n')
@@ -3388,14 +5485,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                 fh.write(f"# OPT101_tau_sensor_s = {self.dual_tau_sensor:.6g}\n")
                 if self.dual_fit:
                     fh.write(f'# {self.dual_fit}\n')
-                fh.write('Frequencia_Hz,Sensibilidade_Rel,Sensibilidade_Rel_DP,Sensibilidade_Fit,Fase_Sistema_Graus,Fase_DP,Valido,Faixa_Plana\n')
-                fit_at = res['amp'](f) * f ** 1.5 / m_ref
+                fh.write('Frequencia_Hz,Sensibilidade_Rel,Sensibilidade_Rel_DP,Sensibilidade_Fit,Fase_Sistema_Graus,'
+                         'Fase_DP,Valido,Faixa_Plana,No_Ajuste\n')
                 for i in range(f.size):
-                    fh.write(f'{f[i]:.3f},{sens[i]:.6g},{sens_e[i]:.4g},{fit_at[i]:.6g},{ph[i]:.3f},{ph_e[i]:.3f},'
-                             f'{int(good[i])},{int(in_flat[i])}\n')
+                    fh.write(f'{f[i]:.3f},{sens[i]:.6g},{sens_e[i]:.4g},{sens[i]:.6g},{ph[i]:.3f},{ph_e[i]:.3f},'
+                             f'{int(valid[i])},{int(in_flat[i])},{int(in_flat[i])}\n')
             win.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
             self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
-            self.flash(f'Calibração do microfone salva: {csv_path}', 6.0)
+            self.flash(f'Calibração do microfone salva: {csv_path}. Confira com uma segunda referência ("Verificar com esta medida").', 8.0)
             self.refresh_mic_cal(select_latest=True)        # a nova passa a ser a selecionada
             self.lbl_dual_status.setText(f'Calibração salva: {csv_path} — {flat_txt}')
         except Exception as e:
@@ -3405,9 +5502,62 @@ class LockInWindow(QtWidgets.QMainWindow):
         win.show()
         self._cal_win = win                                  # mantém a janela viva
 
+    def _verify_calibration(self):
+        '''Passo 5: confere a calibração aplicada com a varredura atual de uma segunda referência e grava o
+        resultado no arquivo da calibração.'''
+        c, d = self.dual_cal, self.dual_corr
+        if c is None or d is None:
+            return
+        key, ref, n_exp, _, _, _ = self._cal_ref()
+        f, s, dphi = d
+        # Com a calibração aplicada, a segunda referência deve seguir f⁻ⁿ numa faixa larga (≥ 1 década)
+        b = find_ref_band(f, s, dphi, n_exp, tol_n=CAL_N_TOL, max_db=CAL_VER_DB, max_deg=CAL_VER_DEG)
+        if b is None:
+            self.lbl_cal_verify.setText('São necessários pelo menos 5 pontos válidos.')
+            return
+        dec = float(np.log10(b['f_hi'] / b['f_lo']))
+        ok = bool(b['ok'] and dec >= 1.0)
+        r = {'ok': ok, 'rms_db': b['rms_db'], 'rms_deg': b['rms_deg'],
+             'text': (f'{"segue" if b["ok"] else "não segue"} f−{n_exp:g} de {b["f_lo"]:.4g} a {b["f_hi"]:.4g} Hz '
+                      f'({dec:.1f} década(s); mínimo 1): n = {b["n"]:.2f} ± {b["n_err"]:.2f}, '
+                      f'{b["rms_db"]:.1f} dB rms, fase ± {b["rms_deg"]:.0f}° rms')}
+        same = key == c.get('ref_id')
+        name = os.path.basename(getattr(self, 'dual_last_csv', None) or '') or 'varredura atual'
+        if same:
+            # mesma referência: só testa a repetibilidade da montagem, não separa sistema de amostra
+            self.lbl_cal_verify.setText(
+                f'<span style="color:#b35c00;">Mesma referência da calibração ({ref["name"]}): isso mede só a '
+                f'repetibilidade ({r["rms_db"]:.1f} dB, {r["rms_deg"]:.0f}° rms). Para verificar, use outra '
+                'referência.</span>')
+            return
+        txt = f'{ref["name"]} ({name}): {self._plain(r["text"])}'
+        try:
+            mark_calibration_verified(c['path'], r['ok'], ('aprovada - ' if r['ok'] else 'reprovada - ') + txt)
+        except OSError as e:
+            self.lbl_cal_verify.setText(f'Não foi possível gravar o resultado na calibração: {e}')
+            return
+        if r['ok']:
+            self.lbl_cal_verify.setText(f'<span style="color:#2e7d32;"><b>✓ Calibração verificada</b> com '
+                                        f'{ref["name"]}: {r["text"]}.</span>')
+        else:
+            self.lbl_cal_verify.setText(f'<span style="color:#d00000;"><b>⚠ Não passou</b> com {ref["name"]}: '
+                                        f'{r["text"]}. As duas referências discordam: uma delas não é ideal '
+                                        'nesta faixa ou a montagem mudou (altura, vedação, posição do feixe). Refaça '
+                                        'a medida ou use uma terceira referência para decidir qual vale.</span>')
+        path = c['path']
+        self.refresh_mic_cal()
+        i = self.cmb_mic_cal.findData(path)
+        if i >= 0:
+            self.cmb_mic_cal.setCurrentIndex(i)
+        self._show_dual_results()
+
+    def _on_dual_adv(self, checked):
+        self.btn_dual_adv.setText('Avançado ▾' if checked else 'Avançado ▸')
+        self.dual_adv_row.setVisible(checked)
+
     def _tau_sensor(self):
         '''τ do sensor (s) descontado do OPT101 na varredura em frequência; 0 = sem correção.'''
-        return self.sp_dual_tau_sensor.value() * 1e-6 if self.chk_dual_opt_tau.isChecked() else 0.0
+        return self.sp_dual_tau_sensor.value() * 1e-6
 
     def measure_sensor_tau(self):
         '''Preenche o τ do sensor comparando a varredura em frequência atual com outra já salva, feita com a
@@ -3436,7 +5586,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         self.dual_sensor_fit_txt = f'{res["text"]} — referência: {os.path.basename(path)}'
         if res['tau'] is not None:
-            self.chk_dual_opt_tau.setChecked(True)
+            self.btn_dual_adv.setChecked(True)
             self._set_spin(self.sp_dual_tau_sensor, res['tau'] * 1e6)
         self._show_dual_results()
 
@@ -3470,7 +5620,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
-                        f"# Medida: {q['mode']}; {tau}\n")
+                        f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
+                if q.get('refine'):
+                    f.write(f"# {q['refine']}\n")
                 if resave and getattr(self, 'dual_last_csv', None):
                     f.write(f'# Versão editada ("Salvar de novo") de: {os.path.basename(self.dual_last_csv)}\n')
                 if q['kind'] == 'F':
@@ -3478,10 +5630,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                         f.write(f"# {self._plain(self.dual_opt_tau['text'])}\n")
                     f.write(f"# OPT101: tau do sensor descontado em S e no gráfico = {self.dual_tau_sensor * 1e6:.3g} us "
                             f"(os dados abaixo são brutos)\n")
+                    f.write(f"# Normalizacao pelo OPT101 no gráfico/ajuste = {'sim' if self.chk_dual_norm.isChecked() else 'nao'}\n")
                 if self.dual_fit:
                     f.write(f'# {self.dual_fit}\n')
                 if q['kind'] == 'F' and self.dual_model_txt:
                     f.write(f'# Ajuste com modelo: {self.dual_model_txt}\n')
+                if q['kind'] == 'F' and self.dual_diag_txt:
+                    f.write(f'# Diagnostico: {self.dual_diag_txt}\n')
                 if self.dual_excluded:
                     f.write(f'# Pontos excluídos do ajuste com clique ({col}): '
                             + ', '.join(f'{self.dual_results[i][0]:g}' for i in sorted(self.dual_excluded))
@@ -3541,7 +5696,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         sb.setValue(v)
         sb.blockSignals(False)
 
-    def _make_sweep_box(self, title, fields, on_click, extra=()):
+    def _make_sweep_box(self, title, fields, on_click, extra=(), more=()):
         '''Quadro de varredura padrão (mesmo em todas as abas): campos na 1ª linha (e os de 'extra'
         numa linha própria); botão, tempo e barra de progresso na última. Retorna (quadro, botão,
         rótulo do tempo, barra).'''
@@ -3549,7 +5704,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(6, 2, 6, 4)
         lay.setSpacing(3)
-        for row_fields in (fields, extra):
+        for row_fields in (fields, extra) + tuple(more):
             if not row_fields:
                 continue
             row1 = QtWidgets.QHBoxLayout()
@@ -3593,8 +5748,39 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def on_dual_sweeps_panel(self, checked):
         '''Painel "Executar varreduras" do Modo Duplo (quadros das varreduras casada e em frequência).'''
-        self.dual_sweeps_panel.setVisible(checked)
-        self.btn_dual_sweeps_panel.setText('Executar varreduras ' + ('▾' if checked else '▸'))
+        self.dual_cal_scroll.setVisible(checked)
+        if checked:
+            QtCore.QTimer.singleShot(0, self._fit_dual_cal_scroll)
+        self.btn_dual_sweeps_panel.setText('Calibração ' + ('▾' if checked else '▸'))
+        self.btn_dual_cal_panel.setChecked(checked)
+
+    def _fit_dual_cal_scroll(self):
+        '''Altura da área do painel Calibração = altura do conteúdo (+ barra horizontal, se aparecer).'''
+        sc = self.dual_cal_scroll
+        if not sc.isVisible():
+            return
+        panel = self.dual_sweeps_panel
+        w = max(sc.viewport().width(), panel.minimumSizeHint().width())
+        # Os textos com quebra de linha informam no sizeHint a altura para uma largura estreita, o que deixava um
+        # espaço cinza grande sob os passos; a altura certa é a da largura real do painel
+        h = panel.heightForWidth(w) if panel.hasHeightForWidth() else -1
+        if h <= 0:
+            h = panel.sizeHint().height()
+        if panel.minimumSizeHint().width() > sc.viewport().width():
+            h += sc.horizontalScrollBar().sizeHint().height()
+        if sc.height() != h + 2:
+            sc.setFixedHeight(h + 2)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        # A largura muda a quebra dos textos do painel Calibração e, com ela, a altura do quadro
+        if getattr(self, 'dual_cal_scroll', None) is not None and self.dual_cal_scroll.isVisible():
+            QtCore.QTimer.singleShot(0, self._fit_dual_cal_scroll)
+
+    def on_dual_pwm_panel(self, checked):
+        '''Painel "Varreduras" do Modo Duplo (medidas: em frequência e casada em PWM).'''
+        self.dual_pwm_panel.setVisible(checked)
+        self.btn_dual_pwm_panel.setText('Varredura ' + ('▾' if checked else '▸'))
 
     def open_dual_sweep(self):
         '''Carrega um CSV do Modo Duplo salvo e o exibe como se a varredura tivesse acabado de rodar.'''
@@ -3613,7 +5799,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         except (OSError, ValueError, IndexError) as e:
             QtWidgets.QMessageBox.warning(self, 'Abrir varredura', f'Não foi possível abrir {os.path.basename(path)}:\n{e}')
             return
-        self.dual_kind = kind
+        self.dual_kind = self.dual_src = kind
         self.dual_results = rows
         self.dual_params = params
         self.dual_excluded = set()
@@ -3629,13 +5815,100 @@ class LockInWindow(QtWidgets.QMainWindow):
     def on_dual_model_panel(self, checked):
         '''Painel "Ajuste com modelos" do Modo Duplo; fechado, nenhum modelo é ajustado.'''
         self.dual_model_box.setVisible(checked)
-        self.btn_dual_model_panel.setText('Ajuste com modelos ' + ('▾' if checked else '▸'))
+        self.btn_dual_model_panel.setText('Ajuste ' + ('▾' if checked else '▸'))
         self._show_dual_results()
 
     def _on_dual_model(self, _=None):
         model = self.cmb_dual_model.currentData()
         self.cmb_dual_model.setToolTip(FREQ_MODEL_TIPS.get(model, 'Escolha um modelo para ajustar à varredura em frequência.'))
-        self.cmb_dual_model_target.setEnabled(model not in (None, 'pow', 'pow2'))   # leis de potência: só magnitude
+        self.cmb_dual_model_target.setEnabled(model not in (None, 'pow', 'pow2', 'band'))   # leis de potência: só magnitude
+        self.lbl_dual_model_n.setVisible(model == 'band')
+        self.sp_dual_model_n.setVisible(model == 'band')
+        self.btn_dual_peak.setEnabled(model == 'res')
+        if model != 'res':
+            self.btn_dual_peak.setChecked(False)
+        self._show_dual_results()
+
+    def _dual_diagnose(self, f, s, dphi):
+        '''Botão Diagnóstico: ajusta diagnose_freq aos pontos do ajuste (os mesmos do modelo) e desenha as
+        componentes. O resultado fica guardado enquanto os pontos não mudam (o ajuste leva alguns segundos).'''
+        for c in self.c_dual_diag:
+            c.setData([], [])
+        for lg in self.dual_diag_leg:
+            lg.clear()
+            lg.setVisible(False)
+        self.dual_diag_txt = None
+        freq = f is not None
+        self.btn_dual_diag.setEnabled(freq)
+        on = freq and self.btn_dual_diag.isChecked() and not self.dual_active   # não refaz a cada ponto
+        self.lbl_dual_diag.setVisible(on)
+        if not on:
+            return
+        key = (np.asarray(f).tobytes(), np.asarray(s).tobytes(), np.asarray(dphi).tobytes())
+        if self.dual_diag is None or self.dual_diag[0] != key:
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+            try:
+                self.dual_diag = (key, diagnose_freq(f, s, dphi))
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+        d = self.dual_diag[1]
+        if d is None:
+            self.lbl_dual_diag.setText('<b>Diagnóstico:</b> são necessários pelo menos 12 pontos cobrindo uma década '
+                                       'de frequência.')
+            return
+        ff = np.logspace(np.log10(d['fmin']), np.log10(d['fmax']), 400)
+        tot, pa, bg = d['func'](ff)
+        self.c_dual_diag[0].setData(ff, np.abs(tot))
+        self.c_dual_diag[1].setData(ff, np.abs(pa))
+        if d['bg']:
+            self.c_dual_diag[2].setData(ff, np.abs(bg))
+        # fase do modelo desenrolada e posta na mesma volta dos dados
+        ph = np.degrees(np.unwrap(np.angle(tot)))
+        fs_ = np.asarray(f, dtype=float)
+        k = np.argsort(fs_)
+        off = np.median(np.asarray(dphi, dtype=float)[k] - np.interp(fs_[k], ff, ph))
+        self.c_dual_diag[3].setData(ff, ph + 360.0 * np.round(off / 360.0))
+        la, lb = self.dual_diag_leg
+        la.addItem(self.c_dual_diag[0], 'Modelo (soma)')
+        la.addItem(self.c_dual_diag[1], f'Fotoacústico (∝ f⁻ⁿ, n = {d["n"]:.2f})')
+        if d['bg']:
+            la.addItem(self.c_dual_diag[2], 'Fundo plano (não fotoacústico)')
+        lb.addItem(self.c_dual_diag[3], 'Modelo (soma)')
+        for lg in self.dual_diag_leg:
+            lg.setVisible(True)
+        txt, tip = diagnose_text(d, calibrated=self.dual_cal is not None)
+        if self.dual_cal is None:
+            txt += ('<br><span style="color:#606060;">Sem calibração aplicada, a resposta da célula + microfone entra no '
+                    'ajuste e parte do "fundo" pode ser dela. Para separar componentes da amostra, aplique a calibração.</span>')
+        self.lbl_dual_diag.setText('<b>Diagnóstico</b> &nbsp; ' + txt)
+        self.lbl_dual_diag.setToolTip(tip)
+        self.dual_diag_txt = tip.replace('\n', ' ')
+
+    def _on_dual_peak_mode(self, checked):
+        '''Liga a captura de dois cliques no gráfico da esquerda (faixa do ajuste da ressonância).'''
+        self.dual_peak_clicks = [] if checked else None
+        if checked:
+            self.flash('Marcar pico: clique no gráfico da esquerda um pouco abaixo e depois um pouco acima do pico.', 8.0)
+
+    def _on_dual_plot_clicked(self, ev):
+        if self.dual_peak_clicks is None or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        vb = self.pw_dual_a.getPlotItem().vb
+        if not vb.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        xv = vb.mapSceneToView(ev.scenePos()).x()
+        f = 10.0 ** xv if self.pw_dual_a.getPlotItem().ctrl.logXCheck.isChecked() else xv
+        self.dual_peak_clicks.append(float(f))
+        if len(self.dual_peak_clicks) < 2:
+            self.flash(f'Marcar pico: {f:.4g} Hz; agora clique do outro lado do pico.', 8.0)
+            return
+        lo, hi = sorted(self.dual_peak_clicks)
+        for sp, v in ((self.sp_dual_model_f0, lo), (self.sp_dual_model_f1, hi)):
+            sp.blockSignals(True)
+            sp.setValue(v)
+            sp.blockSignals(False)
+        self.btn_dual_peak.setChecked(False)
+        self.flash(f'Faixa da ressonância: {lo:.4g} a {hi:.4g} Hz.', 5.0)
         self._show_dual_results()
 
     def _fit_dual_model(self, f, s, s_rel, dphi, dphi_e):
@@ -3644,6 +5917,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.c_dual_a_model.setData([], [])
         self.c_dual_b_model.setData([], [])
         self.ln_dual_break.setVisible(False)
+        for reg in getattr(self, 'reg_dual', ()):
+            reg.setVisible(False)
         self.dual_model_txt = None
         model = self.cmb_dual_model.currentData()
         if not self.btn_dual_model_panel.isChecked() or model is None:
@@ -3651,6 +5926,12 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         target = 'mag' if model in ('pow', 'pow2') else self.cmb_dual_model_target.currentData()
         lo, hi = self.sp_dual_model_f0.value(), self.sp_dual_model_f1.value()     # 0 = sem limite
+        if model == 'res':
+            self._fit_dual_resonance(f, s, s_rel, dphi, dphi_e, target, lo, hi)
+            return
+        if model == 'band':
+            self._fit_dual_band(f, s, dphi, lo, hi)
+            return
         sel = (f >= lo) & ((f <= hi) if hi > 0 else True)
         f, s, s_rel, dphi, dphi_e = f[sel], s[sel], s_rel[sel], dphi[sel], dphi_e[sel]
         need = 5 if model == 'pow2' else 4
@@ -3682,6 +5963,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             parts.append(f'<b>quebra fb = {r["fb"]:.3g} ± {r["fb_err"]:.2g} Hz</b>')
             self.ln_dual_break.setPos(np.log10(r['fb']))      # eixo X em escala log
             self.ln_dual_break.setVisible(True)
+        elif model in FREQ_MODELS_FIXED:
+            parts.append(f'expoente fixo n = {FREQ_MODELS_FIXED[model]:g} (sem parâmetro de forma)')
         else:
             f1, e1 = r['shape'], r['shape_err']
             parts.append(f'f1 = α/(πL²) = {f1:.3g} ± {e1:.2g} Hz')
@@ -3699,23 +5982,95 @@ class LockInWindow(QtWidgets.QMainWindow):
             parts.append(f'resíduo rms da fase {r["rms_phase"]:.1f}°')
         txt = ' &nbsp; '.join(parts)
         if self.dual_cal is None:
-            txt += ('<br><span style="color:#d00000;">⚠ Sem calibração aplicada ("Usar" desmarcado): magnitude e fase '
+            why = ('"Usar" desmarcado' if self.chk_dual_norm.isChecked()
+                   else 'sinal sem normalização pelo OPT101')
+            txt += (f'<br><span style="color:#d00000;">⚠ Sem calibração aplicada ({why}): magnitude e fase '
                     'incluem a resposta do microfone/célula e o atraso do sistema.</span>')
         self.lbl_dual_model.setText(f'<span style="color:#2e7d32;">{txt}</span>')
         self.dual_model_txt = self._plain(txt.replace(' &nbsp; ', '; ').replace('<br>', ' '))
 
+    def _fit_dual_band(self, f, s, dphi, lo, hi):
+        '''Modelo "Faixa com S ∝ f⁻ⁿ": maior faixa em que a amostra segue o n esperado (find_ref_band).'''
+        n_exp = self.sp_dual_model_n.value()
+        sel = (f >= lo) & ((f <= hi) if hi > 0 else True)
+        r = find_ref_band(f[sel], s[sel], dphi[sel], n_exp) if sel.sum() >= 5 else None
+        self.dual_band = r if r is not None and r['ok'] else None
+        if r is None:
+            self.lbl_dual_model.setText('Faixa com S ∝ f⁻ⁿ: são necessários pelo menos 5 pontos válidos na faixa.')
+            return
+        ff = np.geomspace(r['f_lo'], r['f_hi'], 100)
+        self.c_dual_a_model.setData(ff, np.exp(r['lnA']) * ff ** -n_exp)
+        dec = np.log10(r['f_hi'] / r['f_lo'])
+        nums = (f'n = {r["n"]:.2f} ± {r["n_err"]:.2f}, desvio de f<sup>−{n_exp:g}</sup> {r["rms_db"]:.1f} dB rms, '
+                f'fase ± {r["rms_deg"]:.0f}° rms ({r["npts"]} pontos)')
+        if r['ok']:
+            for reg in self.reg_dual:
+                reg.setRegion((np.log10(r['f_lo']), np.log10(r['f_hi'])))
+                reg.setVisible(True)
+            txt = (f'<b>S ∝ f<sup>−{n_exp:g}</sup> de {r["f_lo"]:.4g} a {r["f_hi"]:.4g} Hz</b> ({dec:.1f} década(s)): {nums}.')
+        else:
+            txt = (f'<span style="color:#b35c00;"><b>Nenhuma faixa segue f<sup>−{n_exp:g}</sup></b> (critério: n ± 0,15, '
+                   f'≤ 1,5 dB rms, fase ± 10° rms). Mais próxima: {r["f_lo"]:.4g}–{r["f_hi"]:.4g} Hz, {nums}.</span>')
+        if self.dual_cal is None:
+            txt += ('<br><span style="color:#d00000;">⚠ Sem calibração aplicada: a forma inclui a resposta do '
+                    'microfone/célula.</span>')
+        self.lbl_dual_model.setText(f'<span style="color:#2e7d32;">{txt}</span>')
+        self.dual_model_txt = self._plain(txt.replace('<br>', ' '))
+
+    def _fit_dual_resonance(self, f, s, s_rel, dphi, dphi_e, target, lo, hi):
+        '''Modelo "Ressonância": f0, Q, largura e ganho do pico (fit_resonance). Faixa vazia = pico automático.'''
+        window = None if lo <= 0 and hi <= 0 else (lo if lo > 0 else float(f.min()), hi if hi > 0 else float(f.max()))
+        r = fit_resonance(f, s, s_rel, dphi, dphi_e, target, window) if f.size >= 6 else None
+        if r is None:
+            self.lbl_dual_model.setText('Ressonância: nenhum pico claro encontrado (ou menos de 6 pontos na faixa). '
+                                        'Use "Marcar pico" e clique dos dois lados dele.' if window is None else
+                                        'Ressonância: o ajuste não convergiu (são necessários pelo menos 6 pontos na faixa).')
+            return
+        ff = np.linspace(*r['window'], 600)
+        z = r['func'](ff)
+        if target in ('mag', 'both'):
+            self.c_dual_a_model.setData(ff, np.abs(z))
+        if target in ('phase', 'both'):
+            pz = np.degrees(np.unwrap(np.angle(z)))
+            sel = (f >= r['window'][0]) & (f <= r['window'][1])
+            pz += 360.0 * np.round(np.mean(dphi[sel] - np.interp(f[sel], ff, pz)) / 360.0)
+            self.c_dual_b_model.setData(ff, pz)
+        self.ln_dual_break.setPos(np.log10(r['f0']))
+        self.ln_dual_break.setVisible(True)
+        what = {'phase': 'fase', 'mag': 'magnitude', 'both': 'fase e magnitude'}[target]
+        src = 'pico achado automaticamente' if window is None else 'faixa escolhida'
+        parts = [f'<b>{FREQ_MODELS["res"]}</b> (ajuste da {what}, {r["n"]} pontos, '
+                 f'{r["window"][0]:.4g}–{r["window"][1]:.4g} Hz, {src}):',
+                 f'<b>f0 = {r["f0"]:.4g} ± {r["f0_err"]:.2g} Hz</b>',
+                 f'<b>Q = {r["q"]:.3g} ± {r["q_err"]:.2g}</b>',
+                 f'largura (f0/Q) = {r["fwhm"]:.3g} ± {r["fwhm_err"]:.2g} Hz',
+                 f'ganho do pico sobre o fundo = {r["gain_db"]:.1f} dB (máximo em {r["f_peak"]:.4g} Hz)']
+        if target in ('mag', 'both'):
+            parts.append(f'resíduo rms da magnitude {100 * r["rms_mag"]:.0f} %')
+        if target in ('phase', 'both'):
+            parts.append(f'resíduo rms da fase {r["rms_phase"]:.1f}°; atraso τ = {r["tau"] * 1e6:.0f} µs')
+        txt = ' &nbsp; '.join(parts)
+        if r['n'] < 10:
+            txt += ('<br><span style="color:#b35c00;">Poucos pontos no pico: para f0 e Q confiáveis, faça uma varredura '
+                    'linear em volta dele (passo ≤ largura/5).</span>')
+        if self.dual_cal is not None:
+            txt += ('<br><span style="color:#d00000;">⚠ Com a calibração aplicada ("Usar"), a ressonância da célula é '
+                    'removida dos dados: desmarque "Usar" para medir a ressonância da célula.</span>')
+        self.lbl_dual_model.setText(f'<span style="color:#2e7d32;">{txt}</span>')
+        self.dual_model_txt = self._plain(txt.replace(' &nbsp; ', '; ').replace('<br>', ' '))
+
     def on_dual_cal_panel(self, checked):
-        '''Painel "Calibração de papel alumínio" do Modo Duplo; fechado, o fit do padrão não é aplicado.'''
-        self.dual_cal_box.setVisible(checked)
-        self.btn_dual_cal_panel.setText('Calibração de papel alumínio ' + ('▾' if checked else '▸'))
+        '''Painel "Calibração do microfone" do Modo Duplo; fechado, o fit do padrão não é aplicado.'''
+        self.btn_dual_cal_panel.setText('Calibração do microfone ' + ('▾' if checked else '▸'))
         self._show_dual_results()
 
-    def _on_dual_fspace(self, idx):
+    def _on_dual_fspace(self, idx, kind='F'):
         '''Logarítmico: número de pontos; Linear: passo em Hz.'''
         log = idx == 0
-        self.lbl_dual_fn.setText('N pontos:' if log else 'Passo:')
-        self.sp_dual_fn.setSuffix('' if log else ' Hz')
-        self.sp_dual_fn.setDecimals(0 if log else 2)
+        spn, lbl = self.dual_fw[kind][3], self.dual_fw[kind][4]
+        lbl.setText('N pontos:' if log else 'Passo:')
+        spn.setSuffix('' if log else ' Hz')
+        spn.setDecimals(0 if log else 2)
 
     def flash(self, text, seconds=3.0):
         self.flash_text = text
@@ -3769,7 +6124,9 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def apply_frequency(self, val):
         self.ref_freq = val
-        self.cutoff_lp, self.cutoff_hp = get_effective_cutoffs(val)
+        tau = auto_tau(val)
+        self.cutoff_hp = get_effective_cutoffs(val)[1]
+        self.cutoff_lp = tau_cutoff(tau, FS)
         self.link.write(f"F{val}\n")
         self.update_raw_window()
         with self.dsp_lock:
@@ -3777,12 +6134,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         # O lock-in do INMP441 segue a frequência de excitação comum
         with self.audio_lock:
             self.audio_freq = val
-            self.audio_cutoff_lp, self.audio_cutoff_hp = self.cutoff_lp, self.cutoff_hp
+            self.audio_cutoff_lp, self.audio_cutoff_hp = tau_cutoff(tau, AUDIO_FS_REAL), self.cutoff_hp
             self.audio_li.update_params(val, self.audio_cutoff_lp, self.audio_cutoff_hp)
-        self._set_spin(self.sp_audio_lp, self.audio_cutoff_lp)
+        self._set_spin(self.sp_audio_tau, tau)
         self._set_spin(self.sp_audio_hp, self.audio_cutoff_hp)
-        self._set_spin(self.sp_lp, self.cutoff_lp)
+        self._set_spin(self.sp_tau, tau)
         self._set_spin(self.sp_hp, self.cutoff_hp)
+        self._sync_sweep_tau(tau)        # o τ das varreduras em frequência segue o τ do INMP441
         self.update_tau_labels()
         self.update_audio_fft_range()
         self.update_opt_fft_range()
@@ -3841,18 +6199,244 @@ class LockInWindow(QtWidgets.QMainWindow):
         with self.dsp_lock:
             self.dsp.set_mains_filter(checked)
 
-    def on_lp(self, val):
-        self.cutoff_lp = val
+    # ------------------------------------------------------------ Teste de resolução
+    def open_resolution_test(self):
+        '''Janela do teste de resolução: captura palavras cruas e mostra ruído × OSR, bits e histograma.'''
+        dlg = getattr(self, 'res_dialog', None)
+        if dlg is not None:
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle('Teste de resolução da sobreamostragem')
+        dlg.resize(1000, 720)
+        lay = QtWidgets.QVBoxLayout(dlg)
+        info = QtWidgets.QLabel(
+            'Deixe o sinal <b>estável</b>: laser desligado (PWM 0 %) ou luz constante, sem mexer na montagem. '
+            'A interface grava as amostras cruas do ADC (200 kS/s) e calcula o ruído das médias de N amostras '
+            '(desvio de Allan, em LSB do ADC de 12 bits). Enquanto os pontos seguem a reta tracejada '
+            '(1/√N), a sobreamostragem está entregando resolução de verdade.')
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel('Duração (s):'))
+        self.sp_res_dur = QtWidgets.QDoubleSpinBox()
+        self.sp_res_dur.setRange(0.5, 20.0)
+        self.sp_res_dur.setDecimals(1)
+        self.sp_res_dur.setValue(4.0)
+        row.addWidget(self.sp_res_dur)
+        self.btn_res_run = QtWidgets.QPushButton('Medir')
+        self.btn_res_run.clicked.connect(self._res_start)
+        row.addWidget(self.btn_res_run)
+        self.btn_res_save = QtWidgets.QPushButton('Salvar CSV e PNG')
+        self.btn_res_save.setEnabled(False)
+        self.btn_res_save.clicked.connect(self._res_save)
+        row.addWidget(self.btn_res_save)
+        self.lbl_res_state = QtWidgets.QLabel('')
+        row.addWidget(self.lbl_res_state, 1)
+        lay.addLayout(row)
+
+        plots = QtWidgets.QHBoxLayout()
+        self.plot_res = pg.PlotWidget()
+        pr = self.plot_res.getPlotItem()
+        pr.setLogMode(x=True, y=True)
+        pr.setLabel('bottom', 'N (amostras por média = OSR)')
+        pr.setLabel('left', 'Ruído σ (LSB do ADC de 12 bits)')
+        pr.showGrid(x=True, y=True, alpha=0.3)
+        pr.addLegend(offset=(-10, 10))
+        self.c_res_meas = pr.plot(pen=pg.mkPen('b', width=2), symbol='o', symbolBrush='b', symbolSize=7,
+                                  name='medido')
+        self.c_res_ideal = pr.plot(pen=pg.mkPen((120, 120, 120), width=1.5, style=QtCore.Qt.PenStyle.DashLine),
+                                   name='ideal 1/√N')
+        self.c_res_sel = pr.plot(pen=None, symbol='o', symbolPen=pg.mkPen('r', width=2), symbolBrush=None,
+                                 symbolSize=14, name='OSR em uso')
+        self.plot_res_hist = pg.PlotWidget()
+        ph = self.plot_res_hist.getPlotItem()
+        ph.setLabel('bottom', 'Código do ADC (12 bits)')
+        ph.setLabel('left', 'Amostras')
+        ph.showGrid(x=False, y=True, alpha=0.3)
+        ph.setTitle('Histograma dos códigos crus')
+        self.res_hist_item = None
+        plots.addWidget(self.plot_res, 3)
+        plots.addWidget(self.plot_res_hist, 2)
+        lay.addLayout(plots, 1)
+
+        self.txt_res = QtWidgets.QTextBrowser()
+        self.txt_res.setMaximumHeight(230)
+        lay.addWidget(self.txt_res)
+        self.res_timer = QtCore.QTimer(dlg)
+        self.res_timer.setInterval(200)
+        self.res_timer.timeout.connect(self._res_poll)
+        self.res_result = None
+        dlg.finished.connect(lambda _: self._res_stop())
+        self.res_dialog = dlg
+        dlg.show()
+
+    def _res_start(self):
+        if not (self.link.connected or self.simulating):
+            self.lbl_res_state.setText('Sem dados: conecte o STM32 ou ligue a simulação.')
+            return
+        self.res_capture_bytes = int(self.sp_res_dur.value() * RAW_FS) * 2
+        self.res_t0 = time.perf_counter()
+        self.res_lost0 = (self.link.opt_lost_samples, self.link.opt_gap_events)
+        with self.dsp_lock:
+            self.res_capture = bytearray()
+        self.btn_res_run.setEnabled(False)
+        self.lbl_res_state.setText('Gravando...')
+        self.res_timer.start()
+
+    def _res_stop(self):
+        if hasattr(self, 'res_timer'):
+            self.res_timer.stop()
+        with self.dsp_lock:
+            self.res_capture = None
+        if hasattr(self, 'btn_res_run'):
+            self.btn_res_run.setEnabled(True)
+
+    def _res_poll(self):
+        with self.dsp_lock:
+            cap = self.res_capture
+            got = 0 if cap is None else len(cap)
+            done = cap is not None and got >= self.res_capture_bytes
+            data = bytes(cap[:self.res_capture_bytes]) if done else None
+        dur = self.res_capture_bytes / 2 / RAW_FS
+        if not done:
+            self.lbl_res_state.setText(f'Gravando... {got / 2 / RAW_FS:.1f} de {dur:.1f} s')
+            if time.perf_counter() - self.res_t0 > dur + 5.0:
+                self._res_stop()
+                self.lbl_res_state.setText('Os dados não chegaram a tempo (STM32 desconectado?).')
+            return
+        self._res_stop()
+        if (self.link.opt_lost_samples, self.link.opt_gap_events) != self.res_lost0:
+            self.lbl_res_state.setText('Houve perda de amostras no USB durante a gravação: o resultado não '
+                                       'vale. Meça de novo.')
+            return
+        raw = np.frombuffer(data, dtype='<u2')
+        try:
+            res = resolution_analysis(raw)
+        except Exception as e:
+            self.lbl_res_state.setText(f'Erro na análise: {e}')
+            return
+        self.res_result = res
+        self.btn_res_save.setEnabled(True)
+        self.lbl_res_state.setText(f'{res["n"]} amostras ({res["n"] / RAW_FS:.1f} s) sem perdas, média = '
+                                   f'código {res["mean"]:.1f}')
+        self._res_show(res)
+
+    def _res_show(self, res):
+        osr, sig = res['osr'], res['sigma']
+        good = sig > 0
+        self.c_res_meas.setData(osr[good], sig[good])
+        self.c_res_ideal.setData(osr, np.maximum(res['ideal'], 1e-6))
+        sel = osr == self.osr
+        self.c_res_sel.setData(osr[sel & good], sig[sel & good])
+        ph = self.plot_res_hist.getPlotItem()
+        if self.res_hist_item is not None:
+            ph.removeItem(self.res_hist_item)
+        codes, counts = res['hist_codes'], res['hist_counts']
+        # Mostra só a região com amostras (± 4 códigos)
+        self.res_hist_item = pg.BarGraphItem(x=codes, height=counts, width=0.9, brush=(70, 110, 200))
+        ph.addItem(self.res_hist_item)
+        ph.setXRange(codes.min() - 4, codes.max() + 4, padding=0)
+        rows = []
+        for i, k in enumerate(osr):
+            mark = ' style="background:#ffe5e5;"' if int(k) == self.osr else ''
+            choice = '' if int(k) in OSR_CHOICES else ' style="color:#888;"'
+            rows.append(f'<tr{mark or choice}><td>{int(k)}</td><td>{RAW_FS / k / 1000:g}</td>'
+                        f'<td>{sig[i]:.4f}</td><td>{res["ideal"][i]:.4f}</td>'
+                        f'<td>{res["gain_bits"][i]:+.2f}</td><td>{res["ideal_bits"][i]:+.2f}</td>'
+                        f'<td>{res["enob"][i]:.2f}</td></tr>')
+        table = ('<table border="1" cellspacing="0" cellpadding="3">'
+                 '<tr><th>N</th><th>kS/s</th><th>σ (LSB)</th><th>ideal</th><th>ganho (bit)</th>'
+                 '<th>ideal (bit)</th><th>bits efetivos</th></tr>' + ''.join(rows) + '</table>')
+        self.txt_res.setHtml(resolution_verdict(res, self.laser_power) + '<br><br>' + table +
+                             '<br><small>Bits efetivos = 12 − log₂(σ·√12): resolução de um conversor ideal '
+                             'com o mesmo ruído. Linhas em cinza: N fora das opções de sobreamostragem '
+                             '(mostram a tendência para médias mais longas, como as do lock-in).</small>')
+
+    def _res_save(self):
+        res = self.res_result
+        if res is None:
+            return
+        os.makedirs(MEDIDAS_DIR, exist_ok=True)
+        now_dt = datetime.now()
+        stem = self._stem(f"Resolucao_{now_dt.strftime('%Y%m%d_%H%M%S')}")
+        csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
+        png_path = os.path.join(MEDIDAS_DIR, stem + '.png')
+        try:
+            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                f.write(f"# Teste de resolução - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"# {res['n']} amostras a {RAW_FS:g} S/s, média = código {res['mean']:.3f}, "
+                        f"códigos distintos = {res['distinct_codes']}, OSR em uso = {self.osr}\n"
+                        "N,kSps,sigma_allan_LSB,sigma_std_LSB,ideal_LSB,ganho_bits,ideal_bits,bits_efetivos\n")
+                for i, k in enumerate(res['osr']):
+                    f.write(f"{int(k)},{RAW_FS / k / 1000:g},{res['sigma'][i]:.6g},{res['sigma_std'][i]:.6g},"
+                            f"{res['ideal'][i]:.6g},{res['gain_bits'][i]:.4f},{res['ideal_bits'][i]:.4f},"
+                            f"{res['enob'][i]:.4f}\n")
+            self.res_dialog.grab().save(png_path)
+            self._session_add(csv_path, png_path)
+            self.lbl_res_state.setText(f'Salvo: {csv_path}')
+        except Exception as e:
+            self.lbl_res_state.setText(f'Erro ao salvar: {e}')
+
+    def set_osr(self, osr):
+        '''Troca a sobreamostragem (média de osr amostras cruas): refaz FS, DECIMATION e tudo que depende
+        da taxa (lock-in, osciloscópio, FFT, modo valor médio). Não mexe no STM32.'''
+        global FS, DECIMATION
+        osr = int(osr)
+        if osr == self.osr:
+            return
+        if self.sweep_active or self.dual_active:
+            self.cmb_osr.blockSignals(True)
+            self.cmb_osr.setCurrentIndex(OSR_CHOICES.index(self.osr))
+            self.cmb_osr.blockSignals(False)
+            self.flash('A sobreamostragem não pode mudar durante uma varredura.')
+            return
+        with self.dsp_lock:
+            self.osr = osr
+            FS = RAW_FS / osr
+            DECIMATION = max(1, int(round(FS / LOCKIN_OUT_HZ)))
+            # descarta o resto que não fecha um bloco do OSR antigo (mantém o alinhamento em palavras)
+            self.cutoff_lp = tau_cutoff(self.sp_tau.value(), FS)
+            mains = self.dsp.mains_enabled
+            self.dsp.init(FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
+            self.dsp.set_mains_filter(mains)
+            self.opt_results.clear()
+        self.raw.set_fs(FS)
+        for c in (self.c_adc_a, self.c_adc_b, self.c_ref_a, self.c_ref_b):
+            c.setData([], [])
+        self.opt_history = np.zeros(int(FS * OPT_FFT_HISTORY_SEC), dtype=np.float32)
+        self.opt_write_index = 0
+        self.opt_valid_samples = 0
+        self.last_opt_fft_t = 0.0
+        self.avg.fs = FS
+        self.set_pretrigger(self.average_pretrigger_sec)
+        self.reset_average()
+        self.r_arr = np.empty(0, dtype=np.float32)
+        self.phase_arr = np.empty(0, dtype=np.float32)
+        self.lockin_span = MAX_POINTS * DECIMATION / FS
+        if not self.average_mode:
+            self.plot1.getPlotItem().setXRange(-self.lockin_span, 0, padding=0)
+        self.line_r.setData([], [])
+        self.line_phase.setData([], [])
+        self.update_tau_labels()
+        self.update_opt_fft_range()
+        self.flash(f'Sobreamostragem {osr}x: {FS / 1000:g} kS/s no OPT101 (lock-in, osciloscópio, FFT e Valor Médio). O INMP441 não muda.', 4.0)
+
+    def on_tau(self, tau):
+        self.cutoff_lp = tau_cutoff(tau, FS)
         with self.dsp_lock:
             self.dsp.update_params(self.ref_freq, self.cutoff_lp, self.cutoff_hp)
         self.update_tau_labels()
 
     @staticmethod
-    def _filter_row(lay, sp_lp, sp_hp):
-        '''Passa-baixas, τ (que depende só dele) e passa-altas de um lock-in, com dicas. Devolve o rótulo do τ.'''
+    def _filter_row(lay, sp_tau, sp_hp):
+        '''τ do passa-baixas, valores derivados dele (−3 dB, ENBW, espera) e passa-altas de um lock-in, com
+        dicas. Devolve o rótulo dos valores derivados.'''
         lbl_tau = QtWidgets.QLabel()
-        lbl_tau.setMinimumWidth(90)
-        for text, w, tip in (('Passa-Baixas (Hz):', sp_lp, LP_TIP), (None, lbl_tau, TAU_TIP),
+        lbl_tau.setMinimumWidth(250)
+        for text, w, tip in (('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
                              ('Passa-Altas (Hz):', sp_hp, HP_TIP)):
             if text:
                 lbl = QtWidgets.QLabel(text)
@@ -3860,14 +6444,16 @@ class LockInWindow(QtWidgets.QMainWindow):
                 lay.addWidget(lbl)
             w.setToolTip(tip)
             lay.addWidget(w)
+            if w is lbl_tau:
+                lay.addSpacing(12)
         return lbl_tau
 
     def update_tau_labels(self):
-        '''Atualiza o tau exibido ao lado dos parâmetros de cada lock-in.'''
+        '''Atualiza o corte −3 dB, a ENBW e a espera exibidos ao lado do τ de cada lock-in.'''
         if hasattr(self, 'lbl_tau'):
-            self.lbl_tau.setText(fmt_tau(lp_tau(self.cutoff_lp, FS)))
+            self.lbl_tau.setText(fmt_lp_info(lp_tau(self.cutoff_lp, FS)))
         if hasattr(self, 'lbl_audio_tau'):
-            self.lbl_audio_tau.setText(fmt_tau(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
+            self.lbl_audio_tau.setText(fmt_lp_info(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
 
     def on_hp(self, val):
         self.cutoff_hp = val
@@ -4122,7 +6708,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             _, ph = self.line_phase.getData()
             stem = self._stem(f"LockIn_{self.ref_freq:g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
             header = (f"# Lock-In no tempo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                      f"# Freq={self.ref_freq} Hz, LP={self.cutoff_lp} Hz, HP={self.cutoff_hp} Hz\n"
+                      f"# Freq={self.ref_freq} Hz, OSR={self.osr} ({FS:g} S/s), tau={lp_tau(self.cutoff_lp, FS):.6g} s, "
+                      f"LP={self.cutoff_lp:.6g} Hz, "
+                      f"HP={self.cutoff_hp} Hz\n"
                       "Tempo_s,Magnitude,Fase_Graus\n")
             rows = (f"{a:.6f},{b:.5f},{c:.3f}\n" for a, b, c in zip(x, y, ph))
         csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
@@ -4273,16 +6861,16 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_sweep_count = 0
 
     def _excitation_snapshot(self):
-        '''Frequência e cortes dos dois lock-ins antes de uma varredura em frequência.'''
-        return (self.ref_freq, self.cutoff_lp, self.cutoff_hp, self.audio_cutoff_lp, self.audio_cutoff_hp)
+        '''Frequência, τ e cortes do passa-altas dos dois lock-ins antes de uma varredura em frequência.'''
+        return (self.ref_freq, self.sp_tau.value(), self.cutoff_hp, self.sp_audio_tau.value(), self.audio_cutoff_hp)
 
     def _restore_excitation(self, snap):
         '''Volta à frequência de antes da varredura (reenvia F ao STM32) e aos cortes de antes:
         apply_frequency sozinho levaria os filtros aos cortes automáticos, perdendo ajustes manuais.'''
-        f, lp, hp, alp, ahp = snap
+        f, tau, hp, atau, ahp = snap
         self._set_spin(self.sp_freq, f)
         self.apply_frequency(f)
-        for sp, v in ((self.sp_lp, lp), (self.sp_hp, hp), (self.sp_audio_lp, alp), (self.sp_audio_hp, ahp)):
+        for sp, v in ((self.sp_tau, tau), (self.sp_hp, hp), (self.sp_audio_tau, atau), (self.sp_audio_hp, ahp)):
             sp.setValue(v)
 
     def _apply_sweep_value(self, value):
@@ -4623,9 +7211,12 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.rx_bytes.extend(data)
                 if len(self.rx_bytes) > MAX_RX_BYTES:
                     del self.rx_bytes[:-MAX_RX_BYTES]
-            if len(self.rx_bytes) < 5:
+            if len(self.rx_bytes) < 2 * self.dsp.osr:
                 return
             res = self.dsp.process(self.rx_bytes, DECIMATION, not self.average_mode, self.normalize_mode)
+            cap = self.res_capture          # Teste de resolução: guarda as palavras cruas consumidas
+            if cap is not None and len(cap) < self.res_capture_bytes:
+                cap.extend(self.rx_bytes[:min(res.consumed, self.res_capture_bytes - len(cap))])
             if res.consumed > 0:
                 del self.rx_bytes[:res.consumed]
         if len(res.adc) or len(res.r):
@@ -4682,9 +7273,113 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_fft_missing = None
         self.last_fft_t = 0.0
 
+    FFT_MOUSE_TIP = ('Clique: frequência e magnitude do ponto mais próximo (o marcador acompanha o espectro)\n'
+                     'Roda do mouse: zoom (sobre um eixo: só naquele eixo) | Arrastar: mover\n'
+                     'Duplo clique: volta à escala automática | Botão direito: apaga o marcador')
+
+    def _make_fft_interactive(self, plot_widget, curve, reset_view):
+        '''Zoom com a roda do mouse, arrastar para mover e clique para ler as coordenadas de um ponto.
+        Depois de um zoom manual a escala automática pausa até um duplo clique (ou troca de frequência).'''
+        item = plot_widget.getPlotItem()
+        vb = item.vb
+        item.setMouseEnabled(True, True)
+        vb.setMouseMode(pg.ViewBox.PanMode)
+        plot_widget.setToolTip(self.FFT_MOUSE_TIP)
+        marker = pg.ScatterPlotItem(size=9, pen=pg.mkPen('#1f5fbf', width=2), brush=pg.mkBrush(255, 255, 255, 0))
+        text = pg.TextItem(anchor=(0, 1), color='#000', fill=pg.mkBrush(255, 255, 255, 220),
+                           border=pg.mkPen('#1f5fbf'))
+        for it in (marker, text):
+            it.setZValue(50)
+            it.setVisible(False)
+            item.addItem(it, ignoreBounds=True)
+        cur = {'manual': False, 'freq': None, 'curve': curve, 'marker': marker, 'text': text}
+        vb.sigRangeChangedManually.connect(lambda *_: cur.__setitem__('manual', True))
+
+        def clicked(ev):
+            pos = ev.scenePos()
+            if not vb.sceneBoundingRect().contains(pos):
+                return
+            if ev.double():
+                reset_view()
+                ev.accept()
+                return
+            if ev.button() == QtCore.Qt.MouseButton.RightButton:
+                cur['freq'] = None
+                marker.setVisible(False)
+                text.setVisible(False)
+                ev.accept()
+                return
+            if ev.button() != QtCore.Qt.MouseButton.LeftButton:
+                return
+            x, y = curve.getData()
+            if x is None or len(x) == 0:
+                return
+            p = vb.mapSceneToView(pos)
+            # ponto mais próximo na tela (o eixo x e o y têm escalas muito diferentes)
+            (x0, x1), (y0, y1) = vb.viewRange()
+            sx, sy = max(x1 - x0, 1e-12), max(y1 - y0, 1e-12)
+            i = int(np.argmin(((x - p.x()) / sx) ** 2 + ((y - p.y()) / sy) ** 2))
+            cur['freq'] = float(x[i])
+            self._fft_cursor_refresh(cur)
+            ev.accept()
+        plot_widget.scene().sigMouseClicked.connect(clicked)
+        return cur
+
+    def _install_double_click_reset(self):
+        '''Duplo clique na área de dados de qualquer gráfico volta os eixos/zoom ao padrão. As FFTs já têm o seu
+        (cursor de pico) e aceitam o evento antes; os demais usam _reset_plot_view.'''
+        for pw in self.findChildren(pg.PlotWidget):
+            pw.scene().sigMouseClicked.connect(lambda ev, pw=pw: self._on_plot_double_click(pw, ev))
+
+    def _on_plot_double_click(self, pw, ev):
+        if not ev.double() or ev.isAccepted() or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        if not pw.getPlotItem().vb.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        self._reset_plot_view(pw)
+        ev.accept()
+
+    def _reset_plot_view(self, pw):
+        pi = pw.getPlotItem()
+        if pw is self.plot1:
+            if self.average_mode:
+                pi.setXRange(-self.average_pretrigger_sec, 1.0 / max(self.ref_freq, 0.1), padding=0)
+            else:
+                pi.setXRange(-self.lockin_span, 0, padding=0)
+            pi.enableAutoRange(y=True)
+        elif pw in (self.plot_audio_wave, self.plot_audio_noise):
+            pi.setXRange(-self.audio_span, 0, padding=0)
+            pi.enableAutoRange(y=True)
+        elif pw in (self.pw_dual_a, self.pw_dual_b):
+            # os dois gráficos do Modo Duplo andam juntos (eixo x compartilhado no empilhado/sobreposto)
+            for other in (self.pw_dual_a, self.pw_dual_b):
+                other.getPlotItem().enableAutoRange()
+        else:
+            pi.enableAutoRange()
+
+    @staticmethod
+    def _fft_cursor_refresh(cur):
+        f = cur['freq']
+        if f is None:
+            return
+        x, y = cur['curve'].getData()
+        if x is None or len(x) == 0:
+            return
+        i = int(np.argmin(np.abs(x - f)))
+        fx, fy = float(x[i]), float(y[i])
+        df = float(x[1] - x[0]) if len(x) > 1 else 0.0
+        cur['marker'].setData([fx], [fy])
+        cur['text'].setText(f'{fx:.6g} Hz (±{df / 2:.2g})\n{fy:.1f} dBFS')
+        cur['text'].setPos(fx, fy)
+        cur['marker'].setVisible(True)
+        cur['text'].setVisible(True)
+
     def update_audio_fft_range(self):
         '''Eixo X da FFT: faixa completa ou região em torno da frequência de referência.'''
         item = self.plot_audio_fft.getPlotItem()
+        if hasattr(self, 'audio_fft_cursor'):
+            self.audio_fft_cursor['manual'] = False
+            item.setYRange(-120, 0, padding=0)
         f = self.audio_freq
         self.audio_fft_ref_line.setPos(f)
         self.audio_fft_ref_line.setVisible(f > 0)
@@ -4736,6 +7431,9 @@ class LockInWindow(QtWidgets.QMainWindow):
     def update_opt_fft_range(self):
         '''Eixo X da FFT do OPT101: faixa completa ou região em torno da frequência de referência.'''
         item = self.plot_opt_fft.getPlotItem()
+        if hasattr(self, 'opt_fft_cursor'):
+            self.opt_fft_cursor['manual'] = False
+            self.last_opt_fft_t = 0.0
         f = self.ref_freq
         self.opt_fft_ref_line.setPos(f)
         self.opt_fft_ref_line.setVisible(f > 0)
@@ -4746,6 +7444,17 @@ class LockInWindow(QtWidgets.QMainWindow):
             w = max(0.5 * f, 20.0 / OPT_FFT_HISTORY_SEC)
             item.setXRange(max(0.0, f - w), min(FS / 2, f + w), padding=0)
             item.setTitle(f'OPT101 - espectro do ADC (FFT) em torno de {f:g} Hz')
+
+    _hann_cache = {}
+
+    @classmethod
+    def _hanning(cls, n):
+        w = cls._hann_cache.get(n)
+        if w is None:
+            if len(cls._hann_cache) > 4:
+                cls._hann_cache.clear()
+            w = cls._hann_cache[n] = np.hanning(n)
+        return w
 
     def _store_opt_samples(self, values):
         capacity = len(self.opt_history)
@@ -4764,23 +7473,24 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _update_opt_fft(self, now):
         if not (self.opt_fft_enabled and self.plot_opt_fft.isVisible()
-                and self.opt_valid_samples >= OPT_FFT_SIZE and now - self.last_opt_fft_t >= AUDIO_FFT_INTERVAL):
+                and self.opt_valid_samples >= opt_fft_size() and now - self.last_opt_fft_t >= AUDIO_FFT_INTERVAL):
             return
         self.last_opt_fft_t = now
-        # Com zoom usa todo o histórico disponível (resolução fina perto da referência)
-        n = OPT_FFT_SIZE if self.opt_fft_full else self.opt_valid_samples
+        # Com zoom usa todo o histórico disponível (resolução fina perto da referência), até OPT_FFT_ZOOM_MAX
+        n = opt_fft_size() if self.opt_fft_full else min(self.opt_valid_samples, OPT_FFT_ZOOM_MAX)
         idx = (self.opt_write_index - n + np.arange(n)) % len(self.opt_history)
         x = self.opt_history[idx].astype(np.float64) / ADC_FULL_SCALE
-        window = np.hanning(n)
+        window = self._hanning(n)
         spectrum = np.abs(np.fft.rfft(x * window)) / window.sum()
         spectrum[1:-1] *= 2.0
         frequency = np.fft.rfftfreq(n, 1.0 / FS)
         db = 20.0 * np.log10(np.maximum(spectrum, 1e-7))
         self.curve_opt_fft.setData(frequency, db)
+        self._fft_cursor_refresh(self.opt_fft_cursor)
         # Escala Y em passos de 10 dB pela faixa exibida (o fundo do ADC varia muito com o ganho do OPT101)
         (x0, x1), _ = self.plot_opt_fft.getPlotItem().vb.viewRange()
         sel = db[(frequency >= x0) & (frequency <= x1)]
-        if sel.size:
+        if sel.size and not self.opt_fft_cursor['manual']:
             hi = 10.0 * np.ceil((float(sel.max()) + 5.0) / 10.0)
             lo = 10.0 * np.floor((float(np.median(sel)) - 20.0) / 10.0)
             self.plot_opt_fft.getPlotItem().setYRange(max(lo, -160.0), min(hi, 10.0), padding=0)
@@ -4917,8 +7627,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_audio_noise.setText('Ruído/SNR: aguardando dados')
         self.audio_noise_text = None
 
-    def on_audio_lp(self, val):
-        self.audio_cutoff_lp = val
+    def on_audio_tau(self, tau):
+        self.audio_cutoff_lp = tau_cutoff(tau, AUDIO_FS_REAL)
         with self.audio_lock:
             self.audio_li.update_params(self.audio_freq, self.audio_cutoff_lp, self.audio_cutoff_hp)
         self.update_tau_labels()
@@ -5044,6 +7754,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             magnitude_dbfs = 20.0 * np.log10(np.maximum(spectrum, 1e-6))
             frequency = np.fft.rfftfreq(fft_n, 1.0 / AUDIO_FS_REAL)
             self.curve_audio_fft.setData(frequency, magnitude_dbfs)
+            self._fft_cursor_refresh(self.audio_fft_cursor)
             if self.chk_audio_fft_fit.isChecked():
                 self._fit_audio_fft(frequency, spectrum)
 
@@ -5170,7 +7881,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.last_audio_status_t = now
             self._update_audio_status(now)
             text = getattr(self, 'audio_noise_text', None)
-            if text and self.lbl_audio_noise.text() != text:
+            if text and self.lbl_audio_noise.text() != soi_i18n.tr(text):
                 self.lbl_audio_noise.setText(text)
             self._show_fft_fit(self.txt_audio_fft_fit, self.lbl_audio_fft_missing,
                                self.audio_fft_enabled and self.chk_audio_fft_fit.isChecked(),
@@ -5272,6 +7983,24 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.update_status(now)
             self.update_window_status()
 
+    def mod_warning(self):
+        '''Aviso quando a modulação passa do limite seguro para a taxa atual (FS = 200 kHz/OSR).
+        Até FS/4 (>= 4 amostras por período, média do OSR atenua < 10 %) é seguro; até 0,4·FS a medida
+        ainda sai corrigida, mas com pouca margem; acima disso a média do OSR quase anula a fundamental
+        (zero em FS) e o PLL tem poucas amostras por período. Devolve (texto, nível 0/1/2).'''
+        f = self.ref_freq
+        if f <= 0:
+            return '', 0
+        safe = [o for o in OSR_CHOICES if f <= RAW_FS / o / 4.0]
+        hint = f'use OSR {max(safe)}x ou menor' if safe else 'reduza a frequência'
+        if f > 0.4 * FS:
+            return f'Modulação acima do limite para OSR {self.osr}x (seguro até {FS / 4:.0f} Hz): {hint}', 2
+        if f > FS / 4.0:
+            return f'Modulação perto do limite para OSR {self.osr}x (seguro até {FS / 4:.0f} Hz): {hint}', 1
+        if f > 1000.0 and self.laser_power < 100.0:
+            return 'Acima de 1 kHz use PWM 100 % (a portadora de 5 kHz tem poucos ciclos por meio período)', 1
+        return '', 0
+
     def update_status(self, now):
         self.txt_sat.setVisible(False)
         if not self.link.connected and not self.simulating:
@@ -5310,8 +8039,19 @@ class LockInWindow(QtWidgets.QMainWindow):
             text = (f"Status: {status} | %ADC: <span style='color:{vcolor};font-weight:bold;'>"
                     f"{pct:.1f} %</span> | " + (f"Freq Real (PLL): {self.dsp.measured_freq:.2f} Hz"
                                                 if self.dsp.pll_locked or self.ref_freq <= 0 else
-                                                "<b>PLL destravado</b>"))
+                                                "<b>PLL destravado</b>")
+                    + f" | {FS / 1000:g} kS/s (OSR {self.osr})")
+            lost = self.link.opt_lost_samples if self.link.connected else 0
+            if lost:
+                text += (f" | <span style='color:#d00000;'>Perdas USB: {lost} amostras "
+                         f"({self.link.opt_gap_events}x)</span>")
 
+        warn, level = self.mod_warning()
+        if warn and (self.link.connected or self.simulating):
+            wcolor = '#d00000' if level == 2 else '#b05000'
+            text += f" | <span style='color:{wcolor};font-weight:bold;'>{warn}</span>"
+            if color == OK_COLOR or level == 2:
+                color = ALERT_COLOR if level == 2 else WARN_COLOR
         if text != self.last_status_text:
             self.last_status_text = text
             self.lbl_status.setText(text)
@@ -5337,14 +8077,18 @@ class LockInWindow(QtWidgets.QMainWindow):
         spins = ('sp_freq', 'sp_window', 'sp_pulses', 'sp_f0', 'sp_f1', 'sp_df', 'sp_p0', 'sp_p1', 'sp_dp',
                  'sp_audio_span', 'sp_audio_snr_alert', 'sp_audio_phase_off',
                  'sp_aud_f0', 'sp_aud_f1', 'sp_aud_df', 'sp_aud_p0', 'sp_aud_p1', 'sp_aud_dp',
-                 'sp_dual_p0', 'sp_dual_p1', 'sp_dual_dp', 'sp_dual_f0', 'sp_dual_f1', 'sp_dual_fn',
-                 'sp_dual_tau_p', 'sp_dual_tau_f', 'sp_dual_flat_tol', 'sp_dual_tau_sensor',
-                 'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1')
+                 'sp_dual_p0', 'sp_dual_p1', 'sp_dual_dp',
+                 'sp_dual_m_f0', 'sp_dual_m_f1', 'sp_dual_m_fn',
+                 'sp_dual_tau_p', 'sp_dual_flat_tol', 'sp_dual_tau_sensor',
+                 'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1', 'sp_dual_model_n',
+                 'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin')
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
-                  'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_cal_panel', 'btn_dual_model_panel', 'btn_dual_sweeps_panel', 'chk_dual_std_phase',
-                  'chk_dual_opt_tau')
-        combos = ('cmb_dual_mode_p', 'cmb_dual_mode_f', 'cmb_dual_fspace', 'cmb_dual_model', 'cmb_dual_model_target')
+                  'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_model_panel', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'chk_dual_std_phase',
+                  'chk_dual_norm', 'chk_dual_sensors')
+        # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
+        combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
+                  'cmb_cal_ref', 'cmb_cell')
         return spins, checks, combos
 
     def _fit_to_screen(self):
@@ -5385,13 +8129,25 @@ class LockInWindow(QtWidgets.QMainWindow):
                     w = getattr(self, name)
                     w.setValue(int(v) if isinstance(w, QtWidgets.QSpinBox) else v)
             # Filtros por último: a frequência redefine os cortes automáticos
-            for name in ('sp_lp', 'sp_hp', 'sp_audio_lp', 'sp_audio_hp'):
+            for name in ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
                 v = num(name)
                 if v is not None:
                     getattr(self, name).setValue(v)
+            # A varredura da calibração sempre abre com os parâmetros recomendados (τ ligado ao do INMP441)
+            self._set_spin(self.sp_dual_tau_f, CAL_SWEEP_TAU)
+            self._on_sweep_tau_edit('F', CAL_SWEEP_TAU)
             v = st.value('sample_name')
             if v is not None:
                 self.ed_sample.setText(str(v))
+            lv = st.value('dual_layout')
+            if lv in ('side', 'stacked', 'overlay'):
+                self.set_dual_layout(lv)
+            fr = st.value('dual_float_rel')
+            try:
+                fx, fy = (float(x) for x in str(fr).split(','))
+                self.dual_float.rel = (min(max(fx, 0.0), 1.0), min(max(fy, 0.0), 1.0))
+            except (TypeError, ValueError):
+                pass
             geo = st.value('geometry')
             if geo is not None:
                 self.restoreGeometry(geo)
@@ -5405,7 +8161,7 @@ class LockInWindow(QtWidgets.QMainWindow):
     def save_settings(self):
         st = QtCore.QSettings('LCTM', 'SOI Controller')
         spins, checks, combos = self._settings_widgets()
-        for name in spins + ('sp_lp', 'sp_hp', 'sp_audio_lp', 'sp_audio_hp'):
+        for name in spins + ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
             st.setValue(name, float(getattr(self, name).value()))
         for name in checks:
             st.setValue(name, bool(getattr(self, name).isChecked()))
@@ -5413,7 +8169,24 @@ class LockInWindow(QtWidgets.QMainWindow):
             st.setValue(name, int(getattr(self, name).currentIndex()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('geometry', self.saveGeometry())
+        st.setValue('dual_layout', self.dual_layout)
+        st.setValue('dual_float_rel', '%.4f,%.4f' % self.dual_float.rel)
         st.setValue('tab', self.tabs.currentIndex())
+
+    def _measuring(self):
+        '''Há uma medida em curso que a suspensão do PC interromperia?'''
+        return bool(getattr(self, 'sweep_active', False) or getattr(self, 'dual_active', False)
+                    or getattr(self, 'res_capture', None) is not None)
+
+    def _update_keep_awake(self):
+        busy = self._measuring()
+        if busy == self.keep_awake:
+            return
+        self.keep_awake = busy
+        ok = keep_system_awake(busy)
+        if busy and ok:
+            self.flash('Medida em curso: o Windows não vai suspender por inatividade até ela terminar '
+                       '(a tela ainda pode apagar; não feche a tampa do notebook).', 6.0)
 
     def closeEvent(self, event):
         try:
@@ -5423,6 +8196,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f'Preferências não salvas ({e})')
         self.timer.stop()
+        self.awake_timer.stop()
+        keep_system_awake(False)
         self.opt_thread.stop()
         self.audio_thread.stop()
         self.link.stop()
@@ -5431,8 +8206,38 @@ class LockInWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
+def resource_path(*parts):
+    """Caminho de um arquivo que acompanha a interface (pasta interface/ ou executável PyInstaller)."""
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
+def app_icon():
+    """Ícone do SOI (logo do LCTM): .ico com 16 a 256 px; PNG se o .ico não puder ser lido."""
+    icon = QtGui.QIcon()
+    for name in ('soi.ico', 'soi_256.png'):
+        path = resource_path('icones', name)
+        if os.path.exists(path):
+            icon = QtGui.QIcon(path)
+            if not icon.isNull():
+                break
+    return icon
+
+
 def main():
+    import multiprocessing
+    multiprocessing.freeze_support()      # executável (PyInstaller): o processo leitor da serial
+    if sys.platform == 'win32':
+        # Sem isto, rodando pelo python.exe, a barra de tarefas mostra o ícone do Python.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f'LCTM.SOIController.{__version__}')
+        except Exception:
+            pass
     app = pg.mkQApp("SOI Controller - LCTM")
+    icon = app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)           # janela principal, diálogos e barra de tarefas
     win = LockInWindow()
     win.show()
     # Aviso único se o Arduino não estiver ligado na abertura (não bloqueia a GUI).

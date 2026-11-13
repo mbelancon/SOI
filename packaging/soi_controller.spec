@@ -17,6 +17,7 @@ opts = parser.parse_args()
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
 NAME = 'SOI_Controller'
+ICON = os.path.join(ROOT, 'interface', 'icones', 'soi.ico')
 
 # Módulos que a interface não usa (nem o pyqtgraph com PySide6).
 EXCLUDES = [
@@ -48,10 +49,10 @@ def keep(entry):
 
 
 a = Analysis(
-    [os.path.join(ROOT, 'interface', 'stm32_opt_inmmp_novo.py')],
+    [os.path.join(ROOT, 'interface', 'soi_controller.py')],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[(os.path.join(ROOT, 'interface', 'icones'), 'icones')],   # ícone da janela
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
@@ -70,6 +71,7 @@ common = dict(
     strip=False,
     upx=opts.upx,
     console=False,
+    icon=ICON,          # ícone do .exe no Explorer (logo do LCTM, 16 a 256 px)
 )
 
 if opts.onedir:
