@@ -14,7 +14,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.2.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.3.0'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -631,6 +631,8 @@ def load_dual_csv(path):
               'freq': num(r'_f([\d.]+)Hz_', name) if kind == 'P' else None,
               'mode': mode.group(1).strip() if mode else 'não registrada',
               'tau': num(r'tau = ([\d.eE+-]+) s \(integração longa\)', header)}
+    if re.search(r'# Modulacao = externa', header):
+        params['mod'] = 'externa'
     refine = re.findall(r'# (Refino da ressonância:[^\n]+)', header)
     if refine:
         params['refine'] = refine[-1]
@@ -1751,6 +1753,10 @@ def decimate_raw(buf, osr):
 
 class PyLockIn(_MainsFilterMixin):
     def __init__(self, fs, ref_freq, cutoff_lp, cutoff_hp):
+        # Modulação externa: ExternalReference (PLL no próprio sinal) e ExtTimeSync (farol do bit 15).
+        # None = modulação interna (PLL nas bordas do bit 15, o laser do STM32).
+        self.ext = None
+        self.ext_sync = None
         self.init(fs, ref_freq, cutoff_lp, cutoff_hp)
 
     # --------------------------------------------------------------- estado
@@ -1860,14 +1866,30 @@ class PyLockIn(_MainsFilterMixin):
                 * (np.arange(n) - np.repeat(st, lens)))
 
     # ------------------------------------------------------------------ DSP
-    def process(self, buf, decimation, enable_lockin, normalize):
+    def process(self, buf, decimation, enable_lockin, normalize, stream_pos=None):
+        '''stream_pos: índice (amostras cruas desde a conexão) da primeira palavra de buf; usado só na
+        modulação externa, em que a referência é a fase θ(s) do próprio OPT101.'''
         adc, ref, consumed = self._parse(buf)
+        ext = self.ext
+        theta = None
+        if ext is not None and adc.size and stream_pos is not None:
+            if self.ext_sync is not None:     # bordas do bit 15 (farol do alinhamento com o I2S)
+                self.ext_sync.add_raw(np.frombuffer(buf, dtype='<u2', count=consumed // 2), stream_pos)
+            c = stream_pos + np.arange(adc.size, dtype=np.float64) * self.osr + 0.5 * (self.osr - 1)
+            theta = ext.process(adc.astype(np.float64), c)
+            # O traço verde do osciloscópio (e o Modo Valor Médio) passa a ser a referência do PLL
+            ref = (np.cos(theta) >= 0.0).astype(np.uint8)
         if adc.size == 0 or not enable_lockin:
             return Result(adc, ref, _E_F, _E_F, _E_F, consumed)
         n = adc.size
         x = adc.astype(np.float64)
 
-        theta = self._phase(ref)
+        if theta is not None:
+            # Mesma convenção de fase da modulação interna (onda quadrada que liga em θ = 0, PLL no centro
+            # do bloco do OSR): Δφ = φ_INMP441 − φ_OPT101 sai igual e as calibrações valem nos dois modos.
+            theta = theta + 0.5 * np.pi + TWO_PI * self.ref_freq * opt_ref_delay(self.osr)
+        else:
+            theta = self._phase(ref)
         if self.mains_enabled:
             x = self._mains_filter(x)
             adc = x.astype(np.float32)
@@ -1930,12 +1952,14 @@ class AudioLockIn(_MainsFilterMixin):
         self.alpha_lp = TWO_PI * cutoff_lp / self.fs
         self.alpha_hp = TWO_PI * cutoff_hp / self.fs
 
-    def process(self, sequence, samples, decimation):
+    def process(self, sequence, samples, decimation, theta=None):
         '''samples: int32 (PCM 24 bits). Devolve (r, fase em graus), uma saída a cada 'decimation'
-        amostras (contador persistente), em fração da escala completa.'''
+        amostras (contador persistente), em fração da escala completa. theta: fase da referência em cada
+        amostra (modulação externa, vinda do OPT101); None = referência numérica a partir do marcador.'''
         x = np.asarray(samples, dtype=np.float64) / 8388608.0
-        n = float((sequence - self.phase_origin) & 0xFFFFFFFF) + np.arange(x.size, dtype=np.float64)
-        theta = TWO_PI * np.mod(self.ref_freq * n / self.fs, 1.0)
+        if theta is None:
+            n = float((sequence - self.phase_origin) & 0xFFFFFFFF) + np.arange(x.size, dtype=np.float64)
+            theta = TWO_PI * np.mod(self.ref_freq * n / self.fs, 1.0)
         if self.mains_enabled:
             x = self._mains_filter(x)
         if not self.dc_init:
@@ -1956,6 +1980,337 @@ class AudioLockIn(_MainsFilterMixin):
         self.sample_count = (self.sample_count + x.size) % decimation
         zo = z2[np.arange(first, x.size, decimation)]
         return np.abs(zo), np.degrees(np.angle(zo))
+
+
+# ----------------------------------------------------------------------------
+# Modulação externa (chopper): referência derivada do próprio OPT101
+# ----------------------------------------------------------------------------
+# Com a luz modulada fora do SOI (chopper, ventilador), o STM32 não gera a referência. A interface:
+#  1. acha a frequência na FFT do OPT101 e a segue com um PLL sobre o próprio sinal (ExternalReference),
+#     que dá a fase θ(s) da fundamental da luz em função do índice s das amostras cruas do fluxo óptico;
+#  2. leva a mesma θ ao microfone: ADC (200 kS/s) e I2S (48 kHz) saem do mesmo cristal, a razão entre as
+#     taxas é exata e o deslocamento entre os dois fluxos vem de um "farol" (ExtTimeSync): o STM32 modula a
+#     1 Hz com PWM 0 (laser apagado); o bit 15 do OPT101 e o marcador do I2S marcam o mesmo instante.
+# Os dois lock-ins usam a mesma θ: erros dela (atraso de filtro, jitter do chopper) se cancelam em
+# S = R_INMP441/R_OPT101 e Δφ = φ_INMP441 − φ_OPT101.
+EXT_BEACON_HZ = 1.0           # farol do alinhamento ADC↔I2S (F do STM32 no modo externo; PWM 0)
+EXT_FMIN_DEFAULT = 20.0       # faixa de busca padrão da frequência do chopper (Hz)
+EXT_FMAX_DEFAULT = 5000.0
+EXT_TIMELINE_SEC = 4.0        # quanto da fase θ(s) fica guardado para o lock-in do INMP441
+EXT_AUDIO_PENDING_SEC = 1.5   # áudio à espera da θ do OPT101 (descartado se passar disso)
+# Borda da luz em relação à primeira amostra com o rótulo novo (amostras cruas): a troca ocorre, em média,
+# meia amostra antes; o rótulo segue a escrita do DMA (12 ciclos do ADC a 21 MHz depois do instante
+# amostrado) e o laser muda ~0,2 µs depois do rótulo (mesma cadeia de opt_ref_delay).
+EXT_EDGE_CORR = -0.5 + (12.0 / 21e6 + 0.2e-6) * RAW_FS
+EXT_AUDIO_RATIO = RAW_FS / AUDIO_FS_REAL      # amostras cruas do ADC por amostra I2S (exato: mesmo cristal)
+
+
+def _sdiff32(a, b):
+    '''a − b para contadores de 32 bits, com sinal.'''
+    return ((int(a) - int(b) + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+
+
+class ExtTimeSync:
+    '''Relação entre o índice s do fluxo óptico (amostras cruas desde a conexão) e o número k da amostra
+    I2S: s = L + (k − k_ref)·RAW_FS/AUDIO_FS_REAL. O marcador do I2S dá k_ref (amostra em que o TIM4 do
+    farol partiu) e a posição aproximada do fluxo óptico nesse instante; as bordas do bit 15 (todas em
+    L + m·meio período, m ≥ 1) dão L com precisão de fração de amostra (média de várias bordas).
+    Usada pela thread do OPT101 (escreve) e pela do INMP441 (lê).'''
+    MAX_EDGES = 64            # média móvel das últimas bordas
+
+    def __init__(self, beacon_hz=EXT_BEACON_HZ):
+        self.lock = threading.Lock()
+        self.beacon_hz = beacon_hz
+        self.reset()
+
+    def reset(self):
+        with self.lock:
+            self.half = RAW_FS / (2.0 * actual_mod_freq(self.beacon_hz))   # meio período em amostras cruas
+            self.pending = None          # (k_m, pos_m) do último marcador
+            self.est = deque(maxlen=self.MAX_EDGES)
+            self.map = None              # (k_ref, L) em uso
+            self.outliers = 0
+            self.last_bit = None
+            self.marker_count = 0
+
+    def set_marker(self, k_m, pos_m):
+        with self.lock:
+            self.pending = (int(k_m), float(pos_m))
+            self.est.clear()
+            self.outliers = 0
+            self.marker_count += 1
+
+    def add_raw(self, words, s0):
+        '''words: palavras cruas (uint16) a partir do índice s0 do fluxo. Procura as bordas do bit 15.'''
+        if words.size == 0:
+            return
+        bit = (words >> 15).astype(np.int8)
+        prev = self.last_bit if self.last_bit is not None else int(bit[0])
+        self.last_bit = int(bit[-1])
+        d = np.diff(bit, prepend=np.int8(prev))
+        edges = np.flatnonzero(d)
+        if edges.size == 0:
+            return
+        with self.lock:
+            if self.pending is None:
+                return
+            k_m, pos_m = self.pending
+            for e in edges:
+                x = s0 + float(e) + EXT_EDGE_CORR
+                m = int(round((x - pos_m) / self.half))
+                if m < 1 or abs(x - pos_m - m * self.half) > 0.25 * self.half:
+                    continue             # borda anterior ao farol (ligou o laser no comando) ou fora do lugar
+                L = x - m * self.half
+                if self.est and abs(L - np.mean(self.est)) > 4.0:
+                    self.outliers += 1
+                    if self.outliers >= 3:      # o fluxo mudou (reconexão sem aviso): recomeça a média
+                        self.est.clear()
+                        self.outliers = 0
+                    continue
+                self.outliers = 0
+                self.est.append(L)
+            if self.est:
+                self.map = (k_m, float(np.mean(self.est)))
+
+    def ready(self):
+        return self.map is not None
+
+    def audio_to_raw(self, k, n):
+        '''Índices s (float64) das amostras I2S k..k+n−1, ou None sem alinhamento.'''
+        m = self.map
+        if m is None:
+            return None
+        k_ref, L = m
+        return L + (_sdiff32(k, k_ref) + np.arange(n, dtype=np.float64)) * EXT_AUDIO_RATIO
+
+
+class ExternalReference:
+    '''PLL sobre o próprio sinal do OPT101 (luz modulada por fora). A frequência inicial vem da FFT de
+    uma janela do sinal (pico na faixa de busca, interpolado); depois um PLL de 2ª ordem, atualizado em
+    blocos de um número inteiro de períodos, mantém θ(s) contínua e linear por trechos (um trecho por
+    bloco). θ é a fase da fundamental do OPT101: x ≈ A·cos θ. Guarda os trechos dos últimos
+    EXT_TIMELINE_SEC para o lock-in do INMP441 (theta_at, chamado da thread de áudio).'''
+
+    def __init__(self, fmin=EXT_FMIN_DEFAULT, fmax=EXT_FMAX_DEFAULT):
+        self.lock = threading.Lock()
+        self.fmin, self.fmax = float(fmin), float(fmax)
+        self.reset()
+
+    def set_range(self, fmin, fmax):
+        fmin, fmax = sorted((float(fmin), float(fmax)))
+        if (fmin, fmax) != (self.fmin, self.fmax):
+            self.fmin, self.fmax = fmin, fmax
+            self.reset()
+
+    def reset(self, f_guess=None):
+        with self.lock:
+            self.state = 'ACQ'           # 'ACQ' procurando a frequência; 'TRACK' seguindo
+            self.locked = False
+            self.f = float(f_guess) if f_guess else 0.0
+            self.w = TWO_PI * max(self.f, self.fmin) / RAW_FS   # rad por amostra crua (trecho atual)
+            self.w_base = self.w
+            self.s0 = None               # início do trecho atual (s) e θ nesse ponto
+            self.th0 = 0.0
+            self.blk_end = None
+            self.blk_len = 0.0
+            self.acc = 0j
+            self.acc_x = 0.0
+            self.cnt = 0
+            self.dc = None
+            self.err_prev = 0.0
+            self.err_ema = 0.0
+            self.amp = 0.0
+            self.nblocks = 0
+            self.acq_x = []
+            self.acq_c = []
+            self.acq_n = 0
+            self.segs = deque()          # (s_início, θ_início, w)
+            self.stats = deque()         # (s, f instantânea, erro de fase) por bloco
+            self.msg = 'procurando a frequência no sinal do OPT101'
+            self.f_mean = self.f_std = self.jitter_deg = None
+            self.reacq = 0
+            self.spacing = 16.0
+            self.last_c = -np.inf
+
+    # ---------------------------------------------------------------- aquisição pela FFT
+    def _acq_span(self):
+        return float(np.clip(12.0 / self.fmin, 0.25, 3.0))   # s: ≥ 12 períodos da menor frequência
+
+    def _acquire(self, x, c):
+        self.acq_x.append(np.asarray(x, dtype=np.float64))
+        self.acq_c.append(np.asarray(c, dtype=np.float64))
+        self.acq_n += x.size
+        if self.acq_n < 8:
+            return
+        c_first, c_last = self.acq_c[0][0], self.acq_c[-1][-1]
+        if (c_last - c_first) / RAW_FS < self._acq_span():
+            return
+        xx = np.concatenate(self.acq_x)
+        cc = np.concatenate(self.acq_c)
+        # janela deslizante: guarda a metade mais nova para a próxima tentativa
+        half = xx.size // 2
+        self.acq_x, self.acq_c, self.acq_n = [xx[half:]], [cc[half:]], xx.size - half
+        fs = RAW_FS / float(np.median(np.diff(cc[:64]))) if cc.size > 2 else RAW_FS
+        y = (xx - xx.mean()) * np.hanning(xx.size)
+        nfft = 1 << int(np.ceil(np.log2(xx.size * 4)))
+        spec = np.abs(np.fft.rfft(y, nfft))
+        freqs = np.fft.rfftfreq(nfft, 1.0 / fs)
+        band = (freqs >= self.fmin) & (freqs <= min(self.fmax, 0.45 * fs))
+        if band.sum() < 3:
+            self.msg = 'faixa de busca fora da taxa de amostragem (reduza o OSR)'
+            return
+        idx = np.flatnonzero(band)
+        k = idx[np.argmax(spec[idx])]
+        floor = float(np.median(spec[idx])) + 1e-12
+        if spec[k] < 8.0 * floor or k <= 0 or k >= spec.size - 1:
+            self.msg = (f'sem pico claro na faixa {fmt_hz(self.fmin)}–{fmt_hz(self.fmax)} '
+                        '(a luz está modulada? o OPT101 vê o feixe?)')
+            return
+        a, b, g = np.log(spec[k - 1] + 1e-30), np.log(spec[k] + 1e-30), np.log(spec[k + 1] + 1e-30)
+        den = a - 2.0 * b + g
+        delta = 0.5 * (a - g) / den if den < 0 else 0.0
+        f0 = (k + float(np.clip(delta, -0.5, 0.5))) * fs / nfft
+        # fase da fundamental no fim da janela (últimos ~10 períodos, sem janela para não deslocar a fase)
+        n_tail = int(min(cc.size, max(8, round(10.0 * fs / f0))))
+        ct, xt = cc[-n_tail:], xx[-n_tail:]
+        z = np.sum((xt - xt.mean()) * np.exp(-1j * TWO_PI * f0 * (ct - ct[-1]) / RAW_FS))
+        self.f = f0
+        self.w = self.w_base = TWO_PI * f0 / RAW_FS
+        self.s0 = float(ct[-1])
+        self.th0 = float(np.angle(z))
+        self.dc = float(xt.mean())
+        self.state = 'TRACK'
+        self.nblocks = 0
+        self.err_ema = 0.0
+        self.err_prev = 0.0
+        self.stats.clear()               # estatística só do trecho travado nesta frequência
+        self._new_block(self.s0)
+        self.acq_x, self.acq_c, self.acq_n = [], [], 0
+        self.msg = f'frequência encontrada: {fmt_hz(f0)}; travando'
+
+    # ---------------------------------------------------------------- PLL
+    def _gains(self):
+        '''Ganhos por bloco do PLL de 2ª ordem (ζ = 0,707) com banda de ruído B_L = f/50 (0,5 a 10 Hz).'''
+        bl = float(np.clip(self.f / 50.0, 0.5, 10.0))
+        wn_t = 2.0 * bl / (0.707 + 1.0 / (4.0 * 0.707)) * self.blk_len / RAW_FS
+        return 2.0 * 0.707 * wn_t, wn_t * wn_t
+
+    def _new_block(self, start):
+        f = max(self.f, 1e-3)
+        per = RAW_FS / f
+        n_per = max(1, int(round(0.005 * f)))          # ~5 ms, número inteiro de períodos
+        self.blk_len = max(n_per * per, 8.0 * self.spacing)
+        self.blk_end = start + self.blk_len
+        self.acc, self.acc_x, self.cnt = 0j, 0.0, 0
+
+    def _end_block(self):
+        end = self.blk_end
+        th_end = self.th0 + self.w * (end - self.s0)
+        if self.cnt > 0:
+            err = float(np.angle(self.acc)) if self.acc != 0 else 0.0
+            self.amp = 2.0 * abs(self.acc) / self.cnt
+            self.dc = self.acc_x / self.cnt
+            kp, ki = self._gains()
+            self.w_base += ki * err / self.blk_len
+            self.w = self.w_base + kp * err / self.blk_len
+            self.f = self.w_base * RAW_FS / TWO_PI
+            self.err_ema += 0.1 * (abs(err) - self.err_ema)
+            self.nblocks += 1
+            self.stats.append((end, self.f, err))
+            while self.stats and end - self.stats[0][0] > 2.0 * RAW_FS:
+                self.stats.popleft()
+            # travado: erro de fase médio pequeno depois de alguns blocos; perde a trava se o erro cresce,
+            # se a frequência sai da faixa ou se a fundamental some
+            if self.nblocks >= 10:
+                self.locked = self.err_ema < 0.5
+                lost = (self.err_ema > 1.2 or not (0.8 * self.fmin <= self.f <= 1.25 * self.fmax))
+                if lost:
+                    self.reacq += 1
+                    f_old = self.f
+                    self.state, self.locked = 'ACQ', False
+                    self.w = self.w_base = TWO_PI * min(max(f_old, self.fmin), self.fmax) / RAW_FS
+                    self.msg = 'referência perdida; procurando de novo'
+                    self.acq_x, self.acq_c, self.acq_n = [], [], 0
+        self.s0, self.th0 = end, th_end
+        self.segs.append((end, th_end, self.w))
+        while len(self.segs) > 2 and end - self.segs[1][0] > EXT_TIMELINE_SEC * RAW_FS:
+            self.segs.popleft()
+        self._new_block(end)
+
+    def process(self, x, c):
+        '''x: amostras do OPT101 (média de OSR); c: índice cru (float) do centro de cada uma, espaçamento OSR.
+        Devolve θ (rad, desenrolada) em cada amostra.'''
+        n = x.size
+        if n == 0:
+            return _E_F
+        x = np.asarray(x, dtype=np.float64)
+        c = np.asarray(c, dtype=np.float64)
+        if n > 1:
+            self.spacing = float(c[1] - c[0])
+        with self.lock:
+            if self.s0 is None:          # primeira chamada: θ corre livre na frequência inicial
+                self.s0, self.th0 = float(c[0]), 0.0
+                self._new_block(self.s0)
+                self.segs.append((self.s0, self.th0, self.w))
+            out = np.empty(n)
+            i = 0
+            while i < n:
+                j = i + int(np.searchsorted(c[i:], self.blk_end))
+                if j > i:
+                    th = self.th0 + self.w * (c[i:j] - self.s0)
+                    out[i:j] = th
+                    if self.state == 'TRACK':
+                        xs = x[i:j]
+                        dc = self.dc if self.dc is not None else float(xs.mean())
+                        self.acc += np.sum((xs - dc) * np.exp(-1j * th))
+                        self.acc_x += float(xs.sum())
+                        self.cnt += j - i
+                if j >= n:
+                    break
+                self._end_block()
+                i = j
+            if self.state == 'ACQ':
+                self._acquire(x, c)
+                if self.state == 'TRACK':        # começou a seguir: novo trecho a partir do fim da janela
+                    self.segs.append((self.s0, self.th0, self.w))
+            self.last_c = float(c[-1])
+            self._update_stats()
+            return out
+
+    def _update_stats(self):
+        st = self.stats
+        if self.state != 'TRACK' or len(st) < 3:
+            self.f_mean = self.f_std = self.jitter_deg = None
+            return
+        s_last = st[-1][0]
+        recent = [(f, e) for s, f, e in st if s_last - s <= RAW_FS]   # último segundo
+        if len(recent) < 3:
+            recent = list((f, e) for _, f, e in st)[-3:]
+        fs_, es = np.array(recent).T
+        self.f_mean = float(fs_.mean())
+        self.f_std = float(fs_.std())
+        self.jitter_deg = float(np.degrees(np.sqrt(np.mean(es * es))))
+        if self.locked:
+            self.msg = 'travado'
+        elif self.nblocks < 10:
+            self.msg = f'frequência encontrada: {fmt_hz(self.f)}; travando'
+        else:
+            self.msg = 'seguindo, mas a fase oscila muito (sinal fraco ou chopper instável)'
+
+    def theta_at(self, s):
+        '''θ nos índices crus s (float64, crescentes). Devolve (θ, situação): 'ok', 'wait' (o OPT101 ainda não
+        chegou lá) ou 'old' (anterior ao que está guardado).'''
+        with self.lock:
+            if not self.segs or s[-1] > self.last_c:
+                return None, 'wait'
+            segs = self.segs
+            starts = np.fromiter((g[0] for g in segs), dtype=np.float64, count=len(segs))
+            if s[0] < starts[0]:
+                return None, 'old'
+            th0 = np.fromiter((g[1] for g in segs), dtype=np.float64, count=len(segs))
+            w = np.fromiter((g[2] for g in segs), dtype=np.float64, count=len(segs))
+            k = np.searchsorted(starts, s, side='right') - 1
+            return th0[k] + w[k] * (s - starts[k]), 'ok'
 
 
 class RawRing:
@@ -2382,13 +2737,28 @@ class SerialLink(threading.Thread):
         self.opt_gap_events = 0
         self.opt_crc_errors = 0
         self.opt_received_samples = 0
+        # Índice das palavras do fluxo óptico (amostras cruas desde a conexão, perdas preenchidas): o primeiro
+        # byte de _opt_buf é a palavra _opt_buf_first; _opt_out_words conta tudo o que já entrou no fluxo.
+        self._opt_out_words = 0
+        self._opt_buf_first = 0
+        # Marcadores de modulação com a posição do fluxo óptico em que chegaram: (amostra I2S, índice óptico)
+        self.mod_markers = deque(maxlen=16)
 
     # -- API para a GUI --
     def take_optical(self):
+        '''(bytes crus, índice no fluxo da primeira palavra).'''
         with self._lock:
             optical = bytes(self._opt_buf)
+            first = self._opt_buf_first
+            self._opt_buf_first += len(optical) // 2
             self._opt_buf.clear()
-        return optical
+        return optical, first
+
+    def take_markers(self):
+        with self._lock:
+            out = list(self.mod_markers)
+            self.mod_markers.clear()
+        return out
 
     def take_audio(self):
         with self._lock:
@@ -2436,6 +2806,7 @@ class SerialLink(threading.Thread):
         buf.extend(data)
         optical = bytearray()
         audio = []
+        markers = []
         pos = 0
         size = len(buf)
 
@@ -2480,7 +2851,10 @@ class SerialLink(threading.Thread):
                     break
                 crc = int.from_bytes(buf[pos + 8:pos + 10], 'little')
                 if self._crc16_ccitt(buf[pos + 4:pos + 8]) == crc:
-                    audio.append((int.from_bytes(buf[pos + 4:pos + 8], 'little'), None))
+                    k_m = int.from_bytes(buf[pos + 4:pos + 8], 'little')
+                    audio.append((k_m, None))
+                    # o firmware manda o óptico antes do marcador: a posição atual do fluxo é a do farol (±50 ms)
+                    markers.append((k_m, self._opt_out_words + len(optical) // 2))
                     pos += MOD_MARKER_SIZE
                     continue
                 pos += 1
@@ -2520,7 +2894,10 @@ class SerialLink(threading.Thread):
         if optical or audio:
             with self._lock:
                 self._opt_buf.extend(optical)
+                self._opt_out_words += len(optical) // 2
+                self.mod_markers.extend(markers)
                 if len(self._opt_buf) > MAX_RX_BYTES:
+                    self._opt_buf_first += (len(self._opt_buf) - MAX_RX_BYTES) // 2
                     del self._opt_buf[:-MAX_RX_BYTES]
                 for sequence, samples in audio:      # samples None = marcador de modulação
                     self._audio_chunks.append((sequence, samples))
@@ -2701,6 +3078,60 @@ class SerialLink(threading.Thread):
 # ----------------------------------------------------------------------------
 # Janela principal
 # ----------------------------------------------------------------------------
+class ChopperSimulator:
+    '''Simulação da modulação externa: um ventilador/chopper com frequência nominal ajustável (o campo
+    Freq faz de botão do chopper) que deriva devagar, pás um pouco desiguais e luz trapezoidal. A fase da
+    luz é uma função determinística do tempo, então o OPT101 e o INMP441 simulados (gerados em threads
+    diferentes) veem a mesma luz. Também simula o farol do STM32 (bit 15 a 1 Hz e marcador do I2S).
+    Tempo t = 0 no início da simulação; amostra óptica n em t = n/RAW_FS; amostra I2S k em
+    t = (k − K0)/AUDIO_FS_REAL.'''
+    K0 = 123456                   # número da primeira amostra I2S (o firmware conta desde a partida)
+    LAUNCH_S = 0.2                # instante em que o farol parte (s)
+    WANDER = ((2.5, 0.05, 0.3), (0.4, 0.4, 1.1), (0.05, 3.0, 2.0))   # (rad, Hz, fase): deriva da rotação
+    BLADES = 7
+    BLADE_PM = 0.04               # rad: pás desiguais (modulação de fase na frequência de rotação)
+
+    def __init__(self, f_set):
+        self.lock = threading.Lock()
+        self.segs = [(0.0, float(f_set), 0.0)]     # (t_início, f nominal, fase da rotação nominal)
+        self.k_launch = self.K0 + int(round(self.LAUNCH_S * AUDIO_FS_REAL))
+        self.t_launch = (self.k_launch - self.K0) / AUDIO_FS_REAL
+        self.half = 0.5 / actual_mod_freq(EXT_BEACON_HZ)
+        self.marker_sent = False
+
+    def set_freq(self, f, t):
+        with self.lock:
+            t0, f0, p0 = self.segs[-1]
+            t = max(t, t0)
+            self.segs.append((t, float(max(f, 0.1)), p0 + TWO_PI * f0 * (t - t0)))
+
+    def marker(self):
+        '''(k do marcador, posição óptica aproximada), como o SerialLink registraria.'''
+        return self.k_launch, self.t_launch * RAW_FS + 300.0
+
+    def phase(self, t):
+        with self.lock:
+            segs = list(self.segs)
+        ts = np.array([g[0] for g in segs])
+        k = np.searchsorted(ts, t, side='right') - 1
+        fs_ = np.array([g[1] for g in segs])[k]
+        p = np.array([g[2] for g in segs])[k] + TWO_PI * fs_ * (t - ts[k])
+        for a, nu, ph in self.WANDER:
+            p = p + a * np.sin(TWO_PI * nu * t + ph)
+        return p + self.BLADE_PM * np.sin(p / self.BLADES), fs_
+
+    @staticmethod
+    def light(p):
+        return np.clip(0.5 + 0.9 * np.cos(p), 0.0, 1.0)     # feixe maior que a fenda: trapézio
+
+    def beacon_label(self, n):
+        '''Bit 15 nas amostras ópticas n: 1 desde o comando, onda quadrada a partir do farol. O rótulo segue
+        a convenção de ExtTimeSync (troca da luz 0,154 amostra depois do instante amostrado).'''
+        t = (n + EXT_EDGE_CORR + 0.5) / RAW_FS
+        m = np.floor((t - self.t_launch) / self.half)
+        return np.where(t < self.t_launch, 1, (m.astype(np.int64) % 2 == 0)).astype(np.uint16)
+
+
 class SignalSimulator:
     '''Gera as palavras cruas do firmware 2.0.0 (uint16 LE a 200 kS/s: ADC de 12 bits + bit 15 do laser),
     sem STM32; a interface faz a sobreamostragem como faria com o STM32.
@@ -2719,12 +3150,12 @@ class SignalSimulator:
         self.a = float(np.exp(-1.0 / (fs * self.TAU)))
         self.reset()
 
-    def reset(self):
-        self.t_last = None
+    def reset(self, epoch=None):
+        self.t_last = epoch
         self.n = 0
         self.y = 0.0
 
-    def generate(self, now, freq, power_pct):
+    def generate(self, now, freq, power_pct, chopper=None):
         if self.t_last is None:
             self.t_last = now
             return b''
@@ -2733,10 +3164,18 @@ class SignalSimulator:
             return b''
         m = min(m, int(self.fs // 4))
         self.t_last += m / self.fs
-        if now - self.t_last > 1.0:      # GUI parada: não tenta recuperar o atraso
+        if now - self.t_last > 1.0 and chopper is None:   # GUI parada: não tenta recuperar o atraso
             self.t_last = now
         idx = self.n + np.arange(m)
         self.n += m
+        if chopper is not None:
+            # Luz modulada por fora (LED contínuo + chopper): o bit 15 é só o farol do STM32 (PWM 0)
+            t = idx / self.fs
+            p, _ = chopper.phase(t)
+            sig = (self.BASELINE + 0.45 * chopper.light(p) + 0.003 * np.sin(2 * np.pi * 60.0 * t)
+                   + self.NOISE * self.rng.standard_normal(m))
+            adc = np.clip(np.rint(sig * 4095.0), 0, 4095).astype('<u2')
+            return (adc | (chopper.beacon_label(idx) << 15)).tobytes()
         if freq > 0:
             ref = ((idx * actual_mod_freq(freq) / self.fs) % 1.0 < 0.5).astype(np.uint8)
         else:
@@ -2774,10 +3213,11 @@ class AudioSimulator:
         self.sample = None
         self.reset()
 
-    def reset(self):
-        self.t_last = None
+    def reset(self, epoch=None):
+        self.t_last = epoch
         self.n = 0
         self.phase = 0.0
+        self.marker_done = False
         self.freq = None          # última frequência: a troca reinicia a onda do laser (como o firmware)
         self.n0 = 0
         self._init_pink()
@@ -2803,7 +3243,7 @@ class AudioSimulator:
             out += y
         return out
 
-    def generate(self, now, freq, power_pct):
+    def generate(self, now, freq, power_pct, chopper=None):
         '''Retorna lista de (sequência, amostras int32 de 24 bits com sinal).'''
         if self.t_last is None:
             self.t_last = now
@@ -2813,6 +3253,8 @@ class AudioSimulator:
             return []
         m = min(m, AUDIO_FS)
         self.t_last += m / AUDIO_FS
+        if chopper is not None:
+            return self._generate_ext(m, chopper)
         markers = []
         if freq != self.freq:
             # O firmware reinicia o TIM4 num instante arbitrário e informa a amostra I2S da borda
@@ -2839,6 +3281,32 @@ class AudioSimulator:
              + self._pink(m))
         pcm = np.clip(np.rint(x * 8388607.0), -8388608, 8388607).astype(np.int32)
         chunks = markers + [((self.n + k) & 0xFFFFFFFF, pcm[k:k + self.CHUNK]) for k in range(0, m, self.CHUNK)]
+        self.n += m
+        return chunks
+
+    def _generate_ext(self, m, chopper):
+        '''Modulação externa: o tom segue a fase da luz do chopper simulado (mesma luz do OPT101).'''
+        idx = self.n + np.arange(m)
+        t = idx / AUDIO_FS_REAL
+        p, f = chopper.phase(t)
+        w = 2.0 * np.pi * f * self.TONE_TAU
+        amp = self.TONE_FULL_POWER * 0.6 / np.sqrt(1.0 + w * w)
+        ph = p - np.arctan(w)
+        if self.sample is not None:
+            k, n_s, ph_s = self.sample
+            amp = amp * k * (f / 100.0) ** (-n_s)
+            ph = ph + np.radians(ph_s - 45.0 * n_s)
+        x = (self.DC + amp * np.cos(ph)
+             + self.HUM * np.sin(2.0 * np.pi * 60.0 * idx / AUDIO_FS)
+             + self.NOISE_RMS * self.rng.standard_normal(m)
+             + self._pink(m))
+        pcm = np.clip(np.rint(x * 8388607.0), -8388608, 8388607).astype(np.int32)
+        k0 = chopper.K0 + self.n
+        chunks = []
+        if not self.marker_done:
+            self.marker_done = True
+            chunks.append((chopper.k_launch & 0xFFFFFFFF, None))
+        chunks += [((k0 + k) & 0xFFFFFFFF, pcm[k:k + self.CHUNK]) for k in range(0, m, self.CHUNK)]
         self.n += m
         return chunks
 
@@ -3207,7 +3675,17 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.res_capture = None               # Teste de resolução: bytes crus capturados (None = parado)
         self.dsp = PyLockIn(FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
         self.rx_bytes = bytearray()
+        self.rx_pos = 0                       # índice no fluxo óptico da primeira palavra de rx_bytes
         self.dsp_lock = threading.Lock()      # protege dsp e rx_bytes (thread do OPT101)
+        # Modulação externa (chopper): PLL no próprio OPT101 e alinhamento ADC↔I2S pelo farol do bit 15
+        self.ext_mode = False
+        self.ext_ref = ExternalReference()
+        self.ext_sync = ExtTimeSync()
+        self.audio_ext_pending = deque()      # áudio esperando a fase do OPT101 (thread do INMP441)
+        self.audio_ext_drops = 0
+        self.chopper_sim = None               # ChopperSimulator na simulação do modo externo
+        self._ext_resync_t = 0.0
+        self._ext_tuned_f = None              # frequência em que os cortes automáticos foram aplicados
         self.opt_results = deque()
 
         # --- Lock-in do INMP441 (parâmetros próprios, independentes do OPT101) ---
@@ -3299,7 +3777,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.flash_until = 0.0
 
         # --- Serial em thread ---
-        self.link = SerialLink(lambda: (self.ref_freq, self.laser_power))
+        self.link = SerialLink(self._link_params)
         self.simulator = SignalSimulator()
         self.audio_sim = AudioSimulator()
         self.simulating = False
@@ -3341,9 +3819,26 @@ class LockInWindow(QtWidgets.QMainWindow):
         lbl_exc = QtWidgets.QLabel('Excitação:')
         lbl_exc.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_exc)
+        self.cmb_mod = QtWidgets.QComboBox()
+        self.cmb_mod.addItems(['Interna', 'Externa'])
+        self.cmb_mod.setToolTip(
+            'Interna: o STM32 modula o laser (PWM em PA8) na frequência escolhida e dá a referência dos lock-ins.\n'
+            'Externa: a luz é modulada por fora (chopper, ventilador) e a fonte é alimentada por fora; o SOI acha a\n'
+            'frequência no sinal do OPT101 e usa a fase dele como referência dos dois lock-ins (OPT101 e INMP441).\n'
+            'O OPT101 precisa ver a luz já modulada. No modo externo o STM32 fica com PWM 0 e modula só um "farol"\n'
+            'de 1 Hz no bit de referência, que alinha o OPT101 ao microfone (não ligue nada em PA8).\n'
+            'Vale para as três abas; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).')
+        self.cmb_mod.currentIndexChanged.connect(self.on_mod_mode)
+        excitation.addWidget(self.cmb_mod)
         for label, w in (('Freq (Hz):', self.sp_freq), ('PWM (%):', self.sp_power)):
-            excitation.addWidget(QtWidgets.QLabel(label))
+            lbl = QtWidgets.QLabel(label)
+            excitation.addWidget(lbl)
             excitation.addWidget(w)
+        self.lbl_power = lbl                  # PWM some na modulação externa (o lugar vai para a frequência detectada)
+        self.lbl_ext = QtWidgets.QLabel('')
+        self.lbl_ext.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_ext.setVisible(False)
+        excitation.addWidget(self.lbl_ext)
         excitation.addSpacing(8)
         lbl_sample = QtWidgets.QLabel('Amostra:')
         lbl_sample.setStyleSheet('font-weight:bold;')
@@ -3454,8 +3949,32 @@ class LockInWindow(QtWidgets.QMainWindow):
             'histograma dos códigos crus do ADC.')
         self.btn_res_test.clicked.connect(self.open_resolution_test)
         top.addWidget(self.btn_res_test)
+        # Faixa em que a frequência do chopper é procurada (modulação externa)
+        self.ext_range_w = QtWidgets.QWidget()
+        er = QtWidgets.QHBoxLayout(self.ext_range_w)
+        er.setContentsMargins(0, 0, 0, 0)
+        lbl = QtWidgets.QLabel('Busca da modulação externa:')
+        lbl.setStyleSheet('font-weight:bold;')
+        er.addWidget(lbl)
+        self.sp_ext_fmin = self._dspin(1.0, 5000.0, EXT_FMIN_DEFAULT, 1, 5.0, self.on_ext_range, 90, ' Hz')
+        self.sp_ext_fmax = self._dspin(1.0, 5000.0, EXT_FMAX_DEFAULT, 1, 50.0, self.on_ext_range, 100, ' Hz')
+        for w in (self.sp_ext_fmin, self.sp_ext_fmax):
+            w.setToolTip('Faixa em que a frequência do chopper é procurada na FFT do OPT101 (o maior pico).\n'
+                         'Com um ventilador de pás desiguais aparece também a frequência de rotação (f/nº de pás):\n'
+                         'estreite a faixa em volta da frequência das pás se a busca travar na errada.')
+        er.addWidget(QtWidgets.QLabel('de'))
+        er.addWidget(self.sp_ext_fmin)
+        er.addWidget(QtWidgets.QLabel('a'))
+        er.addWidget(self.sp_ext_fmax)
+        self.btn_ext_search = QtWidgets.QPushButton('Procurar de novo')
+        self.btn_ext_search.setToolTip('Esquece a frequência atual e procura de novo na FFT do OPT101.')
+        self.btn_ext_search.clicked.connect(lambda: self.on_ext_range(force=True))
+        er.addWidget(self.btn_ext_search)
+        self.ext_range_w.setVisible(False)
+        er.addStretch(1)
         top.addStretch(1)
         root.addLayout(top)
+        root.addWidget(self.ext_range_w)      # linha própria: não alarga a janela
 
         # Osciloscópio
         self.plot_raw = pg.PlotWidget()
@@ -4261,6 +4780,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         box_m.setVisible(False)          # uma varredura em frequência só (a da calibração serve para medir)
         box_m.setParent(self.dual_pwm_panel)
         pbox.addWidget(box_f, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        self.dual_manual_box = self._build_manual_sweep_box()
+        self.dual_manual_box.setVisible(False)
+        pbox.addWidget(self.dual_manual_box, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         self.btn_dual_pwm_sub = QtWidgets.QPushButton('Casada em PWM ▸')
         self.btn_dual_pwm_sub.setCheckable(True)
         self.btn_dual_pwm_sub.setFlat(True)
@@ -4943,6 +5465,19 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_sim.sample = (m['sim_k'], CAL_CELL_N.get(cell, 1.0), 10.0 * (len(key) % 5) - 20.0)
         self.cal_pending = slot
         self.lbl_cal_s_state[slot].setText('medindo…')
+        if self.ext_mode:
+            # Modulação externa: varredura manual; "Concluir" guarda a varredura como amostra do slot
+            self.cal_pending = None
+            if not self.btn_dual_pwm_panel.isChecked():
+                self.btn_dual_pwm_panel.setChecked(True)
+            self.toggle_manual_sweep(slot)
+            if self.dual_active:
+                self.btn_cal_make.setEnabled(False)
+                self.flash(f'Varra o chopper pela faixa da calibração e clique em Concluir (amostra {slot}).', 6.0)
+            else:
+                self.audio_sim.sample = None
+                self.lbl_cal_s_state[slot].setText(self._cal_slot_text(slot))
+            return
         self.toggle_dual_sweep('F')
         if not self.dual_active:                    # não começou (aviso cancelado, OPT101 em Valor Médio…)
             self.cal_pending = None
@@ -5392,6 +5927,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         if self.dual_active:
             self.flash('Espere a varredura atual terminar (ou cancele) antes de refinar.')
             return
+        if self.ext_mode:
+            self.flash('Modulação externa: meça os pontos da ressonância na varredura manual.')
+            return
         if not getattr(self, 'dual_results', None) or self.dual_kind != 'F':
             self.flash('Rode (ou abra) uma varredura em frequência antes de refinar a ressonância.')
             return
@@ -5464,11 +6002,207 @@ class LockInWindow(QtWidgets.QMainWindow):
             return True
         return box.clickedButton() is keep
 
+    # ------------------------------------------------------------ Varredura manual (modulação externa)
+    def _build_manual_sweep_box(self):
+        '''Quadro da varredura em frequência com modulação externa: você muda a frequência do chopper e a
+        interface grava um ponto quando ela fica estável (ou quando você manda).'''
+        box = self._group('Varredura em frequência manual (modulação externa)')
+        lay = QtWidgets.QVBoxLayout(box)
+        lay.setContentsMargins(6, 2, 6, 4)
+        lay.setSpacing(3)
+        row = QtWidgets.QHBoxLayout()
+        self.chk_man_auto = QtWidgets.QCheckBox('Gravar sozinho quando a frequência estabilizar')
+        self.chk_man_auto.setChecked(True)
+        self.chk_man_auto.setToolTip('Grava um ponto quando o PLL está travado, a frequência fica estável (desvio no\n'
+                                     'último segundo ≤ "estável") e ela está longe o bastante do último ponto ("passo mínimo").\n'
+                                     'Desmarcado: só grava com "Gravar ponto".')
+        row.addWidget(self.chk_man_auto)
+        row.addStretch(1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel('Passo mínimo:'))
+        self.sp_man_step = self._dspin(0.1, 100.0, 5.0, 1, 1.0, None, 80, ' %')
+        self.sp_man_step.setToolTip('Distância mínima (em %) entre a frequência de um ponto novo e a do último gravado.')
+        row.addWidget(self.sp_man_step)
+        row.addWidget(QtWidgets.QLabel('estável:'))
+        self.sp_man_tol = self._dspin(0.01, 10.0, 0.5, 2, 0.1, None, 80, ' %')
+        self.sp_man_tol.setToolTip('Desvio padrão máximo da frequência (último segundo, em % dela) para considerá-la estável.\n'
+                                   'Durante a espera e a medida do ponto, ela pode mudar no máximo 2× isso (mínimo 1 %).')
+        row.addWidget(self.sp_man_tol)
+        row.addWidget(QtWidgets.QLabel('τ:'))
+        self.sp_man_tau = TauSpinBox(CAL_SWEEP_TAU, None, width=80)
+        self.sp_man_tau.setToolTip('τ dos dois lock-ins durante a varredura manual (restaurado no fim). Cada ponto espera\n'
+                                   '9τ depois que a frequência estabiliza e faz a média por 1τ.')
+        row.addWidget(self.sp_man_tau)
+        row.addStretch(1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()
+        self.btn_man_start = QtWidgets.QPushButton('▶ Iniciar')
+        self.btn_man_start.setStyleSheet('background:#cfe2ff;')
+        self.btn_man_start.setMinimumWidth(110)
+        self.btn_man_start.setToolTip('Começa uma varredura manual. Mude a frequência do chopper aos poucos; cada ponto\n'
+                                      'espera 9τ e mede por 1τ. "Concluir" salva o CSV (DUPLO_freq_…_externa_…).')
+        self.btn_man_start.clicked.connect(lambda: self.toggle_manual_sweep())
+        row.addWidget(self.btn_man_start)
+        self.btn_man_point = QtWidgets.QPushButton('Gravar ponto')
+        self.btn_man_point.setToolTip('Mede um ponto na frequência atual agora, mesmo perto do último.')
+        self.btn_man_point.clicked.connect(self.manual_record_now)
+        self.btn_man_point.setEnabled(False)
+        row.addWidget(self.btn_man_point)
+        self.lbl_man = QtWidgets.QLabel('')
+        self.lbl_man.setStyleSheet('font-family:Consolas,monospace;')
+        row.addWidget(self.lbl_man)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return box
+
+    def toggle_manual_sweep(self, slot=None):
+        if self.dual_active:
+            if self.dual_src == 'X':
+                self._finish_manual_sweep()
+            return
+        if self.average_mode:
+            self.flash('As varreduras do Modo Duplo precisam do OPT101 no Modo Lock-In.')
+            return
+        if self.sweep_active:
+            self.flash('Já existe uma varredura em andamento.')
+            return
+        if not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
+            self.chk_audio_lockin.setChecked(True)
+        tau = self.sp_man_tau.value()
+        self.dual_saved_cutoffs = (self.sp_tau.value(), self.sp_audio_tau.value())
+        self.sp_tau.setValue(tau)
+        self.sp_audio_tau.setValue(tau)
+        self.dual_src = 'X'
+        self.dual_kind = 'F'
+        self.dual_values = []
+        self.dual_refine = False
+        self.dual_results = []
+        self.dual_fstd = []
+        self.dual_excluded = set()
+        self.dual_ref_cfg = []
+        self.dual_fit = None
+        self.dual_params = {'kind': 'F', 'values': [], 'freq': None, 'pwm': 0.0, 'mod': 'externa',
+                            'mode': DUAL_MODE_NAMES[1], 'tau': tau}
+        self.dual_restore = None
+        self.cal_pending = slot
+        self.dual_active = True
+        self.man_force = False
+        self.man_last_f = None
+        self.dual_settle, self.dual_measure = 9.0 * tau + 0.3, max(0.5, tau)
+        self.dual_state = 'WAIT'
+        self.dual_timer = time.perf_counter()
+        self.btn_man_start.setText('⏹ Concluir')
+        self.btn_man_start.setStyleSheet('background:#f8d7da;')
+        self.btn_man_point.setEnabled(True)
+        for w in (self.sp_tau, self.sp_audio_tau, self.cmb_mod, self.sp_man_tau):
+            w.setEnabled(False)
+        self._setup_dual_plots('F')
+        self._apply_mod_ui()
+        self.lbl_dual_status.setText('Varredura manual: ajuste o chopper; o ponto é gravado quando a frequência estabilizar.')
+
+    def manual_record_now(self):
+        if self.dual_active and self.dual_src == 'X':
+            self.man_force = True
+            if self.dual_state != 'WAIT':
+                self.flash('Já há um ponto sendo medido.')
+
+    def _finish_manual_sweep(self):
+        slot = self.cal_pending
+        if self.dual_state in ('SETTLING', 'MEASURING'):
+            self.flash('Ponto em andamento descartado.')
+        self._end_dual_sweep()
+        self.btn_man_start.setText('▶ Iniciar')
+        self.btn_man_start.setStyleSheet('background:#cfe2ff;')
+        self.btn_man_point.setEnabled(False)
+        self.cmb_mod.setEnabled(True)
+        self.sp_man_tau.setEnabled(True)
+        self.lbl_man.setText('')
+        if self.dual_results:
+            self.dual_params['values'] = [r[0] for r in self.dual_results]
+            self._export_dual()
+            if slot:
+                self._cal_take(slot)
+        else:
+            self.lbl_dual_status.setText('Varredura manual concluída sem pontos.')
+            if slot:
+                self.lbl_cal_s_state[slot].setText(self._cal_slot_text(slot))
+
+    def _manual_step(self, now):
+        r = self.ext_ref
+        f = r.f_mean if (r.state == 'TRACK' and r.f_mean is not None) else None
+        tol = self.sp_man_tol.value() / 100.0
+        elapsed = now - self.dual_timer
+        npts = len(self.dual_results)
+        last = f' | último: {self.man_last_f:.2f} Hz' if self.man_last_f else ''
+        if self.dual_state == 'WAIT':
+            if f is None or not r.locked:
+                self.lbl_man.setText(f'{npts} pontos | esperando o PLL travar')
+                return
+            stable = r.f_std is not None and r.f_std <= tol * f
+            far = self.man_last_f is None or abs(f / self.man_last_f - 1.0) >= self.sp_man_step.value() / 100.0
+            self.lbl_man.setText(f'{npts} pontos | f = {f:.2f} Hz ' + ('estável' if stable else 'variando') + last)
+            if self.man_force or (self.chk_man_auto.isChecked() and stable and far):
+                self.man_force = False
+                self.man_f0 = f
+                self.man_fs = []
+                self.dual_state = 'SETTLING'
+                self.dual_timer = now
+            return
+        # Durante a espera e a medida a frequência não pode fugir do ponto
+        drift = max(2.0 * tol, 0.01)
+        if f is None or not r.locked or abs(f / self.man_f0 - 1.0) > drift:
+            self.flash('A frequência mudou (ou o PLL destravou) durante o ponto: descartado; esperando estabilizar.')
+            self.dual_state = 'WAIT'
+            self.dual_timer = now
+            return
+        if self.dual_state == 'SETTLING':
+            self.lbl_man.setText(f'{npts} pontos | {self.man_f0:.2f} Hz: estabilizando '
+                                 f'({elapsed:.1f}/{self.dual_settle:.1f} s){last}')
+            if elapsed >= self.dual_settle:
+                self.dual_state = 'MEASURING'
+                self.dual_timer = now
+                self.dual_opt = []
+                with self.audio_lock:
+                    self.dual_aud = []
+            return
+        self.man_fs.append(f)
+        self.lbl_man.setText(f'{npts} pontos | {self.man_f0:.2f} Hz: medindo ({elapsed:.1f}/{self.dual_measure:.1f} s){last}')
+        if elapsed < self.dual_measure:
+            return
+        with self.audio_lock:
+            aud = self.dual_aud
+            self.dual_aud = []
+        self.dual_state = 'WAIT'
+        self.dual_timer = now
+        if not (self.dual_opt and aud):
+            self.flash('Varredura manual: sem dados do OPT101 ou do INMP441 (o microfone já está alinhado?).')
+            return
+        r_o = np.concatenate([c[0] for c in self.dual_opt])
+        p_o = np.concatenate([c[1] for c in self.dual_opt])
+        if self.normalize_mode:
+            r_o = r_o * np.maximum(np.concatenate([c[2] for c in self.dual_opt]), 1.0) / 100.0
+        r_a = np.concatenate([c[0] for c in aud])
+        p_a = np.concatenate([c[1] for c in aud])
+        fv = float(np.mean(self.man_fs)) if self.man_fs else self.man_f0
+        row = (fv, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
+               *circ_stats_deg(p_a), *circ_stats_deg(p_o))
+        self.dual_results.append(row)
+        self.dual_fstd.append(float(np.std(self.man_fs)) if len(self.man_fs) > 1 else 0.0)
+        self.dual_ref_cfg.append((self.cutoff_hp, self.chk_mains.isChecked()))
+        self.dual_params['values'] = [x[0] for x in self.dual_results]
+        self.man_last_f = fv
+        self._show_dual_results()
+        self.flash(f'Ponto gravado: {fv:.2f} Hz ({len(self.dual_results)} pontos).', 3.0)
+
     def toggle_dual_sweep(self, kind, refine=None):
         if self.dual_active:
             if kind == self.dual_src:
                 self._end_dual_sweep()
                 self.flash('Varredura do Modo Duplo cancelada pelo usuário.')
+            return
+        if self.ext_mode:
+            self.flash('Modulação externa: use a varredura manual (o STM32 não muda a frequência do chopper).')
             return
         if self.average_mode:
             self.flash('As varreduras do Modo Duplo precisam do OPT101 no Modo Lock-In.')
@@ -5573,8 +6307,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.update_dual_eta()
         self.btn_dual_cal.setEnabled(self.dual_std is not None and self.dual_cal is None)
         self._on_cal_samples(fill=False)
+        self._apply_mod_ui()
 
     def dual_step(self, now):
+        if self.dual_src == 'X':
+            self._manual_step(now)
+            return
         elapsed = now - self.dual_timer
         n = len(self.dual_values)
         v = self.dual_values[self.dual_idx]
@@ -5683,11 +6421,18 @@ class LockInWindow(QtWidgets.QMainWindow):
                                       + text.replace('<br>', ' &nbsp; ') + '</span>' + excl_txt)
             return
 
-        fa = np.array([actual_mod_freq(v) for v in x])
+        # frequência real: na modulação externa é a medida no OPT101; na interna, a gerada pelo TIM4
+        fa = (np.asarray(x, dtype=float) if getattr(self, 'dual_params', {}).get('mod') == 'externa'
+              else np.array([actual_mod_freq(v) for v in x]))
         # Diagnóstico: τ efetivo do canal óptico pela fase do OPT101, descontada a cadeia digital de cada ponto
         self.dual_opt_tau = None
         lines = []
-        if len(self.dual_ref_cfg) == x.size and x.size >= 4:
+        ext_sweep = getattr(self, 'dual_params', {}).get('mod') == 'externa'
+        if ext_sweep:
+            # a fase do OPT101 é a própria referência: não diz nada sobre o τ do canal óptico
+            lines.append('<span style="color:#606060;">Modulação externa: a referência é o próprio OPT101 '
+                         '(a fase dele fica perto de −90° por construção; S e Δφ valem como na interna).</span>')
+        elif len(self.dual_ref_cfg) == x.size and x.size >= 4:
             hp, mains = (np.array(c) for c in zip(*self.dual_ref_cfg))
             self.dual_opt_tau = fit_opt_tau(fa, po, po_e, opt_digital_phase(fa, hp, mains), ro)
         summ, details = opt_channel_summary(fa, ro, self.dual_opt_tau)
@@ -6128,6 +6873,11 @@ class LockInWindow(QtWidgets.QMainWindow):
             stem = self._stem(f"DUPLO_casada_pwm{v[0]:g}_{v[-1]:g}_f{q['freq']:g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
             what = f"Varredura casada em PWM {v[0]:g} a {v[-1]:g} % ({len(v)} pontos), modulação {q['freq']:g} Hz"
             col = 'PWM_Pct'
+        elif q.get('mod') == 'externa':
+            lo, hi = min(v), max(v)
+            stem = self._stem(f"DUPLO_freq_{lo:.4g}_{hi:.4g}Hz_externa_{now_dt.strftime('%Y%m%d_%H%M%S')}")
+            what = f"Varredura em frequência manual {lo:.4g} a {hi:.4g} Hz ({len(v)} pontos), modulação externa"
+            col = 'Frequencia_Hz'
         else:
             stem = self._stem(f"DUPLO_freq_{v[0]:g}_{v[-1]:g}Hz_pwm{q['pwm']:g}_{now_dt.strftime('%Y%m%d_%H%M%S')}")
             what = f"Varredura em frequência {v[0]:g} a {v[-1]:g} Hz ({len(v)} pontos), PWM {q['pwm']:g} %"
@@ -6147,6 +6897,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
                         f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
+                ext_cols = q.get('mod') == 'externa' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
+                if q.get('mod') == 'externa':
+                    f.write('# Modulacao = externa (chopper; frequência e fase de referência detectadas no OPT101)\n')
                 if q.get('refine'):
                     f.write(f"# {q['refine']}\n")
                 if resave and getattr(self, 'dual_last_csv', None):
@@ -6171,10 +6924,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                     f.write(f"# Arquivo de calibração do microfone: {os.path.basename(self.dual_cal['path'])} "
                             f"(aplicada no gráfico/fit; os dados abaixo são brutos)\n")
                 f.write(f'{col},OPT101_R,OPT101_R_DP,INMP441_R,INMP441_R_DP,INMP441_Fase_Graus,'
-                        'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP\n')
-                for row in self.dual_results:
+                        'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '') + '\n')
+                for i, row in enumerate(self.dual_results):
                     f.write(f'{row[0]:.3f},{row[1]:.6g},{row[2]:.4g},{row[3]:.6g},{row[4]:.4g},'
-                            f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f}\n')
+                            f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f}'
+                            + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '') + '\n')
             self.dual_plots.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
             self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
             if self.dual_cal is not None:
@@ -6621,6 +7375,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             tipo = 'frequência' if self.sweep_kind == 'F' else 'PWM'
             task = (f'Varredura {alvo} em {tipo}: ponto {self.sweep_idx + 1}/{len(self.sweep_freqs)}, '
                     f'restante {self._fmt_time(self._sweep_remaining(time.perf_counter()))}')
+        elif self.dual_active and self.dual_src == 'X':
+            task = f'Modo Duplo, varredura manual: {len(self.dual_results)} pontos'
         elif self.dual_active:
             tipo = 'PWM' if self.dual_kind == 'P' else 'frequência'
             task = (f'Modo Duplo em {tipo}: ponto {self.dual_idx + 1}/{len(self.dual_values)}, '
@@ -6648,12 +7404,15 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.avg.pre = int(round(sec * FS))
         self.lbl_pre.setText(f'Pré: -{sec:.4f} s')
 
-    def apply_frequency(self, val):
+    def apply_frequency(self, val, command=True):
+        '''Nova frequência de modulação: cortes automáticos dos dois lock-ins e, com command, envia F ao STM32
+        (command=False: modulação externa, a frequência é a detectada no OPT101).'''
         self.ref_freq = val
         tau = auto_tau(val)
         self.cutoff_hp = get_effective_cutoffs(val)[1]
         self.cutoff_lp = tau_cutoff(tau, FS)
-        self.link.write(f"F{val}\n")
+        if command:
+            self.link.write(f"F{val}\n")
         self.update_raw_window()
         with self.dsp_lock:
             self.dsp.update_params(val, self.cutoff_lp, self.cutoff_hp)
@@ -6677,15 +7436,181 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.plot1.getPlotItem().setXRange(-self.average_pretrigger_sec, 1.0 / val, padding=0)
 
     def on_freq(self, val):
+        if self.ext_mode:
+            # Modulação externa: na simulação o campo é o botão do chopper simulado; com o STM32 fica travado
+            if self.chopper_sim is not None:
+                self.chopper_sim.set_freq(val, time.perf_counter() - self.sim_epoch)
+            return
         if not self.sweep_active:
             self.apply_frequency(val)
 
     def on_power(self, val):
         self.laser_power = val
-        self.link.write(f"P{val}\n")
+        if not self.ext_mode:
+            self.link.write(f"P{val}\n")
+
+    def _link_params(self):
+        '''(F, P) enviados ao STM32 na conexão: no modo externo, o farol (1 Hz, PWM 0).'''
+        return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
+
+    # ------------------------------------------------------------ Modulação externa
+    def on_mod_mode(self, idx):
+        ext = idx == 1
+        if ext == self.ext_mode:
+            return
+        if self.sweep_active or self.dual_active:
+            self.cmb_mod.blockSignals(True)
+            self.cmb_mod.setCurrentIndex(1 if self.ext_mode else 0)
+            self.cmb_mod.blockSignals(False)
+            self.flash('Termine ou cancele a varredura antes de trocar a modulação.')
+            return
+        if ext:
+            self._int_freq = self.sp_freq.value()
+        self.ext_mode = ext
+        with self.dsp_lock:
+            self.dsp.ext = self.ext_ref if ext else None
+            self.dsp.ext_sync = self.ext_sync if ext else None
+            self.dsp._unlock()
+        if ext:
+            self._ext_restart()
+            self.flash('Modulação externa: procurando a frequência no sinal do OPT101. O STM32 fica com PWM 0 '
+                       '(farol de 1 Hz só no bit de referência).', 6.0)
+        else:
+            self.chopper_sim = None
+            with self.audio_lock:
+                self.audio_ext_pending.clear()
+            if self.simulating and not self.link.connected:
+                self.on_simulate(True)
+            f = getattr(self, '_int_freq', self.sp_freq.value())
+            self._set_spin(self.sp_freq, f)
+            self.apply_frequency(f)
+            self.link.write(f"P{self.laser_power}\n")
+        self._apply_mod_ui()
+
+    def _ext_restart(self):
+        '''Recomeça a referência externa (entrada no modo, reconexão, simulação ligada ou desligada).'''
+        now = time.perf_counter()
+        sim = self.simulating and not self.link.connected
+        with self.dsp_lock:
+            self.ext_ref.reset()
+            self.ext_sync.reset()
+            self._ext_tuned_f = None
+            if sim:
+                self.sim_epoch = now
+                self.chopper_sim = ChopperSimulator(self.sp_freq.value())
+                self.simulator.reset(now)
+                self.rx_bytes.clear()
+                self.rx_pos = 0
+                self.ext_sync.set_marker(*self.chopper_sim.marker())
+            else:
+                self.chopper_sim = None
+        with self.audio_lock:
+            self.audio_ext_pending.clear()
+            self.audio_ext_drops = 0
+            if sim:
+                self.audio_sim.reset(now)
+            self.audio_last_sequence = None
+            self.audio_gap_samples = 0
+            self.audio_received_samples = 0
+            self.audio_valid_samples = 0
+            self.audio_write_index = 0
+            self.audio_wait_started = now
+            self._audio_reset_lockin()
+        if not sim and self.link.connected:
+            self._ext_resync_t = now
+            self.link.write("P0\n")
+            self.link.write(f"F{EXT_BEACON_HZ:g}\n")
+        self._apply_mod_ui()
+
+    def on_ext_range(self, *_, force=False):
+        with self.dsp_lock:
+            self.ext_ref.set_range(self.sp_ext_fmin.value(), self.sp_ext_fmax.value())
+            if force:
+                self.ext_ref.reset()
+
+    def _apply_mod_ui(self):
+        '''Habilita/esconde o que muda entre modulação interna e externa.'''
+        ext = self.ext_mode
+        sim = self.simulating and not self.link.connected
+        busy = self.sweep_active or self.dual_active
+        self.sp_power.setEnabled(not ext and not busy)
+        self.sp_freq.setEnabled((ext and sim) or (not ext and not busy))
+        self.sp_freq.setToolTip('Simulação do modo externo: frequência nominal do chopper simulado (o "botão" do '
+                                'ventilador).' if ext and sim else
+                                'Modo externo: frequência detectada no OPT101.' if ext else
+                                'Frequência da modulação do laser (STM32).')
+        self.lbl_ext.setVisible(ext)
+        self.lbl_power.setVisible(not ext)
+        self.sp_power.setVisible(not ext)
+        self.ext_range_w.setVisible(ext)
+        self.plot_raw.getPlotItem().setTitle(
+            'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL externo '
+            '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real' if ext else
+            'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
+            '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
+        for b in list(self.btn_sweeps.values()) + list(getattr(self, 'btn_sweeps_aud', {}).values()):
+            b.setEnabled(not ext and not busy)
+            b.setToolTip('Use o Modo Duplo (varredura manual) na modulação externa.' if ext else '')
+        if hasattr(self, 'dual_manual_box'):
+            self.dual_manual_box.setVisible(ext)
+            self.dual_box_f.setVisible(not ext)
+            self.btn_dual_pwm_sub.setVisible(not ext)
+            if ext:
+                self.btn_dual_pwm_sub.setChecked(False)
+        self._update_ext_label()
+
+    def _update_ext_label(self):
+        if not self.ext_mode:
+            return
+        r = self.ext_ref
+        sim = self.simulating and not self.link.connected
+        if not self.link.connected and not sim:
+            self.lbl_ext.setText('<span style="color:#b05000;">Externa: STM32 não conectado</span>')
+            return
+        if r.state == 'TRACK' and r.f_mean is not None:
+            col = '#006400' if r.locked else '#b05000'
+            txt = f'<span style="color:{col};"><b>{r.f_mean:.2f} Hz</b> {"●" if r.locked else "○"}</span>'
+            info = (f'{r.f_mean:.3f} Hz, σ {r.f_std:.3f} Hz, fase ±{r.jitter_deg:.1f}° rms: '
+                    + ('travado' if r.locked else r.msg))
+        else:
+            txt = '<span style="color:#b05000;">○ procurando</span>'
+            info = r.msg
+        if not self.ext_sync.ready():
+            txt += ' <span style="color:#b05000;">⚠ mic</span>'
+            info += '\nMicrofone: aguardando o farol do STM32 (alinhamento com o OPT101).'
+        self.lbl_ext.setText(txt)
+        self.lbl_ext.setToolTip(info + '\n\nFrequência detectada no OPT101 (média do último segundo), desvio padrão dela e\n'
+                                'oscilação rms da fase da luz em relação ao PLL (● travado). O INMP441 usa a mesma referência\n'
+                                'depois que o farol do STM32 alinha os dois fluxos (alguns segundos depois de conectar).')
+
+    def _ext_follow(self, now):
+        '''Modo externo: a frequência de trabalho (FFT, janelas, cortes automáticos, ganho do OSR) segue a
+        detectada no OPT101.'''
+        self._update_ext_label()
+        r = self.ext_ref
+        if r.state != 'TRACK' or r.f_mean is None:
+            return
+        f = r.f_mean
+        if abs(f - self.ref_freq) > 1e-3 * f:
+            self.ref_freq = f
+            with self.dsp_lock:
+                self.dsp.ref_freq = f
+            with self.audio_lock:
+                self.audio_freq = f
+                self.audio_li.ref_freq = f
+            if self.chopper_sim is None:
+                self._set_spin(self.sp_freq, f)
+        # cortes automáticos (τ, passa-altas) só quando a frequência muda bastante e fora de varreduras
+        if (r.locked and not self.dual_active and not self.sweep_active
+                and (self._ext_tuned_f is None or abs(np.log(f / self._ext_tuned_f)) > np.log(1.15))):
+            self._ext_tuned_f = f
+            self.apply_frequency(f, command=False)
 
     def on_simulate(self, checked):
         self.simulating = checked
+        if self.ext_mode:
+            self._ext_restart()
+            return
         self.simulator.reset()
         with self.dsp_lock:
             self.rx_bytes.clear()
@@ -6929,6 +7854,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dsp.init(FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
             self.dsp.set_mains_filter(mains)
             self.opt_results.clear()
+            self.ext_ref.reset()
         self.raw.set_fs(FS)
         for c in (self.c_adc_a, self.c_adc_b, self.c_ref_a, self.c_ref_b):
             c.setData([], [])
@@ -7494,6 +8420,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             bar.setVisible(False)
         self._set_eta_style(False)
         self.update_eta_idle()
+        self._apply_mod_ui()
 
     def sweep_step(self, now):
         v_curr = self.sweep_freqs[self.sweep_idx]
@@ -7731,20 +8658,30 @@ class LockInWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------ Laço GUI
     def _optical_step(self):
         '''Thread do OPT101: consome os bytes da serial, roda o lock-in e enfileira o lote.'''
-        data = self.link.take_optical()
+        data, first = self.link.take_optical()
+        markers = self.link.take_markers()
         with self.dsp_lock:
             if data:
+                if self.rx_bytes and first != self.rx_pos + len(self.rx_bytes) // 2:
+                    self.rx_bytes.clear()       # fluxo recomeçou (reconexão) ou bytes descartados na serial
+                if not self.rx_bytes:
+                    self.rx_pos = first
                 self.rx_bytes.extend(data)
                 if len(self.rx_bytes) > MAX_RX_BYTES:
+                    self.rx_pos += (len(self.rx_bytes) - MAX_RX_BYTES) // 2
                     del self.rx_bytes[:-MAX_RX_BYTES]
+            for k_m, pos_m in markers:
+                self.ext_sync.set_marker(k_m, pos_m)
             if len(self.rx_bytes) < 2 * self.dsp.osr:
                 return
-            res = self.dsp.process(self.rx_bytes, DECIMATION, not self.average_mode, self.normalize_mode)
+            res = self.dsp.process(self.rx_bytes, DECIMATION, not self.average_mode, self.normalize_mode,
+                                   stream_pos=self.rx_pos)
             cap = self.res_capture          # Teste de resolução: guarda as palavras cruas consumidas
             if cap is not None and len(cap) < self.res_capture_bytes:
                 cap.extend(self.rx_bytes[:min(res.consumed, self.res_capture_bytes - len(cap))])
             if res.consumed > 0:
                 del self.rx_bytes[:res.consumed]
+                self.rx_pos += res.consumed // 2
         if len(res.adc) or len(res.r):
             self.opt_results.append(res)
 
@@ -7753,7 +8690,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         chunks, drops = self.link.take_audio()
         with self.audio_lock:
             if self.simulating and not self.link.connected:
-                chunks = chunks + self.audio_sim.generate(time.perf_counter(), self.ref_freq, self.laser_power)
+                chop = self.chopper_sim if self.ext_mode else None
+                chunks = chunks + self.audio_sim.generate(time.perf_counter(), self.ref_freq, self.laser_power, chop)
             if chunks or drops:
                 self._process_audio(chunks, drops)
 
@@ -8219,8 +9157,32 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_dirty = False
 
     def _audio_lockin(self, sequence, samples):
-        '''Um ponto (R e fase) a cada AUDIO_LOCKIN_BLOCK amostras, com a mesma cadeia do OPT101.'''
-        r, ph = self.audio_li.process(sequence, samples, AUDIO_LOCKIN_BLOCK)
+        '''Um ponto (R e fase) a cada AUDIO_LOCKIN_BLOCK amostras, com a mesma cadeia do OPT101.
+        Na modulação externa a referência é a fase do OPT101 levada à grade do I2S: o trecho espera
+        (audio_ext_pending) até o OPT101 ter sido processado naquele instante.'''
+        if self.ext_mode:
+            self.audio_ext_pending.append((sequence, samples))
+            while self.audio_ext_pending:
+                seq, smp = self.audio_ext_pending[0]
+                s_raw = self.ext_sync.audio_to_raw(seq, len(smp))
+                theta, st = (None, 'nosync') if s_raw is None else self.ext_ref.theta_at(s_raw)
+                if st == 'wait':
+                    break
+                self.audio_ext_pending.popleft()
+                if theta is not None:
+                    self._audio_lockin_theta(seq, smp, theta + 0.5 * np.pi)   # mesma convenção do OPT101
+                else:
+                    self.audio_ext_drops += len(smp)
+            # sem alinhamento ainda, ou o OPT101 parado: não acumula mais que EXT_AUDIO_PENDING_SEC
+            limit = int(EXT_AUDIO_PENDING_SEC * AUDIO_FS / max(1, len(samples)))
+            while len(self.audio_ext_pending) > limit:
+                _, smp = self.audio_ext_pending.popleft()
+                self.audio_ext_drops += len(smp)
+            return
+        self._audio_lockin_theta(sequence, samples, None)
+
+    def _audio_lockin_theta(self, sequence, samples, theta):
+        r, ph = self.audio_li.process(sequence, samples, AUDIO_LOCKIN_BLOCK, theta)
         if r.size:
             z = r * np.exp(1j * np.radians(ph))
             self.audio_z = np.append(self.audio_z, z)[-AUDIO_NOISE_POINTS:]
@@ -8359,6 +9321,15 @@ class LockInWindow(QtWidgets.QMainWindow):
         travar, o STM32 está modulando em outra frequência (F perdido na conexão, placa reiniciada no
         padrão de 5 Hz...). O lock-in do INMP441 não tem PLL e daria resultado errado sem aviso:
         reenvia F, o que reinicia a onda quadrada e manda um novo marcador de fase.'''
+        if self.ext_mode:
+            # Modulação externa: o PLL do bit 15 não é usado. Sem o alinhamento com o I2S (marcador perdido,
+            # placa reiniciada), reenvia o farol.
+            self._pll_bad_since = None
+            if connected and not self.ext_sync.ready() and now - self._ext_resync_t >= 4.0:
+                self._ext_resync_t = now
+                self.link.write(f"P0\n")
+                self.link.write(f"F{EXT_BEACON_HZ:g}\n")
+            return
         f = self.ref_freq
         if not connected or f <= 0 or self.average_mode or self.dsp.pll_locked:
             self._pll_bad_since = None
@@ -8380,6 +9351,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         connected = self.link.connected
         if connected != self.audio_link_connected:
             self.audio_link_connected = connected
+            if self.ext_mode:
+                self._ext_restart()
             with self.audio_lock:
                 self.audio_wait_started = now
                 self.audio_last_sequence = None
@@ -8397,9 +9370,14 @@ class LockInWindow(QtWidgets.QMainWindow):
         if self.chk_sim.isHidden() != connected:
             self.chk_sim.setVisible(not connected)
         if self.simulating and not connected:
-            optical_data = self.simulator.generate(now, self.ref_freq, self.laser_power)
+            chop = self.chopper_sim if self.ext_mode else None
             with self.dsp_lock:
-                self.rx_bytes.extend(optical_data)
+                first = self.simulator.n
+                optical_data = self.simulator.generate(now, self.ref_freq, self.laser_power, chop)
+                if optical_data:
+                    if not self.rx_bytes:
+                        self.rx_pos = first
+                    self.rx_bytes.extend(optical_data)
                 
         # 5. Atualização dos gráficos e status do áudio
         self._update_audio_plots(now)
@@ -8508,6 +9486,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.last_status_t = now
             self.update_status(now)
             self.update_window_status()
+            if self.ext_mode:
+                self._ext_follow(now)
 
     def mod_warning(self):
         '''Aviso quando a modulação passa do limite seguro para a taxa atual (FS = 200 kHz/OSR).
@@ -8526,6 +9506,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         if f > 1000.0 and self.laser_power < 100.0:
             return 'Acima de 1 kHz use PWM 100 % (a portadora de 5 kHz tem poucos ciclos por meio período)', 1
         return '', 0
+
+    def _ext_status_short(self):
+        r = self.ext_ref
+        if r.state == 'TRACK' and r.f_mean is not None:
+            return (f"Ref. externa: {r.f_mean:.2f} Hz " + ('(travada)' if r.locked else '<b>(travando)</b>'))
+        return '<b>Ref. externa: procurando</b>'
 
     def update_status(self, now):
         self.txt_sat.setVisible(False)
@@ -8563,7 +9549,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                 (x0, x1), (y0, y1) = self.plot_raw.getPlotItem().vb.viewRange()
                 self.txt_sat.setPos((x0 + x1) / 2, (y0 + y1) / 2)
             text = (f"Status: {status} | %ADC: <span style='color:{vcolor};font-weight:bold;'>"
-                    f"{pct:.1f} %</span> | " + (f"Freq Real (PLL): {self.dsp.measured_freq:.2f} Hz"
+                    f"{pct:.1f} %</span> | " + (self._ext_status_short() if self.ext_mode else
+                                                f"Freq Real (PLL): {self.dsp.measured_freq:.2f} Hz"
                                                 if self.dsp.pll_locked or self.ref_freq <= 0 else
                                                 "<b>PLL destravado</b>")
                     + f" | {FS / 1000:g} kS/s (OSR {self.osr})")
