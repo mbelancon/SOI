@@ -16,6 +16,13 @@ Versão menor: só a interface muda. O firmware continua o 2.0.0 (`binarios/soi_
 
 ### Interface (`interface/soi_controller.py`)
 
+#### Modo Duplo reorganizado (2026-11-13; substitui o arranjo descrito em "Alterado" abaixo)
+- **Topo da aba:** três botões, na ordem do trabalho: **Varredura ▸** (varredura em frequência; a casada em PWM fica em "Casada em PWM ▸"), **Calibração ▸** e **Ajuste ▸**. A Calibração não repete mais a varredura nem os ajustes.
+- **Calibração sem "Fitar padrão":** M(f) = S·fⁿ com o n da referência, normalizada pela faixa plana do sistema; a fase de referência é a média de Δφ na mesma faixa. O quadro mostra só a referência, uma linha de instruções e os botões **Gerar curva de calibração**, **Verificar com esta medida** e **Avançado**.
+- **Modelo novo no Ajuste: "Faixa com S ∝ f⁻ⁿ"**: dado o n esperado da amostra, procura a faixa contínua mais larga em que o ajuste livre dá |n − n esperado| ≤ 0,15, desvio ≤ 1,5 dB rms e fase constante (± 10° rms). A faixa aparece sombreada nos dois gráficos.
+- **Verificação:** com a calibração aplicada, a segunda referência tem de seguir f⁻ⁿ (mesmos critérios) por pelo menos uma década.
+- **Layout:** o quadro da calibração não deixa mais um espaço cinza vazio (a altura segue a largura real do painel e se reajusta ao redimensionar a janela) e o esquema da célula ficou menor. Na aba INMP441, o botão **Varreduras ▸** passou para o começo da linha Exibição.
+
 #### Adicionado
 - **Referências de calibração do microfone** (painel "Calibração do microfone", aba Modo Duplo): Folha de Al fina (modo OPC, S ∝ f⁻¹·⁵), Al espesso dentro da câmara, folha de Al fina dentro da câmara (sobre apoio isolante), negro de fumo (recomendada) e fita preta fosca, separadas para que uma confira a outra, Al pintado de preto fosco (f⁻¹ acima de ~100 Hz; abaixo, a tinta deixa o calor chegar ao Al) (todas na câmara, S ∝ f⁻¹, Rosencwaig–Gersho) e Personalizada (S ∝ f⁻ⁿ). Espessura, difusividade ou n editáveis, com a curva esperada, μ = √(α/πf) e o limite f₁ = α/(πL²) da folha fina.
 - **Seletor "Célula: OPC | Câmara"** na linha superior. A referência escolhe a célula; a calibração registra a sua e a interface avisa se for usada na outra. Os CSV do Modo Duplo gravam `# Celula = …`.
@@ -41,7 +48,7 @@ Versão menor: só a interface muda. O firmware continua o 2.0.0 (`binarios/soi_
 - **Duplo clique** em qualquer gráfico volta os eixos/zoom ao padrão (no Modo Duplo, os dois gráficos juntos).
 - **Aviso antes da varredura da calibração** se o PWM não estiver em 100 %, se algum filtro de 60 Hz estiver ligado ou se "Usar" estiver marcado, com "Corrigir e rodar", "Rodar assim" ou "Cancelar".
 - Texto do Fit padrão mais curto: "Corte PAS" no lugar de "Corte do microfone/célula (fc)".
-- **Calibração:** sem o botão "Parâmetros de calibração". A varredura da calibração sempre abre com 5–2440 Hz, 35 pontos log e τ = 2 s. "Gerar calibração do microfone" virou **Guardar calibração** (só grava quando clicado).
+- **Calibração:** sem o botão "Parâmetros de calibração". A varredura da calibração sempre abre com 5–2440 Hz, 35 pontos log e τ = 2 s. "Gerar calibração do microfone" virou **Gerar curva de calibração** (só grava quando clicado).
 - **Varreduras em frequência sem a opção "Medida"**: sempre integração longa, com um campo τ ligado ao τ do INMP441 (mudar em qualquer um dos três campos muda os outros). A casada em PWM mantém a escolha.
 - **Refinar ressonância** (quadro da varredura em frequência da calibração): ajusta a ressonância da célula acima de 250 Hz na varredura atual (ou aberta do disco) e mede N pontos novos (12 por padrão) dentro da largura do pico, f0 ± f0/(2Q). Os pontos entram em ordem na mesma varredura, as exclusões são mantidas, e o CSV é gravado de novo com todos e uma linha "# Refino da ressonância".
 - **Arranjo dos gráficos da varredura em frequência** (botão direito): lado a lado, empilhado (eixo x compartilhado, escala de frequência em cima no de cima e embaixo no de baixo, sem espaço entre eles) ou sobrepostos, com S à esquerda e a fase no eixo da direita. Fica salvo. Os eixos têm as cores das curvas (S azul, fase vermelha).
