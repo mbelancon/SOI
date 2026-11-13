@@ -24,7 +24,7 @@ Itens marcados com ⚠ não estão definidos no código. Confirme na bancada e c
 |---|---|
 | Windows 10/11 | Ambiente testado. O código é multiplataforma, mas só foi usado no Windows. |
 | Processador x86-64-v2 (SSE4.2) | Exigido pelo numpy 2.4+ e pelo Qt 6.10+: Intel desde 2009 ou AMD desde 2011. AMD Phenom II, Athlon II e Intel Core 2 não servem. Veja [04_Interface.md](04_Interface.md#instalação-e-execução). |
-| **VS Code + extensão PlatformIO** | Compilar e gravar o firmware. Instala sozinho a plataforma `ststm32` e o framework Arduino-STM32. |
+| **VS Code + extensão PlatformIO** | Compilar e gravar o firmware. Instala sozinho a plataforma `ststm32` e o framework STM32Cube (`framework-stm32cubef4`). Opcional: STM32CubeProgrammer para gravar o `.bin` pronto. |
 | Driver do ST-Link | Normalmente instalado pelo PlatformIO / STM32CubeProgrammer. |
 | **Python 3.10 ou superior** (Miniconda) | Rodar a interface. |
 | Pacotes Python | `numpy`, `scipy`, `pyserial`, `pyqtgraph`, `PySide6` (ou PyQt5/PyQt6). Veja [requirements.txt](../requirements.txt). |

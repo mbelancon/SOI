@@ -1,6 +1,6 @@
 # 6. Desempenho e aplicações
 
-Este guia resume o que o sistema consegue medir no tempo com o canal óptico (OPT101) e avalia, com números, três aplicações: **lente térmica**, **espelho térmico** e **decaimento de luminescência**. Os valores de aquisição vêm do firmware ([`main.cpp`](../firmware/src/main.cpp)) e da interface ([`stm32_opt_inmmp_novo.py`](../interface/stm32_opt_inmmp_novo.py)). Os do OPT101 vêm do datasheet da Texas Instruments, para o resistor interno de 1 MΩ.
+Este guia resume o que o sistema consegue medir no tempo com o canal óptico (OPT101) e avalia, com números, três aplicações: **lente térmica**, **espelho térmico** e **decaimento de luminescência**. Os valores de aquisição vêm do firmware ([`main.c`](../firmware/src/main.c)) e da interface ([`soi_controller.py`](../interface/soi_controller.py)). Os do OPT101 vêm do datasheet da Texas Instruments, para o resistor interno de 1 MΩ.
 
 > As estimativas de aplicação abaixo são de projeto, não medidas de validação. Antes de publicar resultados com elas, confira a resposta do sistema com uma amostra de tempo conhecido.
 
@@ -9,9 +9,9 @@ Este guia resume o que o sistema consegue medir no tempo com o canal óptico (OP
 | Etapa | Valor | Efeito no tempo |
 |---|---|---|
 | ADC do STM32 (PA0) | 12 bits, **200 kS/s**, disparado pelo TIM3; amostragem de 84 ciclos a 21 MHz (4 µs) | Instante de cada amostra fixo pelo cristal, sem jitter |
-| Sobreamostragem | 16 amostras somadas → **12,5 kS/s**, 14 bits efetivos (0 a 16 380) | Cada ponto é a média de **80 µs** (filtro boxcar) |
-| Referência do laser | Estado do PB0 lido pelo DMA no mesmo gatilho do ADC; maioria das 16 amostras por ponto | A borda do laser é conhecida com passo de **80 µs** |
-| USB CDC | 62,5 kB/s ópticos + ≈97,5 kB/s de áudio ≈ **160 kB/s** | Limita a taxa atual |
+| Sobreamostragem (na interface, 2.0.0) | Média de OSR amostras, OSR de 1 a 64; padrão 16 → **12,5 kS/s** (escala 0 a 16 380) | Cada ponto é a média de OSR × 5 µs (**80 µs** com OSR 16; 5 µs com OSR 1) |
+| Referência do laser | Estado do laser registrado pelo DMA em cada amostra do ADC; maioria das OSR amostras por ponto | A borda do laser é conhecida com passo de OSR × 5 µs (5 µs com OSR 1) |
+| USB CDC (pilha da ST) | 400 kB/s ópticos + ≈146 kB/s de áudio ≈ **550 kB/s** | Metade dos ~1,1 MB/s medidos na Black Pill |
 | OPT101, 1 MΩ interno | Banda de **14 kHz**, tempo de subida (10–90 %) ≈ **28 µs**, 0,45 A/W em 650 nm | Suaviza bordas mais rápidas que ~30 µs |
 | Modulação do laser (TIM4) | Onda quadrada de 50 %, **0,1 a 5000 Hz**, resolução de 95 ns | Define a janela de cada pulso |
 | PWM do laser (TIM1, PA8) | Portadora de **5 kHz** (período de 200 µs) | Abaixo de 100 % a luz "ligada" é picotada a 5 kHz |
@@ -102,6 +102,6 @@ O OPT101 mede a luminescência da amostra, com um filtro que bloqueie a luz de e
 
 Estas mudanças não estão implementadas e exigem alterar o firmware e a interface juntos:
 
-- **Taxa maior no canal óptico.** Com `OVS_BITS = 1` (4 amostras por ponto), a taxa sobe para 50 kS/s com 13 bits, e cada ponto passa a cobrir 20 µs. O fluxo óptico iria para ~250 kB/s, então seria preciso desligar o áudio num modo "só óptico" e conferir a banda real do USB CDC. A constante `FS` da interface teria de acompanhar.
-- **Borda exata da referência.** Registrar o instante da borda do laser (como já é feito no marcador do INMP441) em vez de usar a maioria das 16 amostras eliminaria o alargamento de até 80 µs da média.
+- **Taxa maior no canal óptico.** Feito na 2.0.0: o firmware envia as 200 kS/s cruas e a sobreamostragem é escolhida na interface (OSR 1 = 200 kS/s, pontos de 5 µs).
+- **Borda exata da referência.** Com OSR 1 a borda já é conhecida com passo de 5 µs. Registrar o instante exato da borda (como no marcador do INMP441) só faria diferença com OSR alto.
 - **Detector mais rápido.** Abaixo de ~30 µs, o limite passa a ser o OPT101. Seria preciso um fotodiodo com amplificador de transimpedância mais rápido e um ADC externo.

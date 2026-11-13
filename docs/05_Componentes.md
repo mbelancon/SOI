@@ -6,10 +6,10 @@ Um microcontrolador é um computador completo em um único circuito integrado. N
 
 ## STM32F401 "Black Pill"
 
-A placa Black Pill usa o STM32F401CCU6, que tem um núcleo ARM Cortex-M4 de 84 MHz com unidade de ponto flutuante e instruções de DSP. A memória é de 256 KB de flash e 64 KB de RAM. A placa custa poucos dólares e é programada com ferramentas abertas (PlatformIO, framework Arduino). Para este projeto, os recursos decisivos são:
+A placa Black Pill usa o STM32F401CCU6, que tem um núcleo ARM Cortex-M4 de 84 MHz com unidade de ponto flutuante e instruções de DSP. A memória é de 256 KB de flash e 64 KB de RAM. A placa custa poucos dólares e é programada com ferramentas abertas (PlatformIO com o framework STM32Cube, HAL da ST). Para este projeto, os recursos decisivos são:
 
-- **ADC de 12 bits de até 2,4 MS/s**, disparado por temporizador e lido por **DMA**. As amostras são coletadas sem intervenção da CPU e sem jitter. Com sobreamostragem (16 amostras somadas a 200 kHz), obtêm-se **14 bits efetivos a 12,5 kS/s**.
-- **Interface I2S com PLL dedicado**, que lê o microfone digital a ≈32 kS/s em 24 bits. Os relógios do ADC e do I2S vêm do mesmo cristal, então os dois canais têm base de tempo comum. Isso permite comparar suas fases.
+- **ADC de 12 bits de até 2,4 MS/s**, disparado por temporizador e lido por **DMA**. As amostras são coletadas sem intervenção da CPU e sem jitter. O firmware envia as 200 kS/s cruas, e a interface faz a sobreamostragem escolhida (padrão: média de 16 amostras, **12,5 kS/s**, escala de 14 bits).
+- **Interface I2S com PLL dedicado**, que lê o microfone digital a 48 kS/s em 24 bits. Os relógios do ADC e do I2S vêm do mesmo cristal, então os dois canais têm base de tempo comum. Isso permite comparar suas fases.
 - **Temporizadores avançados**, que geram o PWM de potência do laser (5 kHz, passos de 0,1 %) e a onda quadrada de modulação (0,1 a 5000 Hz, resolução de 95 ns).
 - **USB 2.0 Full Speed nativo (12 Mbit/s)**, que transmite os dois fluxos (≈160 kB/s) sem conversor externo.
 
@@ -36,7 +36,7 @@ O INMP441 (TDK InvenSense) é um microfone MEMS omnidirecional que contém o tra
 | | STM32 Black Pill | OPT101 | INMP441 |
 |---|---|---|---|
 | Função | Controle, sincronismo e aquisição | Mede a intensidade do laser | Mede o sinal fotoacústico |
-| Velocidade | 84 MHz; ADC de até 2,4 MS/s | Banda de 14 kHz | 32 kS/s; banda de até 15 kHz |
+| Velocidade | 84 MHz; ADC de até 2,4 MS/s | Banda de 14 kHz | 48 kS/s; banda de até 15 kHz |
 | Resolução no sistema | 14 bits (óptico) e 24 bits (áudio) | 14 bits via ADC | 24 bits nativos |
 | Linearidade / precisão | Base de tempo comum aos dois canais | ±0,01 % FS | SNR de 61 dBA, ±1 dB |
 | Vantagem principal | Baixo custo, DMA, I2S e USB nativos | Fotodiodo e amplificador integrados | Saída digital imune a interferência |

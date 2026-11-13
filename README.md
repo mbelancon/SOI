@@ -1,9 +1,11 @@
+<img src="docs/imagens/soi_icone.png" alt="Ícone do SOI" width="96" align="right">
+
 # SOI Controller: lock-in fotoacústico com STM32, OPT101 e INMP441
 
 Sistema de baixo custo para medidas fotoacústicas com detecção lock-in. Um **STM32F401 (Black Pill)** modula um laser em onda quadrada e mede, ao mesmo tempo:
 
-- a **intensidade óptica** com o fotodiodo **OPT101** (ADC, 12,5 kS/s, 14 bits efetivos);
-- o **sinal acústico** com o microfone MEMS **INMP441** (I2S, ≈32 kS/s, 24 bits).
+- a **intensidade óptica** com o fotodiodo **OPT101** (ADC de 12 bits a 200 kS/s, sobreamostragem ajustável na interface);
+- o **sinal acústico** com o microfone MEMS **INMP441** (I2S, 48 kS/s, 24 bits).
 
 Os dois fluxos vão por USB (CDC) para o PC. A interface em Python faz a demodulação lock-in dos dois canais, mostra os gráficos, executa varreduras em frequência e em potência, calibra o microfone e grava as medidas em CSV/PNG.
 
@@ -41,18 +43,19 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 **Só quer usar a interface no Windows?** Baixe o `SOI_Controller_vX.Y.Z.exe` da última [Release](https://github.com/mbelancon/SOI/releases/latest) e abra. Não precisa instalar Python. Requer Windows 10/11 e um processador com SSE4.2 (Intel desde 2009 ou AMD desde 2011). Processadores mais antigos, como AMD Phenom II e Intel Core 2, não abrem o programa. Detalhes em [docs/04_Interface.md](docs/04_Interface.md#instalação-e-execução).
 
 1. Monte o hardware conforme [docs/02_Hardware_e_Ligacoes.md](docs/02_Hardware_e_Ligacoes.md).
-2. Grave o firmware da pasta [`firmware/`](firmware/) com o PlatformIO e um ST-Link:
+2. Grave o firmware da pasta [`firmware/`](firmware/) com o PlatformIO e um ST-Link. O firmware é escrito em **STM32Cube** (HAL da ST + biblioteca USB Device da ST), não usa STM32duino/Arduino:
    ```bash
    cd firmware
    pio run -t upload
    ```
+   Ou grave o binário pronto `binarios/soi_firmware_vX.Y.Z.bin` no endereço `0x08000000` com o STM32CubeProgrammer. Firmware e interface precisam ter a mesma versão MAIOR (a 2.x não conversa com a 1.0.0). Detalhes em [docs/03_Firmware_STM32.md](docs/03_Firmware_STM32.md).
 3. Instale as dependências da interface (Python 3.10 ou superior):
    ```bash
    pip install -r requirements.txt
    ```
 4. Conecte a Black Pill pelo USB-C e rode:
    ```bash
-   python interface/stm32_opt_inmmp_novo.py
+   python interface/soi_controller.py
    ```
    A porta é detectada sozinha. Sem o STM32 conectado, marque **Simular amostragem** para testar a interface com sinais simulados.
 5. As medidas são gravadas na pasta `Medidas/`, criada ao lado do script (ou do executável).
@@ -72,11 +75,13 @@ O PA8 só fornece sinal lógico de 3,3 V: use sempre um driver (transistor/MOSFE
 
 ```
 ├── interface/
-│   └── stm32_opt_inmmp_novo.py   Interface + lock-in (PySide6/PyQt + pyqtgraph + NumPy/SciPy)
-├── firmware/                     Firmware do STM32 (PlatformIO, framework Arduino-STM32)
+│   └── soi_controller.py         Interface + lock-in (PySide6/PyQt + pyqtgraph + NumPy/SciPy)
+├── firmware/                     Firmware do STM32 (PlatformIO, framework STM32Cube, USB da ST)
 │   ├── platformio.ini
-│   └── src/main.cpp
-├── docs/                         Documentação
+│   ├── include/                  Configuração do HAL e do USB
+│   └── src/main.c                (src/usb = biblioteca USB Device da ST)
+├── binarios/                     Firmware compilado (.bin) para gravar sem compilar
+├── docs/                         Documentação (docs/testes: roteiros de teste de cada versão)
 ├── packaging/                    Spec e dependências do PyInstaller (executável Windows)
 ├── .github/workflows/            Geração automática do executável nas Releases
 ├── CHANGELOG.md                  Histórico de versões
@@ -91,3 +96,9 @@ Cada versão publicada tem uma tag `vX.Y.Z` e uma página em [Releases](https://
 ## Licença
 
 Distribuído sob a licença GPL-3.0 (GNU General Public License v3.0). Veja [LICENSE](LICENSE).
+
+---
+
+<img src="docs/imagens/logo_lctm.png" alt="Logo do LCTM" height="120">
+
+Desenvolvido no LCTM (Laboratório de Ciência e Tecnologia de Materiais). O ícone da interface e do executável vem do logo do laboratório (`docs/imagens/logo_lctm.svg`).
