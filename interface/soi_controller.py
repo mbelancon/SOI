@@ -14,7 +14,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.1.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.2.0'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -289,7 +289,7 @@ def load_mic_calibration(path):
             m = re.match(r'#\s*OPT101_tau_sensor_s\s*=\s*(\S+)', ln)
             if m:
                 opt_tau = float(m.group(1))
-            m = re.match(r'#\s*(Referencia|Referencia_ID|Celula|Verificada|Ressonancia_f0_Hz)\s*=\s*(.+)$', ln)
+            m = re.match(r'#\s*(Referencia|Referencia_ID|Celula|Verificada|Ressonancia_f0_Hz|Metodo)\s*=\s*(.+)$', ln)
             if m:
                 meta[m.group(1)] = m.group(2).strip()
             m = re.match(r'#\s*Verificacao:\s*(.+)$', ln)
@@ -305,6 +305,8 @@ def load_mic_calibration(path):
         sens = data[:, head.index('Sensibilidade_Rel')]
         ph = data[:, head.index('Fase_Sistema_Graus')]
         ok = (data[:, head.index('Valido')] > 0) & (sens > 0)
+        # Calibração por duas amostras: Concorda = 1 onde a razão A/B foi constante (sem a coluna: tudo concorda)
+        agree = data[:, head.index('Concorda')] > 0 if 'Concorda' in head else None
     except (OSError, ValueError, IndexError):
         return None
     if ok.sum() < 2:
@@ -317,6 +319,8 @@ def load_mic_calibration(path):
             'ref': meta.get('Referencia', CAL_REFS['al_opc']['name']), 'cell': meta.get('Celula', 'OPC'),
             'ref_id': meta.get('Referencia_ID', 'al_opc'), 'verify2': meta.get('Verificacao2', ''),
             'f0': float(meta['Ressonancia_f0_Hz']) if meta.get('Ressonancia_f0_Hz', '').replace('.', '', 1).isdigit() else None,
+            'agree': None if agree is None else agree[ok][k],
+            'method': meta.get('Metodo', ''),
             'verified': None if ver is None else ver.lower().startswith('s'),
             'verify_txt': meta.get('Verificacao', '').split(' - problemas: ')[-1] if ver and not ver.lower().startswith('s') else ''}
 
@@ -346,6 +350,224 @@ def verify_with_second_ref(f, s, dphi, n_exp):
             f'fase constante ± {rms_deg:.0f}° rms ({f.size} pontos, {fmt_freq(f.min())}–{fmt_freq(f.max())})')
     return {'ok': bool(good), 'n': n, 'n_err': n_err, 'rms_db': rms_db, 'rms_deg': rms_deg, 'npts': int(f.size),
             'fmin': float(f.min()), 'fmax': float(f.max()), 'text': text}
+
+
+# ------------------------------------------------------------ Calibração por duas amostras
+# A calibração usa duas amostras de materiais diferentes, medidas na mesma montagem. As duas seguem
+# S = K·H(f)·f^-n (K da amostra, H do sistema), então a razão S_A/S_B = K_A/K_B é uma constante complexa
+# onde as duas estão no regime previsto. Essa razão plana é a verificação; a calibração é
+# M(f) = √(S_A·S_B)·f^n. Câmara: metais opacos e termicamente grossos (n = 1, não depende de α nem de L).
+# OPC: folhas termicamente finas (n = 1,5). α em m²/s; L = espessura típica em m.
+CAL_MATERIALS = {
+    'al': {'name': 'Alumínio', 'cell': 'Camara', 'alpha': 9.7e-5, 'L': 5e-3, 'sim_k': 0.6,
+           'tips': 'Bloco ou placa de alumínio de vários mm, com a face do laser lixada fosca (#400) e limpa. '
+                   'Reflete muito: sinal menor que o do inox.'},
+    'inox': {'name': 'Inox (304/316)', 'cell': 'Camara', 'alpha': 4.0e-6, 'L': 2e-3, 'sim_k': 1.0,
+             'tips': 'Placa de inox austenítico (304, 316, 316L: a liga não importa) de 1 mm ou mais, face lixada '
+                     'fosca. Bom sinal, estável e fácil de achar.'},
+    'ti': {'name': 'Titânio', 'cell': 'Camara', 'alpha': 9.3e-6, 'L': 3e-3, 'sim_k': 1.1,
+           'tips': 'Placa de titânio de 1,5 mm ou mais, face lixada fosca. Sinal alto e óxido estável. '
+                   'α parecido com o do inox: faça o par com Al ou Ni.'},
+    'ni': {'name': 'Níquel', 'cell': 'Camara', 'alpha': 2.3e-5, 'L': 3e-3, 'sim_k': 0.5,
+           'tips': 'Placa de níquel de 2,5 mm ou mais, face lixada fosca. α intermediário (entre Al e inox).'},
+    'latao': {'name': 'Latão', 'cell': 'Camara', 'alpha': 3.4e-5, 'L': 5e-3, 'sim_k': 0.5,
+              'tips': 'Bloco de latão de 3 mm ou mais, face lixada fosca. Barato e fácil de achar.'},
+    'grafite': {'name': 'Grafite', 'cell': 'Camara', 'alpha': 1.0e-4, 'L': 5e-3, 'sim_k': 2.5,
+                'tips': 'Placa ou eletrodo de grafite de 5 mm ou mais. Absorve muito: bastante sinal.'},
+    'al12': {'name': 'Folha de Al 12 µm', 'cell': 'OPC', 'alpha': 9.7e-5, 'L': 12e-6, 'sim_k': 1.0,
+             'tips': 'Papel alumínio comum, bem esticado e vedado nas bordas da abertura (graxa ou fita). '
+                     'O laser incide na face de fora.'},
+    'al25': {'name': 'Folha de Al 25 µm', 'cell': 'OPC', 'alpha': 9.7e-5, 'L': 25e-6, 'sim_k': 0.5,
+             'tips': 'Papel alumínio reforçado ("heavy duty"), esticado e vedado como a folha comum.'},
+    'cu35': {'name': 'Folha de Cu 35 µm', 'cell': 'OPC', 'alpha': 1.1e-4, 'L': 35e-6, 'sim_k': 0.4,
+             'tips': 'Fita ou folha de cobre, sem adesivo na área iluminada, esticada e vedada nas bordas.'},
+}
+CAL_CELL_N = {'Camara': 1.0, 'OPC': 1.5}     # expoente esperado de cada célula
+CAL_PAIR_MIN_RATIO = 3.0                     # as duas amostras devem diferir pelo menos isso (α ou f_c)
+CAL_F0_TOL = 0.03                            # ressonâncias de A e B devem coincidir em ±3 %
+
+
+def cal_materials(cell):
+    '''Chaves dos materiais de calibração da célula, na ordem da tabela.'''
+    return [k for k, m in CAL_MATERIALS.items() if m['cell'] == cell]
+
+
+def cal_pair_check(a, b):
+    '''O par (a, b) serve para a calibração? Na câmara compara α (o regime de amostra grossa depende de α);
+    no OPC compara f_c = α/(πL²) das folhas típicas (o regime de folha fina depende de L²/α).
+    Devolve (ok, motivo).'''
+    if a == b:
+        return False, 'mesmo material da amostra A: a razão não testa nada'
+    ma, mb = CAL_MATERIALS[a], CAL_MATERIALS[b]
+    if ma['cell'] != mb['cell']:
+        return False, 'material de outra célula'
+    if ma['cell'] == 'OPC':
+        qa, qb, what = ma['alpha'] / ma['L'] ** 2, mb['alpha'] / mb['L'] ** 2, 'f_c = α/(πL²)'
+    else:
+        qa, qb, what = ma['alpha'], mb['alpha'], 'α'
+    r = max(qa, qb) / min(qa, qb)
+    if r < CAL_PAIR_MIN_RATIO:
+        return False, f'{what} parecido com o de {ma["name"]} (só {r:.1f}×; mínimo {CAL_PAIR_MIN_RATIO:g}×)'
+    return True, f'{what} {r:.0f}× diferente do de {ma["name"]}'
+
+
+def cal_thickness_check(key, L, fmin, fmax):
+    '''Confere a espessura L (m) da amostra na faixa da varredura. Câmara: L ≥ 2μ na frequência mínima,
+    μ = √(α/πf). OPC: f_c = α/(πL²) ≥ 10× a frequência máxima. Devolve '' (ok) ou o aviso.'''
+    m = CAL_MATERIALS[key]
+    if L <= 0:
+        return ''
+    if m['cell'] == 'OPC':
+        fc = m['alpha'] / (np.pi * L * L)
+        if fc < 10.0 * fmax:
+            return (f'{m["name"]}: f_c = {fmt_freq(fc)} < 10× {fmt_freq(fmax)}; a folha deixa de ser termicamente '
+                    'fina no alto da faixa')
+        return ''
+    f_ok = 4.0 * m['alpha'] / (np.pi * L * L)          # L = 2μ(f)
+    if fmin < f_ok:
+        return (f'{m["name"]} com {L * 1e3:g} mm é termicamente grossa só acima de {fmt_freq(f_ok)} '
+                f'(L ≥ 2μ); a varredura começa em {fmt_freq(fmin)}')
+    return ''
+
+
+def cal_sweep_arrays(rows, tau_sensor=0.0, excluded=(), snr_min_db=LOW_SIGNAL_SNR_DB):
+    '''Varredura em frequência do Modo Duplo (linhas de dual_results ou de load_dual_csv) pronta para a
+    calibração, como em _show_dual_results: S = R_INMP441/R_OPT101 e Δφ = φ_INMP441 − φ_OPT101 desenrolada,
+    em ordem de frequência, com o OPT101 corrigido pelo τ do sensor (s). 'valid' = SNR suficiente e não
+    excluído com clique.'''
+    res = np.array(rows, dtype=float).reshape(-1, 9)
+    keep = np.ones(len(res), dtype=bool)
+    keep[[i for i in excluded if i < len(res)]] = False
+    k = np.argsort(res[:, 0])
+    res, keep = res[k], keep[k]
+    x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = res.T
+    if tau_sensor > 0:
+        xs = 2.0 * np.pi * np.array([actual_mod_freq(v) for v in x]) * tau_sensor
+        po = po + np.degrees(np.arctan(xs))
+        ro, ro_e = ro * np.sqrt(1.0 + xs * xs), ro_e * np.sqrt(1.0 + xs * xs)
+    ok = (ro > 0) & (ra > 0)
+    s = np.where(ok, ra / np.where(ok, ro, 1.0), np.nan)
+    s_rel = np.sqrt((ra_e / np.maximum(ra, 1e-30)) ** 2 + (ro_e / np.maximum(ro, 1e-30)) ** 2)
+    dphi = np.degrees(np.unwrap(np.radians(wrap_deg(pa - po))))
+    snr = ra / np.maximum(ra_e, 1e-30)
+    valid = ok & keep & (snr >= 10.0 ** (snr_min_db / 20.0))
+    return {'f': x, 's': s, 's_rel': s_rel, 'dphi': dphi, 'dphi_e': np.hypot(pa_e, po_e), 'valid': valid}
+
+
+def make_two_sample_cal(A, B, n, flat_tol=1.0):
+    '''Calibração a partir de duas varreduras (dicts de cal_sweep_arrays) de amostras diferentes na mesma
+    montagem. Procura a maior faixa em que a razão complexa R = S_A/S_B é constante (find_ref_band com
+    n = 0: inclinação, desvio em dB e fase), e calcula M = √(S_A·S_B)·fⁿ normalizada pela faixa plana
+    (±flat_tol dB) e a fase do sistema = média das duas Δφ − φ0. Devolve dict ou None (menos de 5 pontos
+    válidos em comum).'''
+    f = A['f']
+    sA, dA, eA, rA, vA = A['s'], A['dphi'], A['dphi_e'], A['s_rel'], A['valid']
+    if B['f'].size == f.size and np.allclose(B['f'], f, rtol=1e-4):
+        sB, dB, eB, rB, vB = B['s'], B['dphi'], B['dphi_e'], B['s_rel'], B['valid']
+    else:                                          # grades diferentes: B interpolada em log f na grade de A
+        bv = B['valid'] & np.isfinite(B['s'])
+        if bv.sum() < 2:
+            return None
+        lf, lfb = np.log(f), np.log(B['f'][bv])
+        sB = np.exp(np.interp(lf, lfb, np.log(B['s'][bv])))
+        dB = np.interp(lf, lfb, B['dphi'][bv])
+        eB = np.interp(lf, lfb, B['dphi_e'][bv])
+        rB = np.interp(lf, lfb, B['s_rel'][bv])
+        vB = (f >= B['f'][bv].min() * 0.999) & (f <= B['f'][bv].max() * 1.001)
+    v = vA & vB & np.isfinite(sA) & np.isfinite(sB)
+    if v.sum() < 5:
+        return None
+    lr = np.log(sA) - np.log(sB)
+    dd = dA - dB
+    dd -= 360.0 * np.round(np.median(dd[v]) / 360.0)
+    band = find_ref_band(f[v], np.exp(lr[v]), dd[v], 0.0)
+    if band is None:
+        return None
+    dec = float(np.log10(band['f_hi'] / band['f_lo']))
+    ok = bool(band['ok'] and dec >= CAL_MIN_DECADES)
+    agree = v & (f >= band['f_lo'] * 0.999) & (f <= band['f_hi'] * 1.001)
+    # Desvio de cada ponto em relação à razão constante: metade vai para cada amostra (incerteza da média)
+    res_l = lr - band['lnA']
+    res_p = wrap_deg(dd - band['phi0'])
+    m = np.sqrt(sA * sB) * f ** n
+    m_ref = float(np.median(m[v]))
+    flat = find_flat_band(f, m / m_ref, v, flat_tol)
+    if flat is not None and flat[1] > flat[0]:
+        m_ref *= flat[2]
+        f_lo, f_hi = float(f[flat[0]]), float(f[flat[1]])
+        in_flat = (f >= f_lo) & (f <= f_hi)
+        flat_txt = f'Faixa plana (±{flat_tol:g} dB): {f_lo:g} a {f_hi:g} Hz'
+    else:
+        in_flat = np.zeros(f.size, dtype=bool)
+        flat_txt = f'Faixa plana (±{flat_tol:g} dB): não encontrada (normalizada pela mediana)'
+    sens = m / m_ref
+    sens_e = sens * np.sqrt((0.5 * np.hypot(rA, rB)) ** 2 + (0.5 * res_l) ** 2)
+    ph = 0.5 * (dA + dB)
+    ref_ph = in_flat & v if (in_flat & v).any() else v
+    phi0 = float(np.degrees(np.angle(np.mean(np.exp(1j * np.radians(ph[ref_ph]))))))
+    ph = ph - phi0
+    ph -= 360.0 * np.round(np.median(ph[ref_ph]) / 360.0)
+    ph_e = np.sqrt((0.5 * np.hypot(eA, eB)) ** 2 + (0.5 * res_p) ** 2)
+    f0a, f0b = cell_resonance_f0(f[vA], sA[vA]), cell_resonance_f0(f[vB], sB[vB])
+    probs = []
+    if not band['ok']:
+        probs.append('a razão A/B não fica constante em nenhuma faixa larga')
+    elif dec < CAL_MIN_DECADES:
+        probs.append(f'a razão A/B só é constante em {dec:.1f} década(s) (mínimo {CAL_MIN_DECADES:g})')
+    f0_txt = ''
+    if f0a and f0b:
+        df0 = abs(f0a / f0b - 1.0)
+        f0_txt = f'ressonância A {fmt_freq(f0a)}, B {fmt_freq(f0b)}'
+        if df0 > CAL_F0_TOL:
+            f0_txt += f' (diferem {df0 * 100:.0f} %: as amostras têm alturas diferentes?)'
+    text = (f'razão A/B constante de {band["f_lo"]:.4g} a {band["f_hi"]:.4g} Hz ({dec:.1f} década(s); mínimo '
+            f'{CAL_MIN_DECADES:g}): inclinação {-band["n"]:+.2f} ± {band["n_err"]:.2f}, {band["rms_db"]:.1f} dB rms, '
+            f'fase ± {band["rms_deg"]:.0f}° rms; |A/B| = {np.exp(band["lnA"]):.3g}, Δφ = {band["phi0"]:+.1f}°')
+    return {'ok': ok, 'f': f, 'sens': sens, 'sens_e': sens_e, 'phase': ph, 'phase_e': ph_e, 'valid': v,
+            'in_flat': in_flat, 'agree': agree, 'flat_txt': flat_txt, 'band': band, 'decades': dec,
+            'ratio': float(np.exp(band['lnA'])), 'ratio_deg': float(band['phi0']), 'ratio_s': np.exp(lr),
+            'ratio_p': dd, 'f0a': f0a, 'f0b': f0b, 'f0_txt': f0_txt, 'problems': probs, 'text': text, 'n': n}
+
+
+def write_two_sample_cal(path, cal, a, b, cell, file_a='', file_b='', tau_sensor=0.0, sweep_txt='', notes=()):
+    '''Grava a calibração de duas amostras no formato CAL_ (lido por load_mic_calibration), com as chaves do
+    método e a coluna Concorda (1 dentro da faixa em que a razão A/B é constante).'''
+    na, nb = CAL_MATERIALS[a]['name'], CAL_MATERIALS[b]['name']
+    n = cal['n']
+    band = cal['band']
+    verdict = ('aprovada - ' if cal['ok'] else 'reprovada - ') + f'{na} × {nb}: {cal["text"]}'
+    if cal['problems']:
+        verdict += ' - problemas: ' + '; '.join(cal['problems'])
+    f = cal['f']
+    with open(path, 'w', newline='', encoding='utf-8') as fh:
+        fh.write(f"# Calibração relativa do microfone + célula - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                 f"# Método: duas amostras ({na} e {nb}), S teórico ∝ f^-{n:g} nas duas; M(f) = √(S_A·S_B)*f^{n:g}, "
+                 "normalizada pela média da faixa plana (ou pela mediana, se não houver)\n"
+                 f"# Metodo = duas_amostras\n"
+                 f"# Referencia = {na} × {nb}\n# Referencia_ID = par_{a}_{b}\n# Celula = {cell}\n"
+                 f"# Expoente_teorico = {n:g}\n"
+                 f"# Amostra_A = {a} ({os.path.basename(file_a) or 'varredura sem arquivo'})\n"
+                 f"# Amostra_B = {b} ({os.path.basename(file_b) or 'varredura sem arquivo'})\n"
+                 f"# Razao_AB = {cal['ratio']:.4g}, {cal['ratio_deg']:.2f}\n"
+                 f"# Faixa_concordancia_Hz = {band['f_lo']:g} a {band['f_hi']:g}\n"
+                 + (f"# Ressonancia_f0_Hz = {cal['f0a']:.1f}\n" if cal['f0a'] else '')
+                 + f"# Verificada = {'sim' if cal['ok'] else 'nao'}\n"
+                 f"# Verificacao_2a_referencia: {verdict}\n"
+                 + (f"# Ressonancias: {cal['f0_txt']}\n" if cal['f0_txt'] else '')
+                 + (f"# {sweep_txt}\n" if sweep_txt else '')
+                 + ''.join(f'# {t}\n' for t in notes)
+                 + "# Fase_Sistema = média de Δφ(INMP441 - OPT101) das duas amostras - φ0 (φ0 = fase média na faixa plana); "
+                 "Valido = 0 para SNR baixo ou ponto excluído; Concorda = 1 dentro da faixa em que a razão A/B é constante\n"
+                 f"# {cal['flat_txt']}\n"
+                 f"# OPT101_tau_sensor_s = {tau_sensor:.6g}\n")
+        fh.write('Frequencia_Hz,Sensibilidade_Rel,Sensibilidade_Rel_DP,Sensibilidade_Fit,Fase_Sistema_Graus,'
+                 'Fase_DP,Valido,Faixa_Plana,No_Ajuste,Concorda\n')
+        for i in range(f.size):
+            s = cal['sens'][i] if np.isfinite(cal['sens'][i]) else 0.0
+            fh.write(f"{f[i]:.3f},{s:.6g},{cal['sens_e'][i]:.4g},{s:.6g},{cal['phase'][i]:.3f},"
+                     f"{cal['phase_e'][i]:.3f},{int(cal['valid'][i])},{int(cal['in_flat'][i])},"
+                     f"{int(cal['in_flat'][i])},{int(cal['agree'][i])}\n")
+    return verdict
 
 
 def mark_calibration_verified(path, ok, text):
@@ -2547,6 +2769,9 @@ class AudioSimulator:
 
     def __init__(self):
         self.rng = np.random.default_rng()
+        # Amostra simulada (calibração por duas amostras): (K, n, fase em graus) -> tom × K·(f/100 Hz)^-n.
+        # None = tom sem dependência da amostra.
+        self.sample = None
         self.reset()
 
     def reset(self):
@@ -2604,6 +2829,10 @@ class AudioSimulator:
         ph = (2.0 * np.pi * np.mod(actual_mod_freq(freq) * (idx - self.n0) / AUDIO_FS_REAL, 1.0)
               - np.pi / 2.0 - np.arctan(w))
         amp = gain * self.TONE_FULL_POWER * max(0.0, min(power_pct, 100.0)) / 100.0
+        if self.sample is not None and freq > 0:
+            k, n_s, ph_s = self.sample
+            amp *= k * (freq / 100.0) ** (-n_s)
+            ph = ph + np.radians(ph_s - 45.0 * n_s)      # fase do pistão térmico: −45°·n, mais a da amostra
         x = (self.DC + amp * np.cos(ph)
              + self.HUM * np.sin(2.0 * np.pi * 60.0 * idx / AUDIO_FS)
              + self.NOISE_RMS * self.rng.standard_normal(m)
@@ -4000,8 +4229,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         top_row.addWidget(self.btn_dual_pwm_panel)
         self.btn_dual_sweeps_panel = QtWidgets.QPushButton('Calibração ▸')
         self.btn_dual_sweeps_panel.setCheckable(True)
-        self.btn_dual_sweeps_panel.setToolTip('Calibração do microfone: referência, esquema da montagem, Gerar curva de calibração e\n'
-                                              'Verificar com outra referência.')
+        self.btn_dual_sweeps_panel.setToolTip('Calibração do microfone com duas amostras (A e B) de materiais diferentes:\n'
+                                              'medir ou abrir as duas varreduras e Gerar calibração (já sai verificada ou não).')
         self.btn_dual_sweeps_panel.toggled.connect(self.on_dual_sweeps_panel)
         top_row.addWidget(self.btn_dual_sweeps_panel)
         self.btn_dual_open = QtWidgets.QPushButton('Abrir varredura…')
@@ -4175,42 +4404,67 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_cal_panel.toggled.connect(self.on_dual_cal_panel)
         self.btn_dual_cal_panel.setParent(page)
         self.btn_dual_cal_panel.setVisible(False)      # o estado segue o botão "Calibração" do topo
-        cal_box = self._group('Calibração do microfone (com uma referência de comportamento conhecido)')
+        cal_box = self._group('Calibração do microfone (duas amostras de materiais diferentes)')
         self.dual_cal_box = cal_box
-        # Passos à esquerda (referência + duas linhas: 1–2 e 3–4); esquema da montagem à direita
+        # Passos à esquerda (amostras A e B, medir ou abrir, gerar); esquema da montagem à direita
         cal_h = QtWidgets.QHBoxLayout(cal_box)
         cal_h.setContentsMargins(6, 2, 6, 2)
         cal_v = QtWidgets.QVBoxLayout()
         cal_v.setSpacing(2)
         cal_h.addLayout(cal_v, 1)
-        rrow = QtWidgets.QHBoxLayout()
-        cal_v.addLayout(rrow)
-        rrow.addWidget(QtWidgets.QLabel('<b>Referência:</b>'))
+        # Widgets da calibração antiga com uma referência (fora do layout, nunca exibidos): mantidos para as
+        # preferências salvas e para o código que ainda lê a referência (_cal_ref segue a célula)
         self.cmb_cal_ref = QtWidgets.QComboBox()
         for key, ref in CAL_REFS.items():
             self.cmb_cal_ref.addItem(ref['name'], key)
-            self.cmb_cal_ref.setItemData(self.cmb_cal_ref.count() - 1, ref['tips'], QtCore.Qt.ItemDataRole.ToolTipRole)
-        self.cmb_cal_ref.setToolTip('Padrão usado na calibração. Cada um tem a sua curva teórica (S ∝ f⁻ⁿ, fase constante)\n'
-                                    'e vale numa configuração da célula (escolhida automaticamente em "Célula", no topo).')
-        rrow.addWidget(self.cmb_cal_ref)
-        self.lbl_cal_L = QtWidgets.QLabel('L:')
-        rrow.addWidget(self.lbl_cal_L)
-        self.sp_cal_L = self._dspin(0.1, 100000.0, 12.0, 1, 1.0, lambda _: self._on_cal_ref_params(), 100, ' µm')
-        self.sp_cal_L.setToolTip('Espessura da referência (micrômetro). No modo OPC define f₁ = α/(πL²), o limite da\n'
-                                 'folha termicamente fina; dentro da câmara é só informativa (opaca: f⁻¹ nos dois regimes).')
-        rrow.addWidget(self.sp_cal_L)
-        self.lbl_cal_alpha = QtWidgets.QLabel('α:')
-        rrow.addWidget(self.lbl_cal_alpha)
-        self.sp_cal_alpha = self._dspin(0.001, 10.0, 0.97, 3, 0.01, lambda _: self._on_cal_ref_params(), 110, ' cm²/s')
-        self.sp_cal_alpha.setToolTip('Difusividade térmica da referência. Alumínio puro ≈ 0,97 cm²/s; ligas de folha\n'
-                                     '(1235, 8079) ≈ 0,9; liga 6061 ≈ 0,65 cm²/s.')
-        rrow.addWidget(self.sp_cal_alpha)
-        self.lbl_cal_n = QtWidgets.QLabel('n:')
-        rrow.addWidget(self.lbl_cal_n)
-        self.sp_cal_n = self._dspin(0.0, 3.0, 1.0, 2, 0.05, lambda _: self._on_cal_ref_params(), 80)
-        self.sp_cal_n.setToolTip('Expoente esperado da referência personalizada: S ∝ f⁻ⁿ com fase constante.')
-        rrow.addWidget(self.sp_cal_n)
-        rrow.addStretch(1)
+        self.lbl_cal_L, self.lbl_cal_alpha, self.lbl_cal_n = QtWidgets.QLabel(), QtWidgets.QLabel(), QtWidgets.QLabel()
+        self.sp_cal_L = self._dspin(0.1, 100000.0, 12.0, 1, 1.0, None, 100, ' µm')
+        self.sp_cal_alpha = self._dspin(0.001, 10.0, 0.97, 3, 0.01, None, 110, ' cm²/s')
+        self.sp_cal_n = self._dspin(0.0, 3.0, 1.0, 2, 0.05, None, 80)
+        self.cal_slots = {'A': None, 'B': None}     # varreduras guardadas de cada amostra
+        self.cal_pending = None                     # 'A' ou 'B' enquanto "Medir" roda a varredura
+        self.cmb_cal_s, self.sp_cal_s_L, self.lbl_cal_s_state = {}, {}, {}
+        thick_tip = ('Espessura da amostra. Câmara (mm): deve ser ≥ 2μ na frequência mínima, μ = √(α/πf).\n'
+                     'OPC (µm): a folha deve ser termicamente fina, f_c = α/(πL²) ≥ 10× a frequência máxima.')
+        for slot in ('A', 'B'):
+            row = QtWidgets.QHBoxLayout()
+            cal_v.addLayout(row)
+            row.addWidget(QtWidgets.QLabel(f'<b>Amostra {slot}:</b>'))
+            cmb = QtWidgets.QComboBox()
+            cmb.setMinimumWidth(170)
+            cmb.setToolTip('Material da amostra A (filtrado pela célula escolhida no topo).' if slot == 'A' else
+                           'Material da amostra B. Verde: indicado para o par com a amostra A (α ou f_c pelo menos '
+                           f'{CAL_PAIR_MIN_RATIO:g}× diferente).\nVermelho: não indicado (o motivo aparece sobre cada item); '
+                           'pode ser usado, mas a calibração sai com aviso.')
+            row.addWidget(cmb)
+            self.cmb_cal_s[slot] = cmb
+            row.addWidget(QtWidgets.QLabel('espessura:'))
+            sp = self._dspin(0.001, 100000.0, 5.0, 3, 0.5, lambda _: self._on_cal_samples(fill=False), 100, ' mm')
+            sp.setToolTip(thick_tip)
+            row.addWidget(sp)
+            self.sp_cal_s_L[slot] = sp
+            btn = QtWidgets.QPushButton(f'▶ Medir {slot}')
+            btn.setToolTip(f'Roda a varredura em frequência (parâmetros da calibração) com a amostra {slot} montada e a '
+                           f'guarda como amostra {slot}.\nTroque de amostra sem mexer em mais nada (laser, foco, janela, vedação).')
+            btn.clicked.connect(lambda _=False, sl=slot: self._cal_measure(sl))
+            row.addWidget(btn)
+            setattr(self, f'btn_cal_measure_{slot.lower()}', btn)
+            btn = QtWidgets.QPushButton('Usar a atual')
+            btn.setToolTip(f'Guarda como amostra {slot} a varredura em frequência que está na tela (medida ou aberta).')
+            btn.clicked.connect(lambda _=False, sl=slot: self._cal_take(sl))
+            row.addWidget(btn)
+            btn = QtWidgets.QPushButton('Abrir…')
+            btn.setToolTip(f'Usa como amostra {slot} uma varredura em frequência já salva (arquivo *DUPLO_freq_*.csv).')
+            btn.clicked.connect(lambda _=False, sl=slot: self._cal_open(sl))
+            row.addWidget(btn)
+            lbl = QtWidgets.QLabel('—')
+            lbl.setStyleSheet('color:#606060;')
+            row.addWidget(lbl, 1)
+            self.lbl_cal_s_state[slot] = lbl
+        self.cmb_cal_a, self.cmb_cal_b = self.cmb_cal_s['A'], self.cmb_cal_s['B']
+        self.sp_cal_a_L, self.sp_cal_b_L = self.sp_cal_s_L['A'], self.sp_cal_s_L['B']
+        self.cmb_cal_a.currentIndexChanged.connect(lambda _: self._on_cal_samples(fill_b=True))
+        self.cmb_cal_b.currentIndexChanged.connect(lambda _: self._on_cal_samples(fill=False))
         self.lbl_cal_ref_info = QtWidgets.QLabel('')
         self.lbl_cal_ref_info.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_cal_ref_info.setWordWrap(True)
@@ -4236,8 +4490,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         frow = QtWidgets.QHBoxLayout()
         cal_v.addLayout(frow)
         self.lbl_cal_steps = QtWidgets.QLabel(
-            'Monte a referência como no esquema, rode a <b>Varredura</b> e clique em <b>Gerar curva de calibração</b>. '
-            'Para conferir: monte outra referência, escolha-a acima, meça com <b>Usar</b> marcado e clique em <b>Verificar</b>.')
+            'Monte a <b>A</b> como no esquema e clique em <b>Medir A</b>; troque pela <b>B</b> sem mexer em mais nada e '
+            'clique em <b>Medir B</b>; depois, <b>Gerar calibração</b> (verificada se a razão A/B for constante em ≥ 1 década).')
         self.lbl_cal_steps.setWordWrap(True)
         frow.addWidget(self.lbl_cal_steps, 1)
         frow = QtWidgets.QHBoxLayout()
@@ -4276,18 +4530,22 @@ class LockInWindow(QtWidgets.QMainWindow):
         arow.addStretch(1)
         self.dual_adv_row.setVisible(False)
         self.btn_dual_adv.toggled.connect(self._on_dual_adv)
-        self.btn_dual_cal = QtWidgets.QPushButton('Gerar curva de calibração')
-        self.btn_dual_cal.setToolTip(
-            'Disponível depois de uma varredura em frequência da referência, com "Usar" (linha superior) desmarcado.\n\n'
-            'Em teoria a referência dá S ∝ f⁻ⁿ (n da referência escolhida); então M(f) = S(f)·fⁿ é a resposta relativa\n'
-            'do sistema microfone + célula, normalizada pela faixa plana. A fase do sistema é Δφ(f) − φ0, com φ0 a fase\n'
-            'média na faixa plana. Entram todos os pontos com SNR suficiente (inclusive a ressonância).\n'
-            'O arquivo registra a referência, a célula e se o comportamento foi verificado.\n'
-            'Salva CSV e PNG na pasta Medidas (prefixo CAL_). Nada é guardado sem este clique: guarde só as\n'
-            'calibrações que valerem a pena (curva limpa, repetível).')
+        # Botões da calibração com uma referência (fora do layout): o fluxo agora é o de duas amostras
+        self.btn_dual_cal = QtWidgets.QPushButton()
         self.btn_dual_cal.setEnabled(False)
-        self.btn_dual_cal.clicked.connect(self._make_dual_calibration)
-        frow.addWidget(self.btn_dual_cal)
+        self.btn_cal_verify = QtWidgets.QPushButton()
+        self.btn_cal_verify.setEnabled(False)
+        self.btn_cal_make = QtWidgets.QPushButton('Gerar calibração')
+        self.btn_cal_make.setToolTip(
+            'Disponível com as varreduras das amostras A e B.\n\n'
+            'As duas seguem S = K·H(f)·f⁻ⁿ (n = 1 na câmara, 1,5 no OPC), com K da amostra e H(f) do sistema\n'
+            'microfone + célula. A razão S_A/S_B deve ser constante (amplitude e fase): a maior faixa em que isso vale\n'
+            f'é a verificação (|inclinação| ≤ {CAL_N_TOL:g}, ≤ {CAL_VER_DB:g} dB rms, fase ± {CAL_VER_DEG:g}° rms, ≥ 1 década).\n'
+            'A calibração é M(f) = √(S_A·S_B)·fⁿ normalizada pela faixa plana, e a fase do sistema é a média das duas.\n'
+            'Salva CSV e PNG na pasta Medidas (prefixo CAL_), já marcada como verificada ou não.')
+        self.btn_cal_make.setEnabled(False)
+        self.btn_cal_make.clicked.connect(self._make_two_sample_calibration)
+        frow.addWidget(self.btn_cal_make)
         self.lbl_flat_tol = QtWidgets.QLabel('Faixa plana ±')
         self.sp_dual_flat_tol = QtWidgets.QDoubleSpinBox()
         self.sp_dual_flat_tol.setRange(0.1, 6.0)
@@ -4299,15 +4557,6 @@ class LockInWindow(QtWidgets.QMainWindow):
                                          '(±1 dB ≈ ±12 %). A calibração procura o maior trecho de frequências dentro dela.')
         arow.insertWidget(arow.count() - 1, self.lbl_flat_tol)      # tolerância da faixa plana: no Avançado
         arow.insertWidget(arow.count() - 1, self.sp_dual_flat_tol)
-        self.btn_cal_verify = QtWidgets.QPushButton('Verificar com esta medida')
-        self.btn_cal_verify.setToolTip(
-            'Com a calibração em uso ("Usar"), meça uma SEGUNDA referência (escolha-a em Referência: ex. calibrou com o\n'
-            'negro de fumo, confira com a fita preta). Corrigida, ela deve seguir f⁻ⁿ com fase constante numa faixa\n'
-            f'de pelo menos uma década (|n − n esperado| ≤ {CAL_N_TOL:g}, ≤ {CAL_VER_DB:g} dB rms, fase ± {CAL_VER_DEG:g}° rms).\n'
-            'Se seguir, a calibração passa a "verificada" e a faixa fica registrada no arquivo dela.')
-        self.btn_cal_verify.setEnabled(False)
-        self.btn_cal_verify.clicked.connect(self._verify_calibration)
-        frow.addWidget(self.btn_cal_verify)
         frow.addWidget(self.btn_dual_adv)
         frow.addStretch(1)
         self.lbl_cal_verify = QtWidgets.QLabel('')
@@ -4498,9 +4747,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             sp.valueChanged.connect(lambda v, k=kind: self._on_sweep_tau_edit(k, v))
         self.dual_tau_w['M'].valueChanged.connect(self.update_dual_eta)
         self.sp_audio_tau.valueChanged.connect(self._sync_sweep_tau)
-        self.cmb_cal_ref.currentIndexChanged.connect(self._on_cal_ref)
-        self.cmb_cell.currentIndexChanged.connect(lambda _: self._on_cal_ref_params(refresh=False))
-        self._on_cal_ref()
+        self.cmb_cell.currentIndexChanged.connect(lambda _: self._on_cal_cell())
+        self._on_cal_cell()
         self._setup_dual_plots('F')
         self.update_dual_eta()
         self.refresh_mic_cal()
@@ -4513,43 +4761,308 @@ class LockInWindow(QtWidgets.QMainWindow):
         return self.sp_dual_f0.value(), self.sp_dual_f1.value()
 
     def _cal_ref(self):
-        '''Referência escolhida no painel de calibração: (chave, dict, n esperado, texto da curva, ok, célula).'''
-        key = self.cmb_cal_ref.currentData() or 'al_opc'
-        ref = CAL_REFS[key]
-        fmin, fmax = self._cal_freq_range()
-        n, txt, ok = cal_ref_info(key, self.sp_cal_L.value(), self.sp_cal_alpha.value(), self.sp_cal_n.value(),
-                                  fmin, fmax)
-        return key, ref, n, txt, ok, ref['cell'] or self.cmb_cell.currentData()
+        '''Referência implícita da célula (para a exibição da varredura com o painel de calibração aberto):
+        (chave, dict, n esperado, texto, ok, célula). Câmara: metal opaco, n = 1; OPC: folha fina, n = 1,5.'''
+        cell = self.cmb_cell.currentData() or 'Camara'
+        key = 'al_opc' if cell == 'OPC' else 'al_cam'
+        return key, CAL_REFS[key], CAL_CELL_N.get(cell, 1.0), '', True, cell
 
-    def _on_cal_ref(self, _=None):
-        '''Troca de referência: mostra os parâmetros que ela usa, carrega os valores típicos e escolhe a célula.'''
-        key = self.cmb_cal_ref.currentData() or 'al_opc'
-        ref = CAL_REFS[key]
-        for name, ws in (('L', (self.lbl_cal_L, self.sp_cal_L)), ('alpha', (self.lbl_cal_alpha, self.sp_cal_alpha)),
-                         ('n', (self.lbl_cal_n, self.sp_cal_n))):
-            for w in ws:
-                w.setVisible(name in ref['params'])
-        for sp, v in ((self.sp_cal_L, ref['L_um']), (self.sp_cal_alpha, ref['alpha'])):
-            if v > 0:
-                sp.blockSignals(True)
-                sp.setValue(v)
-                sp.blockSignals(False)
-        if ref['cell']:
-            self.cmb_cell.blockSignals(True)
-            self.cmb_cell.setCurrentIndex(self.cmb_cell.findData(ref['cell']))
-            self.cmb_cell.blockSignals(False)
-        self._on_cal_ref_params()
+    # ---- Calibração por duas amostras
+    CAL_SHORT = {'al': 'Al', 'inox': 'Inox', 'ti': 'Ti', 'ni': 'Ni', 'latao': 'Latao', 'grafite': 'Grafite',
+                 'al12': 'Al12um', 'al25': 'Al25um', 'cu35': 'Cu35um'}
 
-    def _on_cal_ref_params(self, refresh=True):
-        '''Atualiza esquema, dicas e curva esperada da referência; refresh = recalcula o ajuste.'''
-        if not hasattr(self, 'cal_schematic'):
+    def _cal_L(self, slot):
+        '''Espessura da amostra do slot, em metros (mm na câmara, µm no OPC).'''
+        cell = self.cmb_cell.currentData() or 'Camara'
+        return self.sp_cal_s_L[slot].value() * (1e-6 if cell == 'OPC' else 1e-3)
+
+    def _on_cal_cell(self):
+        '''Troca de célula: lista os materiais dela em A (e B), muda a unidade da espessura e descarta as
+        varreduras guardadas de outra célula.'''
+        if not hasattr(self, 'cmb_cal_a'):
             return
-        key, ref, n, txt, ok, cell = self._cal_ref()
-        self.cal_schematic.set_setup(cell, ref['sample'])
-        self.lbl_cal_tips.setText(ref['tips'])
-        self.lbl_cal_ref_info.setText(f'{txt} &nbsp; <b>Célula:</b> {CELLS.get(cell, cell)}')
-        if refresh:
-            self._show_dual_results()
+        cell = self.cmb_cell.currentData() or 'Camara'
+        keys = cal_materials(cell)
+        cmb = self.cmb_cal_a
+        cur = cmb.currentData()
+        cmb.blockSignals(True)
+        cmb.clear()
+        for k in keys:
+            cmb.addItem(CAL_MATERIALS[k]['name'], k)
+            cmb.setItemData(cmb.count() - 1, CAL_MATERIALS[k]['tips'], QtCore.Qt.ItemDataRole.ToolTipRole)
+        cmb.setCurrentIndex(keys.index(cur) if cur in keys else 0)
+        cmb.blockSignals(False)
+        for slot in ('A', 'B'):
+            sp = self.sp_cal_s_L[slot]
+            sp.blockSignals(True)
+            sp.setSuffix(' µm' if cell == 'OPC' else ' mm')
+            sp.blockSignals(False)
+            d = self.cal_slots.get(slot)
+            if d is not None and d['cell'] != cell:
+                self.cal_slots[slot] = None
+        self.cal_last_key = {}
+        self._on_cal_samples(fill_b=True)
+
+    def _on_cal_samples(self, fill=True, fill_b=False):
+        '''Atualiza a lista colorida da amostra B (verde = par indicado com A, vermelho = não), as espessuras
+        típicas, o esquema, as dicas e os avisos; habilita "Gerar calibração".'''
+        if not hasattr(self, 'cmb_cal_b') or not hasattr(self, 'cal_schematic'):
+            return
+        cell = self.cmb_cell.currentData() or 'Camara'
+        a = self.cmb_cal_a.currentData()
+        if a is None:
+            return
+        if fill_b:
+            cmb = self.cmb_cal_b
+            cur = cmb.currentData()
+            keys = cal_materials(cell)
+            cmb.blockSignals(True)
+            cmb.clear()
+            first_ok = None
+            for k in keys:
+                ok, why = cal_pair_check(a, k)
+                cmb.addItem(('✓ ' if ok else '✗ ') + CAL_MATERIALS[k]['name'], k)
+                i = cmb.count() - 1
+                cmb.setItemData(i, QtGui.QBrush(QtGui.QColor('#2e7d32' if ok else '#c62828')),
+                                QtCore.Qt.ItemDataRole.ForegroundRole)
+                cmb.setItemData(i, f'{"Indicado" if ok else "Não indicado"}: {why}.\n{CAL_MATERIALS[k]["tips"]}',
+                                QtCore.Qt.ItemDataRole.ToolTipRole)
+                if ok and first_ok is None:
+                    first_ok = i
+            if cur in keys and cur != a:
+                cmb.setCurrentIndex(keys.index(cur))
+            else:
+                cmb.setCurrentIndex(first_ok if first_ok is not None else 0)
+            cmb.blockSignals(False)
+        b = self.cmb_cal_b.currentData()
+        last = getattr(self, 'cal_last_key', {})
+        for slot, k in (('A', a), ('B', b)):        # material novo: espessura típica dele
+            if k is not None and last.get(slot) != k:
+                sp = self.sp_cal_s_L[slot]
+                sp.blockSignals(True)
+                sp.setValue(CAL_MATERIALS[k]['L'] * (1e6 if cell == 'OPC' else 1e3))
+                sp.blockSignals(False)
+        self.cal_last_key = {'A': a, 'B': b}
+        ok, why = cal_pair_check(a, b) if b is not None else (False, 'escolha a amostra B')
+        self.cmb_cal_b.setStyleSheet(f'QComboBox {{ color: {"#2e7d32" if ok else "#c62828"}; }}')
+        self.cal_schematic.set_setup(cell, 'al')
+        tips = [f'<b>{CAL_MATERIALS[k]["name"]}:</b> {CAL_MATERIALS[k]["tips"]}' for k in (a, b) if k is not None]
+        self.lbl_cal_tips.setText('<br>'.join(tips))
+        n = CAL_CELL_N.get(cell, 1.0)
+        fmin, fmax = self._cal_freq_range()
+        warns = [w for w in (cal_thickness_check(k, self._cal_L(s), fmin, fmax)
+                             for s, k in (('A', a), ('B', b)) if k is not None) if w]
+        pair = (f'<span style="color:#2e7d32;">✓ par indicado: {why}</span>' if ok else
+                f'<span style="color:#c62828;">✗ par não indicado: {why}</span>')
+        info = (f'<b>Célula:</b> {CELLS.get(cell, cell)} &nbsp; <b>Curva esperada nas duas:</b> S ∝ f<sup>−{n:g}</sup>, '
+                f'fase constante &nbsp; {pair}')
+        if warns:
+            info += '<br><span style="color:#b35c00;">⚠ ' + '<br>⚠ '.join(warns) + '</span>'
+        self.lbl_cal_ref_info.setText(info)
+        for slot in ('A', 'B'):
+            self.lbl_cal_s_state[slot].setText(self._cal_slot_text(slot))
+        busy = self.dual_active or getattr(self, 'sweep_active', False)
+        self.btn_cal_make.setEnabled(not busy and all(self.cal_slots.get(s) is not None for s in ('A', 'B')))
+        QtCore.QTimer.singleShot(0, self._fit_dual_cal_scroll)     # os textos mudam a altura do quadro
+
+    def _cal_slot_text(self, slot):
+        d = self.cal_slots.get(slot)
+        if d is None:
+            return '—' if self.cal_pending != slot else 'medindo…'
+        name = os.path.basename(d['path']) if d['path'] else 'varredura sem arquivo'
+        return f'✓ {int(d["arr"]["valid"].sum())} pontos ({name})'
+
+    def _cal_store(self, slot, rows, path, excluded=()):
+        '''Guarda uma varredura em frequência como amostra do slot.'''
+        tau = self._tau_sensor()
+        arr = cal_sweep_arrays(rows, tau, excluded, self.audio_snr_alert)
+        if arr['valid'].sum() < 5:
+            self.flash(f'Amostra {slot}: menos de 5 pontos com SNR suficiente; a varredura não foi guardada.', 6.0)
+            return False
+        self.cal_slots[slot] = {'arr': arr, 'path': path or '', 'cell': self.cmb_cell.currentData() or 'Camara',
+                                'tau': tau}
+        self.lbl_cal_verify.setText('')
+        self._on_cal_samples(fill=False)
+        return True
+
+    def _cal_take(self, slot):
+        '''Guarda como amostra do slot a varredura em frequência que está na tela.'''
+        if self.dual_active:
+            self.flash('Espere a varredura terminar.')
+            return
+        if self.dual_kind != 'F' or not getattr(self, 'dual_results', None):
+            self.flash(f'Amostra {slot}: não há varredura em frequência na tela (meça com "Medir {slot}" ou use "Abrir…").', 6.0)
+            return
+        if self._cal_store(slot, self.dual_results, getattr(self, 'dual_last_csv', None), self.dual_excluded):
+            self.flash(f'Varredura guardada como amostra {slot} ({self.cmb_cal_s[slot].currentText().lstrip("✓✗ ")}).', 4.0)
+
+    def _cal_open(self, slot):
+        '''Usa como amostra do slot uma varredura em frequência salva (mesma célula).'''
+        if self.dual_active:
+            self.flash('Espere a varredura terminar.')
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, f'Varredura da amostra {slot}', MEDIDAS_DIR,
+            'Modo Duplo em frequência (*DUPLO_freq_*.csv);;Todos os CSV (*.csv)')
+        if not path:
+            return
+        try:
+            kind, rows, _ = load_dual_csv(path)
+            with open(path, encoding='utf-8') as fh:
+                head = fh.read(4000)
+        except (OSError, ValueError, IndexError) as e:
+            QtWidgets.QMessageBox.warning(self, 'Abrir varredura', f'Não foi possível abrir {os.path.basename(path)}:\n{e}')
+            return
+        if kind != 'F':
+            QtWidgets.QMessageBox.warning(self, 'Abrir varredura', 'A calibração precisa de uma varredura em frequência.')
+            return
+        m = re.search(r'#\s*Celula\s*=\s*(\w+)', head)
+        cell = self.cmb_cell.currentData() or 'Camara'
+        if m and m.group(1) != cell:
+            QtWidgets.QMessageBox.warning(
+                self, 'Abrir varredura', f'Esta varredura foi feita na célula {CELLS.get(m.group(1), m.group(1))}, e a '
+                f'escolhida é {CELLS.get(cell, cell)}. A calibração vale para uma célula só: troque a célula no topo ou '
+                'escolha outra varredura.')
+            return
+        self._cal_store(slot, rows, path)
+
+    def _cal_measure(self, slot):
+        '''Roda a varredura em frequência com os parâmetros da calibração e a guarda como amostra do slot. Na
+        simulação, o sinal simulado segue o material escolhido (K diferente, mesma resposta do sistema).'''
+        if self.dual_active or getattr(self, 'sweep_active', False):
+            self.flash('Termine ou cancele a varredura em andamento antes de medir.')
+            return
+        key = self.cmb_cal_s[slot].currentData()
+        if key is None:
+            return
+        cell = self.cmb_cell.currentData() or 'Camara'
+        self.apply_cal_preset()
+        self.ed_sample.setText(self.CAL_SHORT.get(key, key))         # nome dos arquivos da varredura
+        if self.simulating and not self.link.connected:
+            m = CAL_MATERIALS[key]
+            self.audio_sim.sample = (m['sim_k'], CAL_CELL_N.get(cell, 1.0), 10.0 * (len(key) % 5) - 20.0)
+        self.cal_pending = slot
+        self.lbl_cal_s_state[slot].setText('medindo…')
+        self.toggle_dual_sweep('F')
+        if not self.dual_active:                    # não começou (aviso cancelado, OPT101 em Valor Médio…)
+            self.cal_pending = None
+            self.audio_sim.sample = None
+            self.lbl_cal_s_state[slot].setText(self._cal_slot_text(slot))
+        else:
+            self.btn_cal_make.setEnabled(False)
+
+    def _make_two_sample_calibration(self):
+        '''Gera a calibração a partir das amostras A e B (make_two_sample_cal), grava CSV + PNG e a seleciona.'''
+        A, B = self.cal_slots.get('A'), self.cal_slots.get('B')
+        if A is None or B is None:
+            return
+        cell = self.cmb_cell.currentData() or 'Camara'
+        a, b = self.cmb_cal_a.currentData(), self.cmb_cal_b.currentData()
+        n = CAL_CELL_N.get(cell, 1.0)
+        cal = make_two_sample_cal(A['arr'], B['arr'], n, self.sp_dual_flat_tol.value())
+        if cal is None:
+            self.lbl_cal_verify.setText('<span style="color:#d00000;">Menos de 5 pontos válidos em comum entre A e B: '
+                                        'as duas varreduras cobrem a mesma faixa de frequências?</span>')
+            return
+        notes = []
+        pair_ok, why = cal_pair_check(a, b)
+        if not pair_ok:
+            notes.append(f'Aviso: par não indicado ({why})')
+        f = cal['f']
+        for s, k in (('A', a), ('B', b)):
+            w = cal_thickness_check(k, self._cal_L(s), float(f.min()), float(f.max()))
+            notes.append(f'Espessura {s} = {self._cal_L(s) * (1e6 if cell == "OPC" else 1e3):g} '
+                         f'{"µm" if cell == "OPC" else "mm"}' + (f' - aviso: {w}' if w else ''))
+        if abs(A['tau'] - B['tau']) > 1e-9:
+            notes.append('Aviso: A e B foram processadas com τ do sensor diferentes')
+        q = self.dual_params if getattr(self, 'dual_params', None) else {}
+        now_dt = datetime.now()
+        stem = (f'CAL_{self.CAL_SHORT.get(a, a)}-{self.CAL_SHORT.get(b, b)}_microfone_{cell}_'
+                f'{f.min():g}_{f.max():g}Hz_{now_dt.strftime("%Y%m%d_%H%M%S")}')
+        os.makedirs(MEDIDAS_DIR, exist_ok=True)
+        csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
+        sweep_txt = f'Varreduras {f.min():g} a {f.max():g} Hz ({f.size} pontos)' + (
+            f', PWM {q["pwm"]:g} %; {q.get("mode", "")}' if q.get('pwm') is not None else '')
+        try:
+            verdict = write_two_sample_cal(csv_path, cal, a, b, cell, A['path'], B['path'], A['tau'], sweep_txt, notes)
+        except OSError as e:
+            self.lbl_cal_verify.setText(f'Não foi possível gravar a calibração: {e}')
+            return
+        win = self._two_sample_cal_window(cal, a, b, cell)
+        png = os.path.join(MEDIDAS_DIR, stem + '.png')
+        try:
+            win.grab().save(png)
+            self._session_add(csv_path, png)
+        except Exception as e:
+            print(f'Erro ao salvar o gráfico da calibração: {e}')
+            self._session_add(csv_path)
+        win.setWindowTitle('Calibração do microfone (duas amostras)')
+        win.show()
+        self._cal_win = win
+        self.refresh_mic_cal(select_latest=True)
+        na, nb = CAL_MATERIALS[a]['name'], CAL_MATERIALS[b]['name']
+        extra = ''.join(f'<br>{t}' for t in notes if t.startswith('Aviso') or ' - aviso' in t)
+        if cal['f0_txt']:
+            extra += f'<br>{cal["f0_txt"]}'
+        if cal['ok']:
+            self.lbl_cal_verify.setText(f'<span style="color:#2e7d32;"><b>✓ Calibração verificada</b> ({na} × {nb}): '
+                                        f'{cal["text"]}.</span><span style="color:#b35c00;">{extra}</span>'
+                                        f'<br>Salva em {os.path.basename(csv_path)} e selecionada no topo.')
+        else:
+            self.lbl_cal_verify.setText(f'<span style="color:#d00000;"><b>⚠ Não verificada</b> ({na} × {nb}): '
+                                        f'{"; ".join(cal["problems"])}. {cal["text"]}.</span>'
+                                        f'<span style="color:#b35c00;">{extra}</span><br>Salva como não verificada em '
+                                        f'{os.path.basename(csv_path)}. Causas comuns: {CAL_PROBLEM_CAUSES}.')
+        self.flash(f'Calibração salva: {csv_path} ({"verificada" if cal["ok"] else "NÃO verificada"}).', 8.0)
+        QtCore.QTimer.singleShot(0, self._fit_dual_cal_scroll)
+
+    def _two_sample_cal_window(self, cal, a, b, cell):
+        '''Janela com M(f), a razão A/B (amplitude e fase) e a faixa de concordância.'''
+        f, v, ag = cal['f'], cal['valid'], cal['agree']
+        band = cal['band']
+        na, nb = CAL_MATERIALS[a]['name'], CAL_MATERIALS[b]['name']
+        ok_html = ('<span style="color:#2e7d32;">verificada</span>' if cal['ok'] else
+                   '<span style="color:#d00000;">não verificada</span>')
+        win = pg.GraphicsLayoutWidget()
+        win.setBackground('w')
+        win.resize(900, 820)
+        pa_ = win.addPlot(row=0, col=0, title=f'Sensibilidade relativa M = √(S<sub>A</sub>·S<sub>B</sub>)·f<sup>{cal["n"]:g}</sup>'
+                                              f' — {na} × {nb}, célula {CELLS.get(cell, cell)} &nbsp; {ok_html}<br>'
+                                              f'<span style="color:#2e7d32;">{cal["flat_txt"]}</span>')
+        pa_.setLogMode(x=True, y=True)
+        pa_.showGrid(x=True, y=True, alpha=0.3)
+        pa_.setLabel('left', 'M(f) relativa')
+        pa_.plot(f[v], cal['sens'][v], pen=pg.mkPen('#1f4e9c', width=1.5), symbol='o', symbolSize=6,
+                 symbolBrush='#1f4e9c', symbolPen='#1f4e9c')
+        pb_ = win.addPlot(row=1, col=0, title=f'Razão |S<sub>A</sub>/S<sub>B</sub>| (deve ser constante): '
+                                              f'{band["f_lo"]:.4g}–{band["f_hi"]:.4g} Hz')
+        pb_.setLogMode(x=True, y=True)
+        pb_.showGrid(x=True, y=True, alpha=0.3)
+        pb_.setLabel('left', '|A/B|')
+        pb_.plot(f[v], cal['ratio_s'][v], pen=pg.mkPen('#b35c00', width=1.5), symbol='o', symbolSize=6,
+                 symbolBrush='#b35c00', symbolPen='#b35c00')
+        pb_.addLine(y=np.log10(cal['ratio']), pen=pg.mkPen('k', width=1, style=QtCore.Qt.PenStyle.DashLine))
+        lr = np.log10(cal['ratio_s'][v])                # pelo menos ±3 dB em torno da razão: escala legível
+        span = max(0.15, float(np.max(np.abs(lr - np.log10(cal['ratio'])))) * 1.1)
+        pb_.setYRange(np.log10(cal['ratio']) - span, np.log10(cal['ratio']) + span, padding=0)
+        pc_ = win.addPlot(row=2, col=0, title='Fase da razão A/B e fase do sistema (Δφ − φ0)')
+        pc_.setLogMode(x=True, y=False)
+        pc_.showGrid(x=True, y=True, alpha=0.3)
+        pc_.setLabel('left', 'graus')
+        pc_.setLabel('bottom', 'Frequência (Hz)')
+        pc_.plot(f[v], wrap_deg(cal['ratio_p'][v] - band['phi0']), pen=pg.mkPen('#b35c00', width=1.5),
+                 symbol='o', symbolSize=6, symbolBrush='#b35c00', symbolPen='#b35c00', name='A/B − constante')
+        pc_.plot(f[v], cal['phase'][v], pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=5,
+                 symbolBrush='firebrick', symbolPen='firebrick', name='sistema')
+        for plt in (pb_, pc_):
+            plt.setXLink(pa_)
+        if ag.any():
+            for plt in (pa_, pb_, pc_):
+                reg = pg.LinearRegionItem((np.log10(band['f_lo']), np.log10(band['f_hi'])), movable=False,
+                                          brush=pg.mkBrush(46, 125, 50, 35), pen=pg.mkPen(46, 125, 50, 120))
+                reg.setZValue(-10)
+                plt.addItem(reg)
+        return win
 
     def apply_cal_preset(self):
         '''Carrega na varredura em frequência do Modo Duplo os parâmetros recomendados para a calibração.'''
@@ -5032,6 +5545,8 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _end_dual_sweep(self):
         self.dual_active = False
+        self.cal_pending = None
+        self.audio_sim.sample = None                # simulação volta ao sinal sem amostra
         self.dual_state = 'IDLE'
         self.btn_dual_resave.setEnabled(bool(self.dual_results))
         if self.dual_saved_cutoffs is not None:
@@ -5057,6 +5572,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             bar.setVisible(False)
         self.update_dual_eta()
         self.btn_dual_cal.setEnabled(self.dual_std is not None and self.dual_cal is None)
+        self._on_cal_samples(fill=False)
 
     def dual_step(self, now):
         elapsed = now - self.dual_timer
@@ -5114,8 +5630,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         if self.dual_idx < n:
             self._dual_go(self.dual_values[self.dual_idx], now)
         else:
+            slot = self.cal_pending                 # "Medir A/B" da calibração: guarda a varredura no slot
             self._end_dual_sweep()
             self._export_dual()
+            if slot:
+                self._cal_take(slot)
 
     def _dual_arrays(self):
         res = np.array(self.dual_results, dtype=float).reshape(-1, 9)
@@ -5222,6 +5741,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                 cal_txt = (f'<b>Calibração INMP441:</b> {os.path.basename(c["path"])}'
                            + (f' ({int((~inside).sum())} ponto(s) fora da faixa '
                               f'{c["f"][0]:g}–{c["f"][-1]:g} Hz ocultados)' if (~inside).any() else ''))
+                if c.get('agree') is not None and c['agree'].any():
+                    fa_lo, fa_hi = float(c['f'][c['agree']].min()), float(c['f'][c['agree']].max())
+                    out = ok & ((x < fa_lo * 0.999) | (x > fa_hi * 1.001))
+                    if out.any():
+                        cal_txt += (f'<br><span style="color:#b35c00;">⚠ {int(out.sum())} ponto(s) fora da faixa em que as '
+                                    f'duas amostras da calibração concordaram ({fa_lo:.4g}–{fa_hi:.4g} Hz): ali a '
+                                    'correção não foi verificada.</span>')
                 if c['legacy']:
                     cal_txt += ('<br><span style="color:#d00000;">⚠ Calibração antiga: feita antes do firmware com o '
                                 'marcador de modulação corrigido (23/10/2026 14:43) ou com a correção pelo τ efetivo. '
@@ -5306,9 +5832,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             txt = (f'<b>Calibração em uso</b> ({os.path.basename(self.dual_cal.get("path", ""))}): os dados já estão '
                    'corrigidos. Para guardar uma calibração nova, desmarque "Usar".')
         else:
-            txt = (f'<b>Referência {ref["name"]}</b> (S ∝ f<sup>−{n_exp:g}</sup>): a calibração guarda M = S·f<sup>{n_exp:g}</sup> '
-                   f'({int(cal_valid.sum())} pontos com SNR suficiente), normalizada onde o {flat_txt} (linha laranja, f<sup>−{n_exp:g}</sup>). '
-                   'O resto da forma é a resposta da célula, que a calibração corrige.')
+            txt = (f'<b>Amostra de calibração</b> (célula {CELLS.get(cell, cell)}: S ∝ f<sup>−{n_exp:g}</sup>): M = S·f<sup>{n_exp:g}</sup> '
+                   f'({int(cal_valid.sum())} pontos com SNR suficiente), {flat_txt} (linha laranja, f<sup>−{n_exp:g}</sup>). '
+                   'Guarde esta varredura como amostra A ou B no painel Calibração.')
         self.dual_fit = self._plain(txt)
         self.lbl_dual_fit.setText(f'<span style="color:#1f4e9c;">{txt}</span>' + excl_txt)
         self.lbl_dual_fit.setToolTip('')
@@ -5374,8 +5900,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         if not paths:
             self.chk_mic_cal.setChecked(False)
             cmb.setToolTip('Nenhuma calibração encontrada (CAL_*microfone_*.csv na pasta Medidas).\n'
-                           'Gere uma na aba Modo Duplo: varredura em frequência → Fitar padrão → '
-                           'Gerar curva de calibração.')
+                           'Gere uma na aba Modo Duplo, painel Calibração: meça duas amostras (A e B) e '
+                           'clique em Gerar calibração.')
         else:
             cmb.setToolTip(f'{cmb.currentData()}\nA lista é relida da pasta Medidas ao abrir.')
         if cmb.currentData() != current:
@@ -8081,14 +8607,15 @@ class LockInWindow(QtWidgets.QMainWindow):
                  'sp_dual_m_f0', 'sp_dual_m_f1', 'sp_dual_m_fn',
                  'sp_dual_tau_p', 'sp_dual_flat_tol', 'sp_dual_tau_sensor',
                  'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1', 'sp_dual_model_n',
-                 'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin')
+                 'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin',
+                 'sp_cal_a_L', 'sp_cal_b_L')
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_model_panel', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'chk_dual_std_phase',
                   'chk_dual_norm', 'chk_dual_sensors')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
-                  'cmb_cal_ref', 'cmb_cell')
+                  'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
         return spins, checks, combos
 
     def _fit_to_screen(self):

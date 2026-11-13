@@ -10,6 +10,22 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-13
+
+Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same. Old calibrations and sweeps still open and apply.
+
+### Interface (`interface/soi_controller.py`)
+
+#### Changed: calibration with two samples (replaces the single-reference calibration)
+- **Why:** a single reference cannot be checked by itself. On 2026-11-13 a carbon-black calibration (its raw signal rose ≈ f^+0.9, mounted at another height) produced a false f⁻² in Al and stainless steel.
+- **How:** the Calibration panel now asks for **Sample A** and **Sample B**, two materials measured in the same setup. Both follow S = K·H(f)·f⁻ⁿ (n = 1 in the chamber, opaque thick metal; n = 1.5 in OPC, thin foil), so the ratio S_A/S_B must be a complex constant. The widest range where it is constant (|slope| ≤ 0.15, ≤ 1.5 dB rms, phase ± 10° rms, at least one decade) is the verification. The calibration is M(f) = √(S_A·S_B)·fⁿ, normalized by the flat range; the system phase is the mean of both Δφ. Every new calibration is born verified or not verified; the separate "Verify with this measurement" step is gone.
+- **Materials:** chamber: aluminium, stainless steel (304/316/316L), titanium, nickel, brass, graphite; OPC: Al foil 12 µm, Al foil 25 µm, Cu foil 35 µm. The Sample B list shows in **green** the materials recommended as a pair for A (α at least 3× different in the chamber; f_c = α/(πL²) at least 3× different in OPC) and in **red** those that are not (same material, or similar α, e.g. Ti with stainless steel), with the reason in the tooltip. Red ones can still be used; the calibration file then records a warning.
+- **Thickness check:** chamber, L ≥ 2μ at the lowest frequency (μ = √(α/πf)); OPC, f_c ≥ 10× the highest frequency.
+- **Buttons per sample:** **▶ Measure** (loads the calibration sweep parameters, runs the frequency sweep and stores it), **Use current** (the sweep on screen) and **Open…** (a saved `*DUPLO_freq_*.csv`, refused if it was made in another cell).
+- **CAL file:** named `CAL_<A>-<B>_microfone_<cell>_..._<date>.csv`, with new header keys `Metodo = duas_amostras`, `Amostra_A`, `Amostra_B`, `Razao_AB` and `Faixa_concordancia_Hz`, and a new last column `Concorda` (1 inside the range where the two samples agree). When a measurement uses points outside that range, the interface warns that the correction was not verified there. Files without the column load as before.
+- **Resonance check:** if the cell resonance of A and B differ by more than 3 %, the result says the samples probably have different heights.
+- **Simulation:** with "Simulate sampling", Measure A/B simulates the chosen material (different K, same system response), so the whole flow can be tested without the STM32.
+
 ## [2.1.0] - 2026-11-13
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same. Old calibrations and sweeps still open.
