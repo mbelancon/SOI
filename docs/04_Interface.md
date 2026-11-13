@@ -1,270 +1,274 @@
-# 4. Interface no PC – SOI Controller
+# 4. PC interface – SOI Controller
 
-Arquivo: [`interface/soi_controller.py`](../interface/soi_controller.py). Feito em PyQt/PySide + pyqtgraph. O lock-in é calculado em Python (numpy/scipy), no próprio arquivo.
+File: [`interface/soi_controller.py`](../interface/soi_controller.py). Built with PyQt/PySide + pyqtgraph. The lock-in is computed in Python (numpy/scipy), in the same file.
 
-## Instalação e execução
+**Language.** The interface is bilingual (Portuguese and English) and picks the language from the Windows display language: Portuguese if Windows is in Portuguese, English otherwise. The environment variable `SOI_LANG=pt` or `SOI_LANG=en` forces one of them. The labels in this document are the English ones. File names, CSV column names and CSV header keys stay the same in both languages, so files from either language open in the other.
+
+## Installation and running
 
 ```powershell
 pip install -r requirements.txt
 python interface/soi_controller.py
 ```
 
-**Executável para Windows**. Cada [Release](https://github.com/mbelancon/SOI/releases) traz o executável pronto, sem precisar instalar Python:
+**Windows executable.** Each [Release](https://github.com/mbelancon/SOI/releases) includes a ready-made executable, with no need to install Python:
 
-- `SOI_Controller_vX.Y.Z.exe`: arquivo único. Basta baixar e abrir. A cada abertura ele se descompacta numa pasta temporária, por isso leva alguns segundos para aparecer.
-- `SOI_Controller_vX.Y.Z_pasta.zip`: a mesma interface em pasta. Descompacte e abra `SOI_Controller.exe`. Abre mais rápido.
+- `SOI_Controller_vX.Y.Z.exe`: single file. Just download and run it. On each start it unpacks itself into a temporary folder, so it takes a few seconds to appear.
+- `SOI_Controller_vX.Y.Z_pasta.zip`: the same interface as a folder. Unzip it and run `SOI_Controller.exe`. It starts faster.
 
-Nos dois casos a pasta `Medidas/` é criada ao lado do `.exe`. Como o executável não é assinado, o Windows SmartScreen pode avisar na primeira vez: clique em "Mais informações" e "Executar assim mesmo".
+In both cases the `Medidas/` folder is created next to the `.exe`. Because the executable is not signed, Windows SmartScreen may warn the first time: click "More info" and "Run anyway".
 
-**Processador necessário.** O executável e as versões atuais do numpy (2.4 ou mais nova) e do Qt (6.10 ou mais nova) exigem um processador x86-64 com as instruções SSSE3, SSE4.1, SSE4.2 e POPCNT, o nível chamado x86-64-v2. Qualquer Intel desde 2009 (Core i3/i5/i7 de 1ª geração em diante) ou AMD desde 2011 (FX/Bulldozer, Ryzen) atende. Em processadores mais antigos, como AMD Phenom II/Athlon II e Intel Core 2, o programa não abre e mostra:
+**Required CPU.** The executable and current versions of numpy (2.4 or newer) and Qt (6.10 or newer) require an x86-64 CPU with the SSSE3, SSE4.1, SSE4.2 and POPCNT instructions, the level called x86-64-v2. Any Intel since 2009 (1st-generation Core i3/i5/i7 onwards) or AMD since 2011 (FX/Bulldozer, Ryzen) qualifies. On older CPUs, such as AMD Phenom II/Athlon II and Intel Core 2, the program does not start and shows:
 
 ```
-ImportError: DLL load failed while importing _multiarray_umath: Uma rotina de inicialização da biblioteca de vínculo dinâmico (DLL) falhou.
+ImportError: DLL load failed while importing _multiarray_umath: A dynamic link library (DLL) initialization routine failed.
 ```
 
-Instalar driver ou o Visual C++ não resolve, porque faltam instruções no próprio processador. Nesses PCs é possível rodar com bibliotecas mais antigas (por exemplo, numpy 2.3 e PyQt5 5.15), mas num teste com um Phenom II o computador não deu conta da taxa de dados do INMP441, e o sinal ficou cortado. Use um PC mais novo.
+Installing drivers or Visual C++ does not help, because the instructions are missing from the CPU itself. On such PCs it is possible to run with older libraries (for example numpy 2.3 and PyQt5 5.15), but in a test with a Phenom II the computer could not keep up with the INMP441 data rate, and the signal was cut. Use a newer PC.
 
-O executável é gerado pelo GitHub Actions ([`.github/workflows/executavel-windows.yml`](../.github/workflows/executavel-windows.yml)) sempre que uma Release é publicada, e também pode ser gerado à mão na aba Actions. Para gerar localmente no Windows, num venv limpo:
+The executable is built by GitHub Actions ([`.github/workflows/executavel-windows.yml`](../.github/workflows/executavel-windows.yml)) whenever a Release is published, and it can also be built manually from the Actions tab. To build it locally on Windows, in a clean venv:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -r packaging/requirements-build.txt
-.venv\Scripts\pyinstaller packaging/soi_controller.spec             # arquivo único em dist/
-.venv\Scripts\pyinstaller packaging/soi_controller.spec -- --onedir # pasta em dist/SOI_Controller/
+.venv\Scripts\pyinstaller packaging/soi_controller.spec             # single file in dist/
+.venv\Scripts\pyinstaller packaging/soi_controller.spec -- --onedir # folder in dist/SOI_Controller/
 ```
 
-O spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) deixa de fora os módulos não usados do Qt, as traduções e o OpenGL por software. Não usa o [UPX](https://upx.github.io/): com ele o executável fica uns 14 MB menor, mas o Controle Inteligente de Aplicativos do Windows 11 bloqueia as DLLs comprimidas e a interface não abre (`-- --upx` liga, para testes).
+The spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) leaves out unused Qt modules, translations and software OpenGL. It does not use [UPX](https://upx.github.io/): with it the executable is about 14 MB smaller, but Windows 11 Smart App Control blocks the compressed DLLs and the interface does not start (`-- --upx` enables it, for testing).
 
-## Conexão com o STM32
+## Connecting to the STM32
 
-- A porta é **detectada sozinha**. A ordem é: a variável de ambiente `TL_ARDUINO_PORT` (ex.: `COM7`), se existir; depois um dispositivo USB com VID `0x0483` (STM32); depois outras placas Arduino conhecidas; por fim, a única porta USB presente.
-- Se a conexão cair, a interface **tenta reconectar a cada 3 s** e reenvia a frequência e o PWM atuais.
-- A leitura serial roda numa thread separada: nenhum byte se perde se a interface atrasar.
-- **Verificação da modulação:** o PLL do OPT101 trava nas bordas reais do laser. Se ele ficar destravado por mais de max(5 s, 5 períodos), o STM32 está modulando em outra frequência: o `F` se perdeu, ou a placa reiniciou no padrão de 5 Hz. Nesse caso a interface reenvia a frequência sozinha e avisa na barra de status. Isso protege principalmente o lock-in do INMP441, que não tem PLL e depende de a frequência do STM32 ser a mesma do campo. Enquanto o PLL está destravado, o status da aba OPT101 mostra **"PLL destravado"**.
-- **Sem suspensão durante medidas (Windows):** enquanto uma varredura (OPT101, INMP441 ou Modo Duplo) ou o Teste de resolução estiver rodando, a interface impede o Windows de suspender ou hibernar por inatividade, e libera de novo no fim. A tela ainda pode apagar. Fechar a tampa do notebook, ou suspender pelo menu ou pelo botão, continua interrompendo a medida.
-- **Sem STM32**, aparece a opção **"Simular amostragem"**, que gera sinais simulados do OPT101 e do INMP441 para testar a interface.
-- As preferências (campos, opções, tamanho da janela, aba ativa) ficam salvas ao fechar, no registro do Windows (`HKCU\Software\LCTM\SOI Controller`). Não são salvas se uma varredura estiver em andamento.
+- The port is **detected automatically**. The order is: the environment variable `TL_ARDUINO_PORT` (e.g. `COM7`), if set; then a USB device with VID `0x0483` (STM32); then other known Arduino boards; finally, the only USB port present.
+- If the connection drops, the interface **tries to reconnect every 3 s** and resends the current frequency and PWM.
+- Serial reading runs in a separate thread (or process): no byte is lost if the interface lags.
+- **Modulation check:** the OPT101 PLL locks onto the real laser edges. If it stays unlocked for more than max(5 s, 5 periods), the STM32 is modulating at another frequency: the `F` command was lost, or the board reset to the 5 Hz default. In that case the interface resends the frequency by itself and reports it in the status bar. This mainly protects the INMP441 lock-in, which has no PLL and relies on the STM32 frequency matching the field. While the PLL is unlocked, the OPT101 tab status shows **"PLL unlocked"**.
+- **No sleep during measurements (Windows):** while a sweep (OPT101, INMP441 or Dual Mode) or the Resolution test is running, the interface keeps Windows from sleeping or hibernating due to inactivity, and releases it at the end. The screen may still turn off. Closing the laptop lid, or sleeping from the menu or the power button, still interrupts the measurement.
+- **Without an STM32**, the option **"Simulate sampling"** appears, which generates simulated OPT101 and INMP441 signals to try the interface.
+- Preferences (fields, options, window size, active tab) are saved on exit in the Windows registry (`HKCU\Software\LCTM\SOI Controller`). They are not saved while a sweep is running.
 
-## Barra de excitação (comum às abas)
+## Excitation bar (common to all tabs)
 
-| Controle | Faixa | Função |
+| Control | Range | Function |
 |---|---|---|
-| Freq (Hz) | 0 – 5000 | Frequência da modulação do laser (0 = contínuo). Também atualiza os cortes automáticos dos filtros. |
-| PWM (%) | 0 – 100 | Potência do laser |
-| **Amostra** | texto | Prefixo de todos os arquivos salvos em `Medidas/`. Caracteres inválidos em nomes de arquivo viram `_`. Vazio = sem prefixo. Fica salvo entre sessões. |
-| Calibração + Usar | lista | Calibração do microfone aplicada na varredura em frequência do Modo Duplo. Lista as calibrações da pasta `Medidas/` da mais recente para a mais antiga (pela data no nome), sem os trechos `CAL_` e `microfone_`; o nome completo, a referência e a célula aparecem na dica. Cada item começa com a célula em que foi feita (`[OPC]` ou `[Câmara]`) e com ⚠ se não foi verificada. A lista é relida ao abrir. Ao iniciar, a mais recente vem selecionada e com **Usar** marcado. |
-| **Célula** | OPC / Câmara | Configuração da célula na medida: **OPC** (a amostra fecha a abertura; luz por fora, microfone do outro lado) ou **Câmara** (amostra dentro, iluminada por uma janela de vidro). A calibração só vale na configuração em que foi feita; se for de outra, aparece um aviso vermelho. Vai para o cabeçalho dos CSV do Modo Duplo (`# Celula = …`). Escolher uma referência de calibração ajusta a célula automaticamente. |
-| Finalizar experimento | botão | Compacta em `Medidas/<amostra>_<data>.zip` todos os arquivos salvos na sessão (desde que a interface abriu ou desde o último clique) e a calibração em uso (CSV e PNG). Os originais continuam na pasta. Durante uma varredura, ele pede para terminá-la ou cancelá-la antes. |
+| Freq (Hz) | 0 – 5000 | Laser modulation frequency (0 = continuous). Also updates the automatic filter cut-offs. |
+| PWM (%) | 0 – 100 | Laser power |
+| **Sample** | text | Prefix of every file saved in `Medidas/`. Characters not allowed in file names become `_`. Empty = no prefix. Saved between sessions. |
+| Calibration + Use | list | Microphone calibration applied to the Dual Mode frequency sweep. Lists the calibrations in the `Medidas/` folder from newest to oldest (by the date in the name), without the `CAL_` and `microfone_` parts; the full name, the reference and the cell appear in the tooltip. Each item starts with the cell it was made in (`[OPC]` or `[Câmara]`) and with ⚠ if it has not been verified. The list is reread when opened. On start, the newest is selected with **Use** ticked. |
+| **Cell** | OPC / Chamber | Cell configuration for the measurement: **OPC** (the sample closes the opening; light from outside, microphone on the other side) or **Chamber** (sample inside, lit through a glass window). A calibration is only valid in the configuration it was made in; if it is from the other one, a red warning appears. Written to the Dual Mode CSV header (`# Celula = …`). Choosing a calibration reference sets the cell automatically. |
+| Finish experiment | button | Zips into `Medidas/<sample>_<date>.zip` all files saved during the session (since the interface opened or since the last click) and the calibration in use (CSV and PNG). The originals stay in the folder. During a sweep, it asks you to finish or cancel it first. |
 
-## Aba OPT101
+## OPT101 tab
 
-**Barra de status:** estado do sinal (*Sinal OK*, *Sinal baixo* com nível médio < 5 % do ADC, ou *SATURAÇÃO DO ADC*), o **%ADC** de pico (verde < 50 %, laranja até 70 %, vermelho acima), a **frequência real medida pelo PLL** e a taxa em uso (ex.: *12,5 kS/s (OSR 16)*). Se o USB perder amostras ópticas, aparece em vermelho *Perdas USB: N amostras*: a interface preenche a lacuna repetindo a última amostra, para o tempo e o PLL seguirem certos.
+**Status bar:** signal state (*Signal OK*, *Low signal* with mean level < 5 % of the ADC, or *ADC SATURATION*), the peak **%ADC** (green < 50 %, orange up to 70 %, red above), the **real frequency measured by the PLL** and the rate in use (e.g. *12.5 kS/s (OSR 16)*). If USB loses optical samples, *USB losses: N samples* appears in red: the interface fills the gap by repeating the last sample, so that time and the PLL stay correct.
 
-**Osciloscópio:** sinal bruto do ADC (0–16 380) e a referência do laser (verde tracejado), em tempo real.
-- *Janela (s)*: de 0,005 a 30 s. Acima de 50 Hz a janela fica limitada a 50 ciclos ("Visualização reduzida").
-- *Filtro 60 Hz*: notches em 60 Hz e harmônicos até 1,5 kHz (largura de 2 Hz). Os notches a menos de 5 Hz da modulação são omitidos.
-- *Sobreamostragem*: ver abaixo. *Teste de resolução*: ver abaixo.
-- O osciloscópio guarda no máximo 120 mil pontos. Com janela longa e taxa alta (ex.: 30 s a 200 kS/s), cada ponto desenhado é a média de vários, para a tela não travar. O lock-in, a FFT e o Valor Médio usam sempre todas as amostras.
+**Oscilloscope:** raw ADC signal (0–16,380) and the laser reference (dashed green), in real time.
+- *Window (s)*: 0.005 to 30 s. Above 50 Hz the window is limited to 50 cycles ("Reduced view").
+- *60 Hz filter*: notches at 60 Hz and harmonics up to 1.5 kHz (2 Hz wide). Notches less than 5 Hz from the modulation are omitted.
+- *Oversampling*: see below. *Resolution test*: see below.
+- The oscilloscope keeps at most 120 thousand points. With a long window and a high rate (e.g. 30 s at 200 kS/s), each drawn point is the average of several, so the screen does not freeze. The lock-in, the FFT and the Average mode always use every sample.
 
-### Sobreamostragem
+### Oversampling
 
-O STM32 (firmware 2.0.0) envia todas as amostras do ADC, 12 bits a 200 kS/s, e a interface tira a média de **OSR** amostras seguidas antes do lock-in, do osciloscópio, da FFT e do Valor Médio. O OSR é escolhido no topo da aba e fica salvo nas preferências:
+The STM32 (firmware 2.0.0) sends every ADC sample, 12 bits at 200 kS/s, and the interface averages **OSR** consecutive samples before the lock-in, the oscilloscope, the FFT and the Average mode. OSR is chosen at the top of the tab and saved in the preferences:
 
-| OSR | Taxa | Janela da média | Uso típico |
+| OSR | Rate | Averaging window | Typical use |
 |---|---|---|---|
-| 1 | 200 kS/s | 5 µs | Ver bordas rápidas no osciloscópio e no Valor Médio |
-| 2 / 4 / 8 | 100 / 50 / 25 kS/s | 10 / 20 / 40 µs | Modulação alta (kHz) |
-| **16** (padrão) | **12,5 kS/s** | **80 µs** | O mesmo da versão 1.0.0 |
-| 32 / 64 | 6,25 / 3,125 kS/s | 160 / 320 µs | Modulação baixa, menos carga no PC |
+| 1 | 200 kS/s | 5 µs | Fast edges in the oscilloscope and in Average mode |
+| 2 / 4 / 8 | 100 / 50 / 25 kS/s | 10 / 20 / 40 µs | High modulation (kHz) |
+| **16** (default) | **12.5 kS/s** | **80 µs** | Same as version 1.0.0 |
+| 32 / 64 | 6.25 / 3.125 kS/s | 160 / 320 µs | Low modulation, less load on the PC |
 
-- A escala exibida é sempre 0–16 380 (média × 4), como na 1.0.0, qualquer que seja o OSR.
-- O ruído branco cai com √OSR (+½ bit a cada dobra), mas isso só vale se houver ruído suficiente (dither) e enquanto o ruído for branco. O *Teste de resolução* mostra até onde isso acontece no seu sinal.
-- Para o lock-in, a escolha quase não muda a sensibilidade: o ruído final depende da banda do τ, não do OSR. O OSR muda a taxa, a banda útil (FS/2) e o atraso da referência.
-- A magnitude do lock-in é corrigida pela atenuação da média (ver *Correção da média* no fim desta página) e a fase pelo atraso da referência de cada OSR.
-- Trocar o OSR reinicia o lock-in, o osciloscópio, a FFT e o Valor Médio. Durante uma varredura a troca é bloqueada.
+- The displayed scale is always 0–16,380 (average × 4), as in 1.0.0, whatever the OSR.
+- White noise falls as √OSR (+½ bit per doubling), but only with enough noise (dither) and while the noise stays white. The *Resolution test* shows how far this holds for your signal.
+- For the lock-in, the choice barely changes the sensitivity: the final noise depends on the τ bandwidth, not on OSR. OSR changes the rate, the usable bandwidth (FS/2) and the reference delay.
+- The lock-in magnitude is corrected for the averaging attenuation (see *Averaging correction* at the end of this page) and the phase for the reference delay of each OSR.
+- Changing OSR restarts the lock-in, oscilloscope, FFT and Average mode. It is blocked during a sweep.
 
-### Teste de resolução
+### Resolution test
 
-Mede se a sobreamostragem está entregando resolução de verdade. Deixe o sinal **estável** (laser desligado, PWM 0 %, ou luz constante), clique em **Teste de resolução** e em **Medir**. A interface grava as amostras cruas (0,5 a 20 s, padrão 4 s) e mostra:
+Checks whether oversampling is really delivering resolution. Keep the signal **steady** (laser off, PWM 0 %, or constant light), click **Resolution test** and then **Measure**. The interface records raw samples (0.5 to 20 s, default 4 s) and shows:
 
-1. **Ruído × N** em escala log-log: o ruído das médias de N amostras, em LSB do ADC de 12 bits, calculado pelo desvio de Allan (insensível a uma deriva lenta e linear), junto da reta ideal 1/√N. Enquanto os pontos seguem a reta, a média está ganhando resolução. Quando a curva achata ou sobe, dominam ruído 1/f, interferência ou deriva, e aumentar o OSR não adianta mais. O círculo vermelho marca o OSR em uso. Os valores de N acima de 64 mostram a tendência para médias mais longas, como as do lock-in.
-2. **Tabela:** ruído, ganho em bits (medido e ideal) e **bits efetivos** = 12 − log₂(σ·√12), a resolução de um conversor ideal com o mesmo ruído.
-3. **Histograma dos códigos crus:** se as amostras se espalham por ~1 LSB ou mais, há o dither que a média precisa. Se quase todas caem num ou dois códigos (σ < 0,3 LSB), a média converge para o código errado e **não há resolução nova**, mesmo que o ruído das médias pareça cair.
-4. **Conclusão:** até que N o ganho segue o ideal (no máximo 0,25 bit abaixo) e um aviso se o laser estava modulando durante a medida.
+1. **Noise × N** on a log-log scale: the noise of averages of N samples, in LSB of the 12-bit ADC, computed with the Allan deviation (insensitive to slow linear drift), together with the ideal 1/√N line. While the points follow the line, averaging is gaining resolution. When the curve flattens or rises, 1/f noise, interference or drift dominate, and a higher OSR no longer helps. The red circle marks the OSR in use. Values of N above 64 show the trend for longer averages, such as the lock-in's.
+2. **Table:** noise, gain in bits (measured and ideal) and **effective bits** = 12 − log₂(σ·√12), the resolution of an ideal converter with the same noise.
+3. **Histogram of raw codes:** if the samples spread over ~1 LSB or more, there is the dither averaging needs. If almost all fall on one or two codes (σ < 0.3 LSB), the average converges to the wrong code and **there is no new resolution**, even if the noise of the averages seems to fall.
+4. **Conclusion:** up to which N the gain follows the ideal (at most 0.25 bit below), and a warning if the laser was modulating during the measurement.
 
-*Salvar CSV e PNG* grava `Resolucao_<data>.csv` (N, kS/s, σ de Allan, σ comum, ideal, ganhos e bits efetivos) e a imagem da janela em `Medidas/`.
+*Save CSV and PNG* writes `Resolucao_<date>.csv` (N, kS/s, Allan σ, ordinary σ, ideal, gains and effective bits) and the window image to `Medidas/`.
 
-**Gráfico inferior, dois modos:**
+**Lower plot, two modes:**
 
-1. **Lock-In:** magnitude (azul) e fase (vermelho) no tempo. São 50 pontos/s, e o gráfico mostra os últimos 200 (4 s).
-   - *τ* (constante de tempo de cada polo do passa-baixas): as setas andam na sequência 1–3–10 (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s e 100 s), e um valor digitado no meio (ex.: 0,5 s ou 200 ms) também é aceito. Ao mudar a frequência, τ volta ao automático: ~3 períodos da modulação, arredondado para 0,3 s (acima de ~5,8 Hz), 1 s (~1,8 a 5,8 Hz) ou 3 s (abaixo disso). Ao lado aparecem, calculados do τ, o corte de −3 dB do filtro de 2 polos (0,644/(2πτ)), a banda equivalente de ruído ENBW = 1/(8τ) e a espera de 9τ usada nas varreduras.
-   - *Passa-Altas* (Hz): automático ao mudar a frequência (2 % de f, limitado a 0,01–0,05 Hz) e editável à mão.
-2. **Valor Médio:** forma de onda média do ADC sobre N pulsos (1–1000), sincronizada na borda de subida do laser.
-   - ◀ / ▶ ajustam o pré-trigger em passos de 10 ms.
-   - **Análise da curva** (com o gráfico pausado): ajuste de **1 ou 2 exponenciais** `y = y∞ + A1·e^(−t/τ1) [+ A2·e^(−t/τ2)]` no trecho *On* ou *Off*. O intervalo é escolhido com duas linhas verdes arrastáveis. **Fit** desenha o modelo com os parâmetros digitados; **Otimizar** faz mínimos quadrados a partir deles e mostra o R².
+1. **Lock-In:** magnitude (blue) and phase (red) versus time. 50 points/s; the plot shows the last 200 (4 s).
+   - *τ* (time constant of each low-pass pole): the arrows step through the 1–3–10 sequence (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s and 100 s), and a typed value in between (e.g. 0.5 s or 200 ms) is also accepted. When the frequency changes, τ goes back to automatic: ~3 modulation periods, rounded to 0.3 s (above ~5.8 Hz), 1 s (~1.8 to 5.8 Hz) or 3 s (below that). Next to it, computed from τ: the −3 dB cut-off of the 2-pole filter (0.644/(2πτ)), the equivalent noise bandwidth ENBW = 1/(8τ) and the 9τ wait used by sweeps.
+   - *High-pass* (Hz): automatic when the frequency changes (2 % of f, limited to 0.01–0.05 Hz) and editable by hand.
+2. **Average:** mean ADC waveform over N pulses (1–1000), synchronized on the laser rising edge.
+   - ◀ / ▶ adjust the pre-trigger in 10 ms steps.
+   - **Curve analysis** (with the plot paused): fit of **1 or 2 exponentials** `y = y∞ + A1·e^(−t/τ1) [+ A2·e^(−t/τ2)]` to the *On* or *Off* segment. The interval is chosen with two draggable green lines. **Fit** draws the model with the typed parameters; **Optimize** runs least squares starting from them and shows R².
 
-*Pausa* congela o gráfico. **Salvar** grava CSV + PNG do gráfico inferior em `Medidas/`.
+*Pause* freezes the plot. **Save** writes CSV + PNG of the lower plot to `Medidas/`.
 
-**FFT** (caixa ao lado de *Salvar*): espectro do sinal bruto do ADC, numa coluna à direita, em dBFS.
-- Padrão: zoom em torno da referência, com FFT de 4 s de histórico (resolução ≈ 0,25 Hz).
-- *Espectro completo*: de 0 a 6,25 kHz, FFT de 4096 pontos (≈ 3,1 Hz).
-- *Fit*: ajusta a amplitude do pico na frequência real da modulação com a forma exata de uma senoide na janela Hann e mostra A (em FS, dBFS e contagens do ADC), o SNR pico/piso e a resolução. Se o pico estiver abaixo do limiar de sinal baixo, o gráfico avisa em vez de mostrar o fit.
-- *Clique e zoom* (nas duas FFTs, OPT101 e INMP441): um clique mostra a frequência e a magnitude do ponto mais próximo; a rodinha dá zoom, arrastar move, o duplo clique volta à escala automática e o botão direito apaga o marcador.
+**FFT** (checkbox next to *Save*): spectrum of the raw ADC signal, in a column on the right, in dBFS.
+- Default: zoom around the reference, with an FFT of 4 s of history (resolution ≈ 0.25 Hz).
+- *Full spectrum*: 0 to 6.25 kHz, 4096-point FFT (≈ 3.1 Hz).
+- *Fit*: fits the peak amplitude at the real modulation frequency with the exact shape of a sine in the Hann window and shows A (in FS, dBFS and ADC counts), the peak/floor SNR and the resolution. If the peak is below the low-signal threshold, the plot warns instead of showing the fit.
+- *Click and zoom* (in both FFTs, OPT101 and INMP441): a click shows the frequency and magnitude of the nearest point; the wheel zooms, dragging pans, double-click returns to auto scale and right-click clears the marker.
 
-![Aba OPT101 com a FFT do ADC e o painel de varreduras aberto (modo simulado)](imagens/interface_opt101.png)
+![OPT101 tab with the ADC FFT and the sweep panel open (simulated mode)](images/interface_opt101.png)
 
-**Varreduras (botão *Varreduras ▸*, só no modo Lock-In):**
-- *Varredura em frequência*: início, fim e passo (0,1–5000 Hz).
-- *Varredura em PWM*: início, fim e passo (0–100 %), na frequência atual.
-- Em cada ponto a varredura **espera max(1 s, 9τ) + 0,3 s** para o filtro estabilizar e depois **mede por max(1 s, 4τ)**. Mostra o tempo estimado, o tempo restante e uma barra de progresso. O mesmo botão cancela.
-- Ao terminar ou ser cancelada, uma varredura em frequência (OPT101, INMP441 ou Modo Duplo) volta à frequência de antes, reenviando `F` ao STM32, e aos cortes de filtro de antes, inclusive os ajustados à mão.
-- No fim abre uma janela com magnitude ± desvio-padrão e fase × variável. Os eixos podem ir para escala log, com **fit de lei de potência (A·xⁿ)** ou **linear**.
+**Sweeps (*Sweeps ▸* button, Lock-In mode only):**
+- *Frequency sweep*: start, end and step (0.1–5000 Hz).
+- *PWM sweep*: start, end and step (0–100 %), at the current frequency.
+- At each point the sweep **waits max(1 s, 9τ) + 0.3 s** for the filter to settle and then **measures for max(1 s, 4τ)**. It shows the estimated time, the remaining time and a progress bar. The same button cancels.
+- When it finishes or is cancelled, a frequency sweep (OPT101, INMP441 or Dual Mode) returns to the previous frequency, resending `F` to the STM32, and to the previous filter settings, including hand-tuned ones.
+- At the end a window opens with magnitude ± standard deviation and phase versus the swept variable. The axes can be switched to log scale, with a **power-law fit (A·xⁿ)** or a **linear** fit.
 
-## Aba INMP441
+## INMP441 tab
 
-Lock-in do microfone, com filtros **independentes** dos do OPT101. A referência é numérica: a fase vem do número de sequência da amostra I2S e do marcador de modulação, sem PLL.
+Microphone lock-in, with filters **independent** of the OPT101 ones. The reference is numerical: the phase comes from the I2S sample sequence number and the modulation marker, without a PLL.
 
-**Status:** taxa de amostras recebidas e o aviso **"SINAL BAIXO"** quando o SNR cai abaixo do limiar.
+**Status:** rate of received samples and the **"LOW SIGNAL"** warning when the SNR falls below the threshold.
 
-**Exibição:**
-- Gráficos ligáveis: **Lock-In**, **Ruído/SNR** e **FFT**.
-- **R/θ ↔ X/Y**: magnitude e fase, ou componentes em fase e em quadratura.
-- **Auto-fase**: zera a fase média do último 1 s (o sinal vai todo para X). *Offset (°)*: correção manual.
-- **Varreduras ▸**: mostra as varreduras em frequência e PWM do INMP441, que funcionam como as do OPT101.
+**Display:**
+- **Sweeps ▸** (first on the row): shows the INMP441 frequency and PWM sweeps, which work like the OPT101 ones.
+- Plots that can be switched on: **Lock-In**, **Noise/SNR** and **FFT**.
+- **R/θ ↔ X/Y**: magnitude and phase, or in-phase and quadrature components.
+- **Auto-phase**: zeroes the mean phase of the last 1 s (the signal goes entirely into X). *Offset (°)*: manual correction.
 
-**Lock-in:** τ, Passa-Altas, Filtro 60 Hz e *Janela (s)* (1–60 s exibidos). São 20 pontos/s (blocos de 2400 amostras a 48 kHz).
+**Lock-in:** τ, High-pass, 60 Hz filter and *Window (s)* (1–60 s displayed). 20 points/s (blocks of 2400 samples at 48 kHz).
 
-**Ruído/SNR:** média e desvio-padrão da saída do lock-in numa janela móvel (a mesma janela do gráfico, até 30 s). O SNR é mostrado em dB. O *Alerta SNR < (dB)* tem padrão de 10 dB (sinal ≈ 3× o ruído). Use uma janela de pelo menos 10τ.
+**Noise/SNR:** mean and standard deviation of the lock-in output over a moving window (the same window as the plot, up to 30 s). SNR is shown in dB. *SNR alert < (dB)* defaults to 10 dB (signal ≈ 3× noise). Use a window of at least 10τ.
 
 **FFT:**
-- Padrão: zoom em torno da referência, com FFT de 4 s de histórico (resolução ≈ 0,25 Hz).
-- *Espectro completo*: de 0 a 24 kHz, FFT de 4096 pontos (≈ 11,7 Hz), em dBFS.
-- *Fit*: ajusta o pico perto da referência com a forma exata de uma senoide na janela Hann. Corrige a frequência e a amplitude mesmo quando o tom cai entre dois bins.
+- Default: zoom around the reference, with an FFT of 4 s of history (resolution ≈ 0.25 Hz).
+- *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
+- *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
-## Aba Modo Duplo
+## Dual Mode tab
 
-Mede os dois lock-ins **no mesmo passo**. O R do OPT101 (proporcional à intensidade óptica) serve de referência de potência para o R do INMP441 (sinal fotoacústico).
+Measures both lock-ins **in the same step**. The OPT101 R (proportional to the optical intensity) is the power reference for the INMP441 R (photoacoustic signal).
 
-**Topo da aba:**
-- **Varredura ▸** abre a **varredura em frequência** (uma só, usada para calibrar e para medir), com **Refinar ressonância**, e, recolhida ao lado em **Casada em PWM ▸**, a varredura casada em PWM.
-- **Calibração ▸** abre o quadro da calibração do microfone: referência, curva esperada, dicas de montagem, esquema da célula e os botões **Gerar curva de calibração** e **Verificar com esta medida**. Com ele aberto, rodar a varredura mostra antes um aviso se o PWM não estiver em 100 %, se algum filtro de 60 Hz estiver ligado ou se **Usar** estiver marcado (com "Corrigir e rodar", "Rodar assim" ou "Cancelar").
-- **Ajuste ▸** abre o quadro dos modelos (ver abaixo), inclusive **Faixa com S ∝ f⁻ⁿ**.
-- Os três painéis começam fechados e o estado fica salvo entre sessões. **Duplo clique** num gráfico volta os eixos/zoom ao padrão.
-- **Abrir varredura…** carrega qualquer CSV do Modo Duplo da pasta Medidas, em frequência ou casada em PWM, inclusive os de formato antigo. A varredura aparece como se tivesse acabado de rodar: dá para aplicar calibração, ajustar modelos, excluir pontos e guardar calibração.
-- **Salvar de novo** com uma varredura aberta grava `<nome original>_editado_<hora>.csv`, registrando o arquivo de origem no cabeçalho.
-- **Limitação:** a varredura aberta não traz os cortes de filtro usados em cada ponto, então a banda do canal óptico não aparece na linha "Luz (OPT101)".
+**Top of the tab:**
+- **Sweep ▸** opens the **frequency sweep** (a single one, used both to calibrate and to measure), with **Refine resonance**, and, collapsed next to it under **Matched PWM ▸**, the matched PWM sweep.
+- **Calibration ▸** opens the microphone calibration panel: reference, expected curve, mounting tips, cell diagram and the **Generate calibration curve** and **Verify with this measurement** buttons. With it open, running the sweep first shows a warning if PWM is not at 100 %, if any 60 Hz filter is on or if **Use** is ticked (with "Fix and run", "Run anyway" or "Cancel").
+- **Fit ▸** opens the model panel (see below), including **Range with S ∝ f⁻ⁿ**.
+- The three panels start closed and their state is saved between sessions. **Double-click** on a plot resets the axes/zoom.
+- **Open sweep…** loads any Dual Mode CSV from the Medidas folder, frequency or matched PWM, including old formats. The sweep appears as if it had just run: you can apply a calibration, fit models, exclude points and generate a calibration curve (untick **Use** first).
+- **Save again** with an opened sweep writes `<original name>_editado_<time>.csv`, recording the source file in the header.
+- **Limitation:** an opened sweep does not carry the filter settings used at each point, so the optical channel bandwidth does not appear on the "Light (OPT101)" line.
 
-**τ das varreduras em frequência** (calibração e medidas): não há escolha de "Medida". Elas sempre usam integração longa: durante a varredura, os dois passa-baixas passam a ter esse τ (os valores são restaurados no fim), e em cada ponto a varredura espera 9τ e faz a média por 1τ. O campo τ é o mesmo τ do INMP441: ele começa com o valor da aba INMP441, e mudar o τ em qualquer um dos três lugares (aba INMP441, varredura da calibração ou varredura de medidas) muda os outros. Trocar a frequência de excitação leva o τ do INMP441 ao valor automático, e as varreduras acompanham.
+**τ of the frequency sweeps** (calibration and measurements): there is no "Measurement" choice. They always use long integration: during the sweep both low-pass filters take this τ (the values are restored at the end), and at each point the sweep waits 9τ and averages over 1τ. The τ field is the INMP441 τ: it starts with the INMP441 tab value, and changing τ in any of the places (INMP441 tab or sweep panel) changes the others. Changing the excitation frequency sets the INMP441 τ to the automatic value, and the sweeps follow.
 
-**Medida** da varredura casada em PWM:
-- *Média no tempo (τ atual)*: usa os filtros atuais. Espera 9τ do lock-in mais lento e faz a média por 4τ.
-- *Integração longa (τ da varredura)*: usa temporariamente o τ escolhido nos dois passa-baixas (os valores são restaurados no fim). Espera 9τ e faz a média por 1τ. Dá menos ruído por ponto, mas a varredura demora mais.
+**Measurement** for the matched PWM sweep:
+- *Time average (current τ)*: uses the current filters. Waits 9τ of the slower lock-in and averages over 4τ.
+- *Long integration (sweep τ)*: temporarily applies the chosen τ to both low-pass filters (restored at the end). Waits 9τ and averages over 1τ. Less noise per point, but the sweep takes longer.
 
-**Varreduras:**
-1. **Casada em PWM**: gráfico INMP441 R × OPT101 R com **ajuste linear** e gráfico OPT101 R × PWM. Verifica a linearidade do sinal fotoacústico com a potência.
-2. **Em frequência (normalizada pelo OPT101)**: espaçamento **logarítmico** (N pontos) ou **linear** (passo). Os gráficos mostram **S = R_INMP441 / R_OPT101** e **Δφ = φ_INMP441 − φ_OPT101** (desenrolada). **Arranjo dos gráficos** (botão direito sobre um gráfico → Arranjo dos gráficos): *lado a lado*, *empilhado* (eixo x compartilhado; a escala de frequência fica em cima no gráfico de cima e embaixo no de baixo, com o nome do eixo uma vez só, para os dois ficarem colados) ou *sobrepostos*, com S no eixo da esquerda e a fase no eixo da direita. Em todos os arranjos, o eixo de S é azul e o da fase é vermelho, nas cores das curvas. Nos sobrepostos, zoom, arraste e clique para excluir pontos agem no gráfico de S; a fase acompanha o eixo x e ajusta a escala sozinha. A escolha fica salva. A varredura casada em PWM fica sempre lado a lado, porque os eixos x são diferentes.
+**Sweeps:**
+1. **Matched PWM**: INMP441 R × OPT101 R plot with a **linear fit**, and OPT101 R × PWM plot. Checks the linearity of the photoacoustic signal with power.
+2. **Frequency (normalized by the OPT101)**: **logarithmic** (N points) or **linear** (step) spacing. The plots show **S = R_INMP441 / R_OPT101** and **Δφ = φ_INMP441 − φ_OPT101** (unwrapped). **Plot arrangement** (right-click on a plot → Plot arrangement): *side by side*, *stacked* (shared x axis; the frequency scale is on top of the upper plot and at the bottom of the lower one, with the axis name only once, so the two sit together) or *overlaid*, with S on the left axis and the phase on the right axis. In every arrangement the S axis is blue and the phase axis is red, matching the curves. When overlaid, zoom, pan and click-to-exclude act on the S plot; the phase follows the x axis and scales itself. The choice is saved. The matched PWM sweep is always side by side, because the x axes differ.
 
-**Layout:** os painéis Varredura, Calibração e Ajuste abrem acima dos gráficos, e os gráficos ocupam o resto da tela. Os resultados em texto (calibração, Diagnóstico, calibração aplicada, Luz) aparecem num **quadro flutuante sobre os gráficos**: arraste-o pelo título para tirá-lo de cima dos dados, ou recolha-o com ▾. A posição fica salva. Os textos longos (verificação completa, causas prováveis, detalhes do Diagnóstico) ficam nas dicas, ao passar o mouse. Em telas estreitas, o painel Calibração ganha rolagem horizontal em vez de alargar a janela.
+**Layout:** the Sweep, Calibration and Fit panels open above the plots, and the plots take the rest of the screen. Text results (calibration, Diagnostics, applied calibration, Light) appear in a **floating box over the plots**: drag it by its title to move it off the data, or collapse it with ▾. The position is saved. Long texts (full verification, likely causes, Diagnostics details) are in the tooltips. The Calibration panel takes only the height its contents need; on narrow screens it scrolls horizontally instead of widening the window.
 
-**Normalizar pelo OPT101** (marcada por padrão, só na varredura em frequência): desmarcada, os gráficos e os ajustes usam o R e a fase do INMP441 sozinhos, sem dividir pelo R do OPT101 nem descontar a fase dele. Serve para ver a resposta crua do microfone ou separar um efeito do laser de um efeito da célula. Sem normalização, a calibração do microfone fica desligada, porque foram definidos para o sinal normalizado. O CSV salvo continua com os dois canais brutos e registra no cabeçalho se a normalização estava ligada.
+**Normalize by OPT101** (ticked by default, frequency sweep only): unticked, plots and fits use the INMP441 R and phase alone, without dividing by the OPT101 R or subtracting its phase. Useful to see the raw microphone response or to tell a laser effect from a cell effect. Without normalization, the microphone calibration is off, because it is defined for the normalized signal. The saved CSV still has both raw channels and records in the header whether normalization was on.
 
-**Mostrar sinais de cada sensor:** abre uma segunda fileira de gráficos com o sinal de cada sensor separado: amplitude do INMP441 e do OPT101, cada uma dividida pela própria mediana na varredura (a legenda mostra essa mediana), e a fase de cada um, desenrolada. Assim dá para ver de qual sensor vem uma variação da curva normalizada (por exemplo, a ressonância aparece só no INMP441, e uma queda de potência do laser aparece nos dois). Na varredura em PWM, o eixo x é o PWM.
+**Show each sensor's signals:** opens a second row of plots with each sensor's signal separately: INMP441 and OPT101 amplitude, each divided by its own median over the sweep (the legend shows that median), and each phase, unwrapped. This shows which sensor a variation in the normalized curve comes from (for example, the resonance appears only in the INMP441, and a drop in laser power appears in both). In the PWM sweep, the x axis is PWM.
 
-**Diagnóstico** (varredura em frequência): separa o que é sinal fotoacústico do que é fundo. Ajusta amplitude e fase juntas com o modelo
+**Diagnostics** (frequency sweep): separates the photoacoustic signal from background. It fits amplitude and phase together with the model
 
 z(f) = e^(−2πi·f·td) · HP(f) · R(f) · [A·(f/100 Hz)^−n·e^(iα) + B·e^(iβ)]
 
-em que o primeiro termo entre colchetes é o fotoacústico (lei de potência, fase constante) e o segundo é um fundo plano (amplitude e fase que não mudam com a frequência: luz espalhada chegando ao microfone, chiado do driver do laser coerente com a modulação, acoplamento elétrico). HP é o passa-alta do microfone, td o atraso do sistema e R a ressonância da célula (só entra se houver pico). O ajuste é feito com e sem o fundo, e o fundo só é aceito se melhorar o ajuste de verdade (critério BIC). O gráfico mostra, com legenda, o modelo (preto), a componente fotoacústica (vermelho tracejado) e o fundo plano, não fotoacústico (roxo tracejado). O "atraso do canal do microfone" é o atraso puro da cadeia do microfone em relação à do OPT101, quase todo do filtro digital do INMP441 (~0,35 ms a 48 kHz); não é o tempo de voo do som nem o atraso térmico da amostra (esse fica na fase da componente fotoacústica), e o atraso do driver/laser se cancela em Δφ. O texto abaixo é curto: n, fc, atraso, f₀ e Q e, se houver fundo, um aviso vermelho de onde ele domina, pedindo para verificar a montagem e não gerar calibração. Os detalhes (razão fundo/fotoacústico em várias frequências, diferença de fase, incertezas e resíduo) ficam na dica do texto e no CSV. Usa os mesmos pontos do ajuste (respeita exclusões, calibração e normalização) e vai para o cabeçalho do CSV em "Salvar de novo". Leva alguns segundos e não roda durante a varredura. Precisa de pelo menos 12 pontos cobrindo uma década.
+where the first term in brackets is the photoacoustic part (power law, constant phase) and the second is a flat background (amplitude and phase that do not change with frequency: scattered light reaching the microphone, laser driver noise coherent with the modulation, electrical coupling). HP is the microphone high-pass, td the system delay and R the cell resonance (included only if there is a peak). The fit is done with and without the background, and the background is only accepted if it really improves the fit (BIC criterion). The plot shows, with a legend, the model (black), the photoacoustic component (dashed red) and the flat, non-photoacoustic background (dashed purple). The "microphone channel delay" is the pure delay of the microphone chain relative to the OPT101 chain, almost entirely from the INMP441 digital filter (~0.35 ms at 48 kHz); it is neither the sound flight time nor the thermal delay of the sample (that is in the phase of the photoacoustic component), and the driver/laser delay cancels in Δφ. The text is short: n, fc, delay, f₀ and Q and, if there is background, a red warning of where it dominates, asking you to check the setup and not generate a calibration. Details (background/photoacoustic ratio at several frequencies, phase difference, uncertainties and residual) are in the tooltip and in the CSV. It uses the same points as the fit (respects exclusions, calibration and normalization) and goes into the CSV header on "Save again". It takes a few seconds and does not run during the sweep. It needs at least 12 points covering one decade.
 
-**Refinar ressonância** (no quadro da varredura em frequência): ajusta a ressonância da célula (oscilador amortecido + fundo, só acima de 250 Hz) na varredura atual ou numa varredura aberta e mede mais pontos, igualmente espaçados, dentro da largura do pico: f0 ± f0/(2Q) (entre 2 % e 25 % de f0). "Pontos novos" escolhe quantos (12 por padrão); pontos a menos de 0,5 % de um já medido são pulados. Usa a Medida e o τ do quadro. Os pontos novos entram em ordem de frequência na mesma varredura, os pontos excluídos continuam excluídos, e ao terminar o CSV é gravado de novo (arquivo novo) com todos os pontos e a linha `# Refino da ressonância: …` no cabeçalho.
+**Refine resonance** (in the frequency sweep panel): fits the cell resonance (damped oscillator + background, above 250 Hz only) on the current sweep or an opened one and measures more points, evenly spaced, within the peak width: f0 ± f0/(2Q) (between 2 % and 25 % of f0). "New points" sets how many (12 by default); points within 0.5 % of an existing one are skipped. It uses the panel's τ. The new points are inserted in frequency order into the same sweep, excluded points stay excluded, and at the end the CSV is written again (new file) with all points and the line `# Refino da ressonância: …` in the header.
 
-**Excluir pontos do ajuste:** clique num ponto do gráfico da esquerda (magnitude) para tirá-lo do ajuste. Ele fica vazado e cinza, e o ajuste é refeito na hora; clique de novo para incluí-lo, ou use **Incluir todos**. Quando há pontos sobrepostos, vale o mais próximo do cursor. Os pontos excluídos aparecem listados abaixo do gráfico, no cabeçalho do CSV do Modo Duplo (os dados continuam completos) e, na calibração, com `Valido = 0` e uma linha no cabeçalho. Uma varredura nova começa sem exclusões.
+**Excluding points from the fit:** click a point on the left (magnitude) plot to remove it from the fit. It turns hollow and grey, and the fit is redone immediately; click again to include it, or use **Include all**. When points overlap, the one nearest the cursor is used. Excluded points are listed below the plot, in the Dual Mode CSV header (the data stay complete) and, in the calibration, with `Valido = 0` and a header line. A new sweep starts with no exclusions.
 
-**Salvar de novo:** o CSV e o PNG do Modo Duplo são gravados automaticamente no fim da varredura. Depois de excluir pontos, trocar o ajuste ou a calibração, use **Salvar de novo** para gravar arquivos novos com sufixo `_editado`. O cabeçalho deles traz o ajuste, as exclusões e a calibração atuais, mais o nome do arquivo original, que não é alterado.
+**Save again:** the Dual Mode CSV and PNG are saved automatically at the end of the sweep. After excluding points or changing the fit or calibration, use **Save again** to write new files with the `_editado` suffix. Their header carries the current fit, exclusions and calibration, plus the name of the original file, which is not changed.
 
-**Ajuste com modelos** (painel recolhível, só na varredura em frequência). Ajusta a magnitude, a fase ou as duas com modelos de célula aberta (luz por fora, microfone atrás da amostra). Com x = √(f/f₁) e f₁ = α/(πL²):
+**Fit with models** (**Fit ▸** panel, frequency sweep only). Fits magnitude, phase or both with open-cell models (light from outside, microphone behind the sample). With x = √(f/f₁) and f₁ = α/(πL²):
 
-- **Faixa com S ∝ f⁻ⁿ (n esperado da amostra)**, o primeiro da lista: escolha o **n esperado** (1 para amostra opaca na câmara, 1,5 para folha fina em OPC). O ajuste procura a maior faixa contínua da varredura em que S segue f⁻ⁿ (n livre dentro de ±0,15 do esperado, desvio ≤ 1,5 dB rms e fase constante ± 10° rms) e a mostra sombreada em verde nos dois gráficos. Fora dela, a forma vem do sistema (vazamento, ressonância) ou a amostra não é a esperada. Com a calibração aplicada, a faixa mostra onde a calibração vale. Faixa: de … até limita a busca.
+- **Range with S ∝ f⁻ⁿ (expected n of the sample)**, first in the list: choose the **expected n** (1 for an opaque sample in the chamber, 1.5 for a thin foil in OPC). The fit searches for the widest continuous range of the sweep where S follows f⁻ⁿ (free n within ±0.15 of the expected value, deviation ≤ 1.5 dB rms and constant phase ± 10° rms) and shows it shaded green on both plots. Outside it, the shape comes from the system (leak, resonance) or the sample is not what was expected. With the calibration applied, the range shows where the calibration holds. Range: from … to limits the search.
 
-| Modelo | S(f) ∝ | Resultado |
+| Model | S(f) ∝ | Result |
 |---|---|---|
-| Lei de potência | f⁻ⁿ (fase constante; só magnitude) | n |
-| Duas leis de potência (com quebra) | f⁻ⁿ¹ abaixo de fb, f⁻ⁿ² acima (contínuas; só magnitude) | n₁, n₂, fb (linha pontilhada no gráfico) |
-| Difusão térmica (placa, detecção traseira) | f⁻⁰·⁵ / [σL·sinh(σL)], σL = (1+i)x | f₁ |
-| Flexão termoelástica (Perondi–Miranda) | f⁻¹·[(1 − 1/x) + i/x] | f₁ |
-| Câmara: amostra opaca (RG) | f⁻¹, fase constante (célula fechada, amostra dentro) | resíduos (sem parâmetro de forma) |
-| Câmara: transparente e termicamente grossa (RG) | f⁻¹·⁵, fase constante | resíduos (sem parâmetro de forma) |
-| Ressonância da célula | A·e^{i(φ0 − 2πfτ)}·[f₀²/(f₀² − f² + i·f·f₀/Q) + b·e^{iβ}] | f₀, Q, largura f₀/Q, ganho do pico (dB) |
+| Power law | f⁻ⁿ (constant phase; magnitude only) | n |
+| Two power laws (with break) | f⁻ⁿ¹ below fb, f⁻ⁿ² above (continuous; magnitude only) | n₁, n₂, fb (dotted line on the plot) |
+| Thermal diffusion (slab, rear detection) | f⁻⁰·⁵ / [σL·sinh(σL)], σL = (1+i)x | f₁ |
+| Thermoelastic bending (Perondi–Miranda) | f⁻¹·[(1 − 1/x) + i/x] | f₁ |
+| Chamber: opaque sample (RG) | f⁻¹, constant phase (closed cell, sample inside) | residuals (no shape parameter) |
+| Chamber: transparent, thermally thick (RG) | f⁻¹·⁵, constant phase | residuals (no shape parameter) |
+| Cell resonance | A·e^{i(φ0 − 2πfτ)}·[f₀²/(f₀² − f² + i·f·f₀/Q) + b·e^{iβ}] | f₀, Q, width f₀/Q, peak gain (dB) |
 
-- **Constantes livres:** a amplitude e a fase de cada modelo são livres. Com a calibração aplicada (**Usar**), os dados corrigidos são a resposta da amostra (a curva teórica da referência de calibração já foi descontada), então o modelo descreve só a amostra. Sem calibração, o painel avisa que magnitude e fase incluem a resposta do microfone/célula e o atraso do sistema.
-- **Espessura:** com a **Espessura L** informada, o painel calcula a difusividade térmica **α = π·f₁·L²**. A incerteza mostrada não inclui a de L, que entra em dobro.
-- **Faixa:** a **Faixa: de … a … Hz** limita o ajuste à região onde o modelo vale. Os pontos excluídos com clique também ficam fora. A curva verde tracejada é desenhada só na faixa ajustada.
-- **Arquivos:** o resultado vai para o cabeçalho do CSV do Modo Duplo (use **Salvar de novo** depois de ajustar).
-- **Ti de 23/10:** a flexão ajustada pela fase deu f₁ ≈ 22–23 Hz (resíduo de ~11°). A difusão pura não descreve esse Ti.
-- **Modelos de câmara (RG):** para amostras de teste dentro da câmara, como vidro, depois de calibrar. Uma amostra semitransparente fica entre f⁻¹ e f⁻¹·⁵.
-- **Ressonância da célula:** sem **Faixa** (início/fim), o pico é achado sozinho (maior excesso sobre uma reta em log-log, janela de ±3 larguras). Com **Marcar pico (2 cliques)**, clique no gráfico da esquerda um pouco abaixo e um pouco acima do pico; os cliques preenchem a Faixa. O ajuste usa magnitude e fase juntas (ou só uma delas) e desenha o modelo nos dois gráficos, com uma linha vertical em f₀. Meça com **Usar** desmarcado: a calibração remove a ressonância da célula. Com menos de 10 pontos na janela aparece a sugestão de uma varredura linear em volta do pico (passo ≤ largura/5). Na célula nova de 10/11/2026, a varredura de 35 pontos deu f₀ ≈ 1,57 kHz e Q ≈ 6,5 (só 6 pontos na janela).
+- **Free constants:** each model's amplitude and phase are free. With the calibration applied (**Use**), the corrected data are the sample response (the theoretical curve of the calibration reference has already been removed), so the model describes only the sample. Without calibration, the panel warns that magnitude and phase include the microphone/cell response and the system delay.
+- **Thickness:** with **Thickness L** given, the panel computes the thermal diffusivity **α = π·f₁·L²**. The uncertainty shown does not include that of L, which enters twice.
+- **Range:** **Range: from … to … Hz** limits the fit to the region where the model holds. Points excluded by clicking are also left out. The dashed green curve is drawn only over the fitted range.
+- **Files:** the result goes into the Dual Mode CSV header (use **Save again** after fitting).
+- **Ti of 2026-10-23:** bending fitted on the phase gave f₁ ≈ 22–23 Hz (residual ~11°). Pure diffusion does not describe this Ti.
+- **Chamber models (RG):** for test samples inside the chamber, such as glass, after calibrating. A semi-transparent sample lies between f⁻¹ and f⁻¹·⁵.
+- **Cell resonance:** without a **Range** (start/end), the peak is found automatically (largest excess over a straight line in log-log, window of ±3 widths). With **Mark peak (2 clicks)**, click on the left plot slightly below and slightly above the peak; the clicks fill in the Range. The fit uses magnitude and phase together (or just one) and draws the model on both plots, with a vertical line at f₀. Measure with **Use** unticked: the calibration removes the cell resonance. With fewer than 10 points in the window, a linear sweep around the peak is suggested (step ≤ width/5). In the new cell of 2026-11-10, the 35-point sweep gave f₀ ≈ 1.57 kHz and Q ≈ 6.5 (only 6 points in the window).
 
-**Calibração do microfone: uma referência gera a calibração e uma segunda referência, diferente, a confere.** Fica no painel **Calibração ▸**, no topo da aba.
+**Microphone calibration: one reference generates the calibration and a second, different reference checks it.** It is in the **Calibration ▸** panel at the top of the tab.
 
-*Por que duas referências:* na câmara, a célula tem ressonância de Helmholtz e o canal do microfone (e eventuais vazamentos) não é plano, então a resposta do sistema entra na forma de S(f). Uma referência sozinha não separa "a amostra não segue f⁻ⁿ" de "o sistema não é plano". A segunda referência, corrigida pela calibração, tem de seguir f⁻ⁿ.
+*Why two references:* in the chamber, the cell has a Helmholtz resonance and the microphone channel (and any leaks) is not flat, so the system response enters the shape of S(f). A single reference cannot tell "the sample does not follow f⁻ⁿ" from "the system is not flat". The second reference, corrected by the calibration, must follow f⁻ⁿ.
 
-**Referência.** A caixa **Referência** escolhe o padrão. Cada um tem uma curva teórica S ∝ f⁻ⁿ com fase constante e vale numa configuração da célula, que é escolhida automaticamente em **Célula** (linha superior). Ao lado da caixa ficam os parâmetros editáveis (espessura L e difusividade α, ou n na personalizada), uma linha com a curva esperada e, à direita, um **esquema da montagem** com dicas: a amostra fecha a célula (OPC) ou fica dentro, sob a janela de vidro, com a folga de ar indicada (câmara).
+**Reference.** The **Reference** box chooses the standard. Each has a theoretical curve S ∝ f⁻ⁿ with constant phase and is valid in one cell configuration, which is selected automatically in **Cell** (top row). Next to the box are the editable parameters (thickness L and diffusivity α, or n for the custom one), a line with the expected curve and, on the right, a **mounting diagram** with tips: the sample closes the cell (OPC) or sits inside, under the glass window, with the air gap shown (chamber).
 
-| Referência | Célula | Curva teórica | Parâmetros | Observações |
+| Reference | Cell | Theoretical curve | Parameters | Notes |
 |---|---|---|---|---|
-| Folha de Al fina (modo OPC) | OPC | f⁻¹·⁵, fase constante; vale para f ≪ f₁ = α/(πL²) | L = 12 µm, α = 0,97 cm²/s | f₁ ≈ 214 kHz. Aviso se a varredura passar de f₁/10. É a calibração das versões anteriores. |
-| Al espesso dentro da câmara | Câmara | f⁻¹, fase constante (Rosencwaig–Gersho, opaca) | L, α (só informativos) | Mostra μ = √(α/πf) e a transição fina/grossa; f⁻¹ vale nos dois regimes. Sinal fraco: o Al reflete ~90 %. |
-| Folha de Al fina dentro da câmara | Câmara | f⁻¹, fase constante (opaca, termicamente fina sobre apoio grosso) | L, α (só informativos) | Folha com o lado fosco para o laser, lisa e colada sobre papel, plástico ou fita dupla face no fundo da câmara. O sinal depende do contato com o apoio (sem rugas nem bolhas). Sinal fraco. |
-| Al pintado de preto fosco (câmara) | Câmara | f⁻¹ acima de ~100 Hz | L, α (só informativos) | A tinta é uma camada isolante sobre o Al: abaixo de ~10–100 Hz (conforme a espessura) parte do calor vai para o Al e o sinal cai. Acima disso se comporta como a fita preta (em 10/11/2026 as duas curvas tiveram a mesma forma entre 70 e 700 Hz). |
-| Negro de fumo (câmara) | Câmara | f⁻¹, fase constante | nenhum | **Recomendada para gerar a calibração.** Padrão clássico da fotoacústica. Fuligem de vela sobre um pedaço de lâmina de vidro (apoio isolante, não metal), em camada grossa (~0,1 mm, preta fosca e opaca contra a luz), na mesma altura das amostras. Frágil: não toque nem sopre. |
-| Fita preta fosca (câmara) | Câmara | f⁻¹, fase constante | nenhum | Rápida de montar e com sinal alto. Boa para conferir a calibração do negro de fumo ("Verificar com esta medida"), ou para gerar. Limite a Faixa a ~1 kHz. |
-| Personalizada (lei de potência) | a escolhida em Célula | f⁻ⁿ, fase constante | n | Para outro padrão de expoente conhecido. |
+| Thin Al foil (OPC mode) | OPC | f⁻¹·⁵, constant phase; valid for f ≪ f₁ = α/(πL²) | L = 12 µm, α = 0.97 cm²/s | f₁ ≈ 214 kHz. Warning if the sweep goes beyond f₁/10. This is the calibration of earlier versions. |
+| Thick Al inside the chamber | Chamber | f⁻¹, constant phase (Rosencwaig–Gersho, opaque) | L, α (informative only) | Shows μ = √(α/πf) and the thin/thick transition; f⁻¹ holds in both regimes. Weak signal: Al reflects ~90 %. |
+| Thin Al foil inside the chamber | Chamber | f⁻¹, constant phase (opaque, thermally thin on a thick backing) | L, α (informative only) | Foil with the matte side toward the laser, flat and stuck onto paper, plastic or double-sided tape on the chamber floor. The signal depends on contact with the backing (no wrinkles or bubbles). Weak signal. |
+| Matte black painted Al (chamber) | Chamber | f⁻¹ above ~100 Hz | L, α (informative only) | The paint is an insulating layer on the Al: below ~10–100 Hz (depending on thickness) part of the heat goes into the Al and the signal drops. Above that it behaves like the black tape (on 2026-11-10 both curves had the same shape between 70 and 700 Hz). |
+| Carbon black (chamber) | Chamber | f⁻¹, constant phase | none | **Recommended for generating the calibration.** Classic photoacoustic standard. Candle soot on a piece of glass slide (insulating backing, not metal), in a thick layer (~0.1 mm, matte black and opaque against the light), at the same height as the samples. Fragile: do not touch or blow on it. |
+| Matte black tape (chamber) | Chamber | f⁻¹, constant phase | none | Quick to mount, high signal. Good for checking the carbon black calibration ("Verify with this measurement"), or for generating one. Limit the Range to ~1 kHz. |
+| Custom (power law) | the one chosen in Cell | f⁻ⁿ, constant phase | n | For another standard with a known exponent. |
 
-Não servem como referência: **vidro e PVC** (o expoente depende da absorção no comprimento de onda do laser) e **folha de Al pintada de preto em OPC** (a tinta fica termicamente grossa acima de ~0,1 Hz e destrói o f⁻¹·⁵). Vidro e PVC servem como amostras de teste, com os modelos de câmara do Ajuste com modelos. Na câmara, deixe 2–3 mm de ar ou mais sobre a amostra (μ do ar a 5 Hz ≈ 1,2 mm); a janela de vidro também absorve um pouco, o que pesa mais com Al polido.
+Not suitable as references: **glass and PVC** (the exponent depends on absorption at the laser wavelength) and **black-painted Al foil in OPC** (the paint becomes thermally thick above ~0.1 Hz and destroys the f⁻¹·⁵). Glass and PVC are fine as test samples, with the chamber models of the Fit panel. In the chamber, leave 2–3 mm of air or more above the sample (μ of air at 5 Hz ≈ 1.2 mm); the glass window also absorbs a little, which matters more with polished Al.
 
-1. Escolha a referência e monte-a como no esquema. Abra **Varredura ▸**: ela já abre com 5 a 2440 Hz, 35 pontos logarítmicos e τ = 2 s (≈ 12 min; é o mesmo τ do INMP441). Com o painel Calibração aberto, ao rodar aparece o aviso de PWM/60 Hz/Usar.
-2. **Gerar curva de calibração**: nada é gravado sem este clique, então guarde só as calibrações úteis (curva limpa e repetível). Não há ajuste de modelo: em teoria a referência dá S ∝ f⁻ⁿ (n da referência: 1,5 na folha em OPC, 1 nas referências da câmara), então a calibração guarda `M(f) = S(f)·fⁿ`, a resposta relativa do sistema microfone + célula, normalizada pela **faixa plana** (maior trecho em que M fica dentro de ±1 dB; tolerância em **Avançado ▸**; sem faixa plana, pela mediana). A fase do sistema é `Δφ(f) − φ0`, com φ0 a fase média na faixa plana. Entram todos os pontos com SNR suficiente, inclusive a ressonância. Antes de guardar, o quadro de resultados mostra quantos pontos entram e onde o sistema é plano (linha laranja f⁻ⁿ).
-   - Toda calibração nova nasce **não verificada** (⚠ na lista e no título do PNG, aviso sempre que for usada) até passar na verificação.
-   - O cabeçalho grava `# Ressonancia_f0_Hz`, o pico da célula acima de 250 Hz. Ao aplicar a calibração numa varredura cuja ressonância difere mais de 3 %, aparece um aviso (altura da amostra diferente da referência).
-   - Calibrações das versões anteriores continuam válidas (o formato do arquivo é o mesmo; as colunas `Sensibilidade_Fit` e `No_Ajuste` agora repetem `Sensibilidade_Rel` e `Faixa_Plana`).
-3. A calibração nova já aparece selecionada em **Calibração:**, na linha superior. Marque **Usar**: as varreduras em frequência passam a ser corrigidas por ela.
-4. **Verificar com esta medida.** Com **Usar** marcado, meça uma segunda referência de material diferente, na mesma altura e montagem (ex.: calibrou com o negro de fumo, confira com a fita preta), escolha-a em **Referência** e clique em **Verificar com esta medida**. Passa se a referência corrigida seguir f⁻ⁿ numa faixa contínua de pelo menos **uma década** (fator 10 em frequência), com |n − n esperado| ≤ 0,15, desvio ≤ 1,5 dB rms e fase constante ± 10° rms. O resultado (faixa, n, desvios) vai para o arquivo da calibração (`# Verificada = sim/nao`). Com a mesma referência da calibração, a interface só informa a repetibilidade.
+1. Choose the reference and mount it as in the diagram. Open **Sweep ▸**: it opens with 5 to 2440 Hz, 35 logarithmic points and τ = 2 s (≈ 12 min; this is the INMP441 τ). With the Calibration panel open, running shows the PWM/60 Hz/Use warning.
+2. **Generate calibration curve**: nothing is saved without this click, so keep only useful calibrations (clean, repeatable curve). There is no model fit: in theory the reference gives S ∝ f⁻ⁿ (n of the reference: 1.5 for the foil in OPC, 1 for the chamber references), so the calibration stores `M(f) = S(f)·fⁿ`, the relative response of the microphone + cell system, normalized by the **flat range** (widest stretch where M stays within ±1 dB; tolerance under **Advanced ▸**; without a flat range, by the median). The system phase is `Δφ(f) − φ0`, with φ0 the mean phase over the flat range. All points with enough SNR are included, the resonance as well. Before saving, the results box shows how many points enter and where the system is flat (orange f⁻ⁿ line). The button works on an opened sweep too; untick **Use** first, so the curve comes from the uncorrected data.
+   - Every new calibration starts as **not verified** (⚠ in the list and in the PNG title, warning whenever it is used) until it passes verification.
+   - The header records `# Ressonancia_f0_Hz`, the cell peak above 250 Hz. When the calibration is applied to a sweep whose resonance differs by more than 3 %, a warning appears (sample height different from the reference).
+   - Calibrations from earlier versions remain valid (same file format; the `Sensibilidade_Fit` and `No_Ajuste` columns now repeat `Sensibilidade_Rel` and `Faixa_Plana`).
+3. The new calibration is already selected in **Calibration:** on the top row. Tick **Use**: frequency sweeps are now corrected by it.
+4. **Verify with this measurement.** With **Use** ticked, measure a second reference of a different material, at the same height and mounting (e.g. calibrated with carbon black, check with black tape), choose it in **Reference** and click **Verify with this measurement**. It passes if the corrected reference follows f⁻ⁿ over a continuous range of at least **one decade** (factor 10 in frequency), with |n − expected n| ≤ 0.15, deviation ≤ 1.5 dB rms and constant phase ± 10° rms. The result (range, n, deviations) goes into the calibration file (`# Verificada = sim/nao`). With the same reference as the calibration, the interface only reports repeatability.
 
-**τ do sensor (correção, em "Avançado ▸" no painel Calibração):** só é necessário se você trocar o resistor de realimentação do OPT101 entre a calibração e a medida. **Medir…** compara a varredura atual com outra já salva (mesma luz, outro resistor) e preenche o τ.
+**Sensor τ (correction, under "Advanced ▸" in the Calibration panel):** only needed if you change the OPT101 feedback resistor between calibration and measurement. **Measure…** compares the current sweep with another saved one (same light, different resistor) and fills in τ.
 
-**Boas práticas na câmara:** amostras e referências na mesma altura (mesmo volume livre, mesma f₀); feixe inteiro na amostra, sem raspar a borda nem a parede; furo de equalização fechado igual em todas as medidas; janela limpa (poeira e gordura absorvem e somam sinal, o que pesa com amostras refletoras); repita a referência para conhecer a repetibilidade antes de julgar a verificação.
+**Good practice in the chamber:** samples and references at the same height (same free volume, same f₀); the whole beam on the sample, not grazing the edge or the wall; equalization hole closed the same way in every measurement; clean window (dust and grease absorb and add signal, which matters with reflective samples); repeat the reference to know the repeatability before judging the verification.
 
-## Arquivos gerados (`Medidas/`)
+## Generated files (`Medidas/`)
 
-Todos os arquivos são CSV em UTF-8, com cabeçalho de comentários (`#`) que traz os parâmetros. Cada CSV tem um PNG com o mesmo nome.
+All files are UTF-8 CSV, with a comment header (`#`) carrying the parameters. Each CSV has a PNG with the same name. File names and column names are in Portuguese in both interface languages, so data files are always compatible.
 
-| Origem | Nome do arquivo | Colunas |
+| Source | File name | Columns |
 |---|---|---|
-| Salvar (Lock-In) | `LockIn_<f>Hz_<data>` | Tempo_s, Magnitude, Fase_Graus |
-| Salvar (Valor Médio) | `ValorMedio_<f>Hz_<data>` | Tempo_s, ADC_Medio [, Fit_Exp] |
-| Varredura F | `OPT101_F_varredura_f<ini>_f<fim>_<passo>_<data>` (ou `INMP441_…`) | Frequencia_Hz, Magnitude_Media, Magnitude_DesvioPadrao, Fase_Media_Graus, Fase_DesvioPadrao_Graus, DC_Offset_Medio |
-| Varredura P | `OPT101_P_varredura_p<ini>_p<fim>_<passo>_f<f>Hz_<data>` (ou `INMP441_…`) | PWM_Pct, (mesmas colunas) |
-| Modo Duplo, PWM | `DUPLO_casada_pwm<ini>_<fim>_f<f>Hz_<data>` | PWM_Pct, OPT101_R, OPT101_R_DP, INMP441_R, INMP441_R_DP, INMP441_Fase_Graus, INMP441_Fase_DP, OPT101_Fase_Graus, OPT101_Fase_DP |
-| Modo Duplo, freq. | `DUPLO_freq_<ini>_<fim>Hz_pwm<p>_<data>` | Frequencia_Hz, (mesmas colunas) |
-| Calibração | `CAL_[<amostra>_]microfone_<OPC\|Camara>_<ini>_<fim>Hz_<data>` | Frequencia_Hz, Sensibilidade_Rel, Sensibilidade_Rel_DP, Sensibilidade_Fit, Fase_Sistema_Graus, Fase_DP, Valido, Faixa_Plana, No_Ajuste |
+| Save (Lock-In) | `LockIn_<f>Hz_<date>` | Tempo_s, Magnitude, Fase_Graus |
+| Save (Average) | `ValorMedio_<f>Hz_<date>` | Tempo_s, ADC_Medio [, Fit_Exp] |
+| Frequency sweep | `OPT101_F_varredura_f<start>_f<end>_<step>_<date>` (or `INMP441_…`) | Frequencia_Hz, Magnitude_Media, Magnitude_DesvioPadrao, Fase_Media_Graus, Fase_DesvioPadrao_Graus, DC_Offset_Medio |
+| PWM sweep | `OPT101_P_varredura_p<start>_p<end>_<step>_f<f>Hz_<date>` (or `INMP441_…`) | PWM_Pct, (same columns) |
+| Dual Mode, PWM | `DUPLO_casada_pwm<start>_<end>_f<f>Hz_<date>` | PWM_Pct, OPT101_R, OPT101_R_DP, INMP441_R, INMP441_R_DP, INMP441_Fase_Graus, INMP441_Fase_DP, OPT101_Fase_Graus, OPT101_Fase_DP |
+| Dual Mode, frequency | `DUPLO_freq_<start>_<end>Hz_pwm<p>_<date>` | Frequencia_Hz, (same columns) |
+| Calibration | `CAL_[<sample>_]microfone_<OPC\|Camara>_<start>_<end>Hz_<date>` | Frequencia_Hz, Sensibilidade_Rel, Sensibilidade_Rel_DP, Sensibilidade_Fit, Fase_Sistema_Graus, Fase_DP, Valido, Faixa_Plana, No_Ajuste |
 
-Com o campo **Amostra** preenchido, todos os nomes começam com `<amostra>_` (ex.: `Grafite_OPT101_F_varredura_…`). A exceção é a calibração, que começa com `CAL_` e só depois traz o nome da amostra: `CAL_<amostra>_microfone_…` (sem amostra: `CAL_microfone_…`). "Usar última calibração" pega o arquivo `CAL_*microfone_*.csv` mais recente, com qualquer nome de amostra. O formato de `<data>` é `AAAAMMDD_HHMMSS`. Os dados do Modo Duplo são sempre gravados **brutos**, mesmo com a calibração aplicada no gráfico.
+With the **Sample** field filled in, every name starts with `<sample>_` (e.g. `Grafite_OPT101_F_varredura_…`). The exception is the calibration, which starts with `CAL_` and only then carries the sample name: `CAL_<sample>_microfone_…` (without a sample: `CAL_microfone_…`). The `<date>` format is `YYYYMMDD_HHMMSS`. Dual Mode data are always saved **raw**, even with the calibration applied on the plot.
 
-## Especificações resumidas
+Column glossary: Tempo = time, Fase = phase, Graus = degrees, Media = mean, DesvioPadrao / DP = standard deviation, Frequencia = frequency, Sensibilidade = sensitivity, Valido = valid, Faixa_Plana = flat range.
+
+## Summary specifications
 
 | Item | OPT101 | INMP441 |
 |---|---|---|
-| Taxa de amostragem | 200 kS/s crus; 200/OSR kS/s depois da sobreamostragem (padrão 12,5 kS/s) | 48 000 S/s exatos |
-| Resolução | 12 bits por amostra; escala 0–16 380 (média × 4) | 24 bits com sinal |
-| Banda útil | 0 – FS/2 (6,25 kHz com OSR 16) | 0 – 24 kHz |
-| Referência do lock-in | PLL por software, travado nas bordas do bit REF | Numérica (sequência I2S + marcador de partida) |
-| Demodulação | Quadratura, passa-baixas de 2 polos em cascata, remoção de DC com passa-altas de 1 polo | idem |
-| Saída do lock-in | ≈50 pontos/s | 20 pontos/s (blocos de 2400 amostras) |
-| Filtro de rede | Notches em 60 Hz e harmônicos até 1,5 kHz (opcional) | idem |
-| Modulação | 0,1 – 5000 Hz (ou contínuo) | — |
-| Potência | PWM de 5 kHz, 0 – 100 % em passos de 0,1 % | — |
-| Atualização da tela | 25 quadros/s | — |
+| Sample rate | 200 kS/s raw; 200/OSR kS/s after oversampling (default 12.5 kS/s) | Exactly 48,000 S/s |
+| Resolution | 12 bits per sample; scale 0–16,380 (average × 4) | Signed 24 bits |
+| Usable bandwidth | 0 – FS/2 (6.25 kHz with OSR 16) | 0 – 24 kHz |
+| Lock-in reference | Software PLL locked to the REF bit edges | Numerical (I2S sequence + start marker) |
+| Demodulation | Quadrature, cascaded 2-pole low-pass, DC removal with a 1-pole high-pass | same |
+| Lock-in output | ≈50 points/s | 20 points/s (blocks of 2400 samples) |
+| Mains filter | Notches at 60 Hz and harmonics up to 1.5 kHz (optional) | same |
+| Modulation | 0.1 – 5000 Hz (or continuous) | — |
+| Power | 5 kHz PWM, 0 – 100 % in 0.1 % steps | — |
+| Screen refresh | 25 frames/s | — |
 
-**Correção da média (OPT101):** cada amostra óptica é a média de OSR conversões do ADC (80 µs com OSR 16). Essa média atenua a fundamental por sin(πf·OSR/200 kHz)/(OSR·sin(πf/200 kHz)): com OSR 16, −1 % em 1 kHz, −4 % em 2 kHz e −9 % em 3 kHz; com OSR 1, nada. A magnitude do lock-in do OPT101 já sai dividida por esse fator, então os valores de R gravados estão corrigidos. A fase não precisa dessa correção: a referência (bit REF, maioria das OSR amostras) é tirada da mesma janela. O atraso fixo da referência, (OSR−1)/2 amostras de 5 µs, entra na fase digital usada pelos ajustes do Modo Duplo.
+**Averaging correction (OPT101):** each optical sample is the average of OSR ADC conversions (80 µs with OSR 16). This average attenuates the fundamental by sin(πf·OSR/200 kHz)/(OSR·sin(πf/200 kHz)): with OSR 16, −1 % at 1 kHz, −4 % at 2 kHz and −9 % at 3 kHz; with OSR 1, nothing. The OPT101 lock-in magnitude is already divided by this factor, so the saved R values are corrected. The phase needs no such correction: the reference (REF bit, majority of the OSR samples) is taken from the same window. The fixed reference delay, (OSR−1)/2 samples of 5 µs, enters the digital phase used by the Dual Mode fits.
 
-**Detalhes do PLL (OPT101):** o PLL trava quando o período entre bordas está dentro de ±(2 amostras + 0,1 %) do nominal. Os ganhos são Kp = 0,05 e Ki = Kp²/4, e a frequência fica limitada a ±5 % da nominal. O PLL destrava se o erro médio de fase passar de 1,1 rad ou se ficar sem bordas por 10 s.
+**PLL details (OPT101):** the PLL locks when the period between edges is within ±(2 samples + 0.1 %) of nominal. The gains are Kp = 0.05 and Ki = Kp²/4, and the frequency is limited to ±5 % of nominal. The PLL unlocks if the mean phase error exceeds 1.1 rad or if no edges arrive for 10 s.
