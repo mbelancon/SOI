@@ -631,8 +631,8 @@ def load_dual_csv(path):
               'freq': num(r'_f([\d.]+)Hz_', name) if kind == 'P' else None,
               'mode': mode.group(1).strip() if mode else 'não registrada',
               'tau': num(r'tau = ([\d.eE+-]+) s \(integração longa\)', header)}
-    if re.search(r'# Modulacao = externa', header):
-        params['mod'] = 'externa'
+    if re.search(r'# Modulacao = (optica|externa)', header):
+        params['mod'] = 'optica'
     refine = re.findall(r'# (Refino da ressonância:[^\n]+)', header)
     if refine:
         params['refine'] = refine[-1]
@@ -1753,8 +1753,8 @@ def decimate_raw(buf, osr):
 
 class PyLockIn(_MainsFilterMixin):
     def __init__(self, fs, ref_freq, cutoff_lp, cutoff_hp):
-        # Modulação externa: ExternalReference (PLL no próprio sinal) e ExtTimeSync (farol do bit 15).
-        # None = modulação interna (PLL nas bordas do bit 15, o laser do STM32).
+        # Modulação óptica: ExternalReference (PLL no próprio sinal) e ExtTimeSync (farol do bit 15).
+        # None = modulação eletrônica (PLL nas bordas do bit 15, o laser do STM32).
         self.ext = None
         self.ext_sync = None
         self.init(fs, ref_freq, cutoff_lp, cutoff_hp)
@@ -1868,7 +1868,7 @@ class PyLockIn(_MainsFilterMixin):
     # ------------------------------------------------------------------ DSP
     def process(self, buf, decimation, enable_lockin, normalize, stream_pos=None):
         '''stream_pos: índice (amostras cruas desde a conexão) da primeira palavra de buf; usado só na
-        modulação externa, em que a referência é a fase θ(s) do próprio OPT101.'''
+        modulação óptica, em que a referência é a fase θ(s) do próprio OPT101.'''
         adc, ref, consumed = self._parse(buf)
         ext = self.ext
         theta = None
@@ -1885,7 +1885,7 @@ class PyLockIn(_MainsFilterMixin):
         x = adc.astype(np.float64)
 
         if theta is not None:
-            # Mesma convenção de fase da modulação interna (onda quadrada que liga em θ = 0, PLL no centro
+            # Mesma convenção de fase da modulação eletrônica (onda quadrada que liga em θ = 0, PLL no centro
             # do bloco do OSR): Δφ = φ_INMP441 − φ_OPT101 sai igual e as calibrações valem nos dois modos.
             theta = theta + 0.5 * np.pi + TWO_PI * self.ref_freq * opt_ref_delay(self.osr)
         else:
@@ -1955,7 +1955,7 @@ class AudioLockIn(_MainsFilterMixin):
     def process(self, sequence, samples, decimation, theta=None):
         '''samples: int32 (PCM 24 bits). Devolve (r, fase em graus), uma saída a cada 'decimation'
         amostras (contador persistente), em fração da escala completa. theta: fase da referência em cada
-        amostra (modulação externa, vinda do OPT101); None = referência numérica a partir do marcador.'''
+        amostra (modulação óptica, vinda do OPT101); None = referência numérica a partir do marcador.'''
         x = np.asarray(samples, dtype=np.float64) / 8388608.0
         if theta is None:
             n = float((sequence - self.phase_origin) & 0xFFFFFFFF) + np.arange(x.size, dtype=np.float64)
@@ -1983,7 +1983,7 @@ class AudioLockIn(_MainsFilterMixin):
 
 
 # ----------------------------------------------------------------------------
-# Modulação externa (chopper): referência derivada do próprio OPT101
+# Modulação óptica (chopper): referência derivada do próprio OPT101
 # ----------------------------------------------------------------------------
 # Com a luz modulada fora do SOI (chopper, ventilador), o STM32 não gera a referência. A interface:
 #  1. acha a frequência na FFT do OPT101 e a segue com um PLL sobre o próprio sinal (ExternalReference),
@@ -1993,7 +1993,7 @@ class AudioLockIn(_MainsFilterMixin):
 #     1 Hz com PWM 0 (laser apagado); o bit 15 do OPT101 e o marcador do I2S marcam o mesmo instante.
 # Os dois lock-ins usam a mesma θ: erros dela (atraso de filtro, jitter do chopper) se cancelam em
 # S = R_INMP441/R_OPT101 e Δφ = φ_INMP441 − φ_OPT101.
-EXT_BEACON_HZ = 1.0           # farol do alinhamento ADC↔I2S (F do STM32 no modo externo; PWM 0)
+EXT_BEACON_HZ = 1.0           # farol do alinhamento ADC↔I2S (F do STM32 no modo óptico; PWM 0)
 EXT_FMIN_DEFAULT = 20.0       # faixa de busca padrão da frequência do chopper (Hz)
 EXT_FMAX_DEFAULT = 5000.0
 EXT_TIMELINE_SEC = 4.0        # quanto da fase θ(s) fica guardado para o lock-in do INMP441
@@ -3079,7 +3079,7 @@ class SerialLink(threading.Thread):
 # Janela principal
 # ----------------------------------------------------------------------------
 class ChopperSimulator:
-    '''Simulação da modulação externa: um ventilador/chopper com frequência nominal ajustável (o campo
+    '''Simulação da modulação óptica: um ventilador/chopper com frequência nominal ajustável (o campo
     Freq faz de botão do chopper) que deriva devagar, pás um pouco desiguais e luz trapezoidal. A fase da
     luz é uma função determinística do tempo, então o OPT101 e o INMP441 simulados (gerados em threads
     diferentes) veem a mesma luz. Também simula o farol do STM32 (bit 15 a 1 Hz e marcador do I2S).
@@ -3285,7 +3285,7 @@ class AudioSimulator:
         return chunks
 
     def _generate_ext(self, m, chopper):
-        '''Modulação externa: o tom segue a fase da luz do chopper simulado (mesma luz do OPT101).'''
+        '''Modulação óptica: o tom segue a fase da luz do chopper simulado (mesma luz do OPT101).'''
         idx = self.n + np.arange(m)
         t = idx / AUDIO_FS_REAL
         p, f = chopper.phase(t)
@@ -3677,13 +3677,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.rx_bytes = bytearray()
         self.rx_pos = 0                       # índice no fluxo óptico da primeira palavra de rx_bytes
         self.dsp_lock = threading.Lock()      # protege dsp e rx_bytes (thread do OPT101)
-        # Modulação externa (chopper): PLL no próprio OPT101 e alinhamento ADC↔I2S pelo farol do bit 15
+        # Modulação óptica (chopper): PLL no próprio OPT101 e alinhamento ADC↔I2S pelo farol do bit 15
         self.ext_mode = False
         self.ext_ref = ExternalReference()
         self.ext_sync = ExtTimeSync()
         self.audio_ext_pending = deque()      # áudio esperando a fase do OPT101 (thread do INMP441)
         self.audio_ext_drops = 0
-        self.chopper_sim = None               # ChopperSimulator na simulação do modo externo
+        self.chopper_sim = None               # ChopperSimulator na simulação do modo óptico
         self._ext_resync_t = 0.0
         self._ext_tuned_f = None              # frequência em que os cortes automáticos foram aplicados
         self.opt_results = deque()
@@ -3820,12 +3820,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         lbl_exc.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_exc)
         self.cmb_mod = QtWidgets.QComboBox()
-        self.cmb_mod.addItems(['Interna', 'Externa'])
+        self.cmb_mod.addItems(['Eletrônica', 'Óptica'])
         self.cmb_mod.setToolTip(
-            'Interna: o STM32 modula o laser (PWM em PA8) na frequência escolhida e dá a referência dos lock-ins.\n'
-            'Externa: a luz é modulada por fora (chopper, ventilador) e a fonte é alimentada por fora; o SOI acha a\n'
+            'Eletrônica: o STM32 modula o laser (PWM em PA8) na frequência escolhida e dá a referência dos lock-ins.\n'
+            'Óptica: a luz é modulada por fora (chopper, ventilador) e a fonte é alimentada por fora; o SOI acha a\n'
             'frequência no sinal do OPT101 e usa a fase dele como referência dos dois lock-ins (OPT101 e INMP441).\n'
-            'O OPT101 precisa ver a luz já modulada. No modo externo o STM32 fica com PWM 0 e modula só um "farol"\n'
+            'O OPT101 precisa ver a luz já modulada. No modo óptico o STM32 fica com PWM 0 e modula só um "farol"\n'
             'de 1 Hz no bit de referência, que alinha o OPT101 ao microfone (não ligue nada em PA8).\n'
             'Vale para as três abas; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).')
         self.cmb_mod.currentIndexChanged.connect(self.on_mod_mode)
@@ -3834,7 +3834,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             lbl = QtWidgets.QLabel(label)
             excitation.addWidget(lbl)
             excitation.addWidget(w)
-        self.lbl_power = lbl                  # PWM some na modulação externa (o lugar vai para a frequência detectada)
+        self.lbl_power = lbl                  # PWM some na modulação óptica (o lugar vai para a frequência detectada)
         self.lbl_ext = QtWidgets.QLabel('')
         self.lbl_ext.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_ext.setVisible(False)
@@ -3949,11 +3949,11 @@ class LockInWindow(QtWidgets.QMainWindow):
             'histograma dos códigos crus do ADC.')
         self.btn_res_test.clicked.connect(self.open_resolution_test)
         top.addWidget(self.btn_res_test)
-        # Faixa em que a frequência do chopper é procurada (modulação externa)
+        # Faixa em que a frequência do chopper é procurada (modulação óptica)
         self.ext_range_w = QtWidgets.QWidget()
         er = QtWidgets.QHBoxLayout(self.ext_range_w)
         er.setContentsMargins(0, 0, 0, 0)
-        lbl = QtWidgets.QLabel('Busca da modulação externa:')
+        lbl = QtWidgets.QLabel('Busca da modulação óptica:')
         lbl.setStyleSheet('font-weight:bold;')
         er.addWidget(lbl)
         self.sp_ext_fmin = self._dspin(1.0, 5000.0, EXT_FMIN_DEFAULT, 1, 5.0, self.on_ext_range, 90, ' Hz')
@@ -5466,7 +5466,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cal_pending = slot
         self.lbl_cal_s_state[slot].setText('medindo…')
         if self.ext_mode:
-            # Modulação externa: varredura manual; "Concluir" guarda a varredura como amostra do slot
+            # Modulação óptica: varredura manual; "Concluir" guarda a varredura como amostra do slot
             self.cal_pending = None
             if not self.btn_dual_pwm_panel.isChecked():
                 self.btn_dual_pwm_panel.setChecked(True)
@@ -5928,7 +5928,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.flash('Espere a varredura atual terminar (ou cancele) antes de refinar.')
             return
         if self.ext_mode:
-            self.flash('Modulação externa: meça os pontos da ressonância na varredura manual.')
+            self.flash('Modulação óptica: meça os pontos da ressonância na varredura manual.')
             return
         if not getattr(self, 'dual_results', None) or self.dual_kind != 'F':
             self.flash('Rode (ou abra) uma varredura em frequência antes de refinar a ressonância.')
@@ -6002,11 +6002,11 @@ class LockInWindow(QtWidgets.QMainWindow):
             return True
         return box.clickedButton() is keep
 
-    # ------------------------------------------------------------ Varredura manual (modulação externa)
+    # ------------------------------------------------------------ Varredura manual (modulação óptica)
     def _build_manual_sweep_box(self):
-        '''Quadro da varredura em frequência com modulação externa: você muda a frequência do chopper e a
+        '''Quadro da varredura em frequência com modulação óptica: você muda a frequência do chopper e a
         interface grava um ponto quando ela fica estável (ou quando você manda).'''
-        box = self._group('Varredura em frequência manual (modulação externa)')
+        box = self._group('Varredura em frequência manual (modulação óptica)')
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(6, 2, 6, 4)
         lay.setSpacing(3)
@@ -6041,7 +6041,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_man_start.setStyleSheet('background:#cfe2ff;')
         self.btn_man_start.setMinimumWidth(110)
         self.btn_man_start.setToolTip('Começa uma varredura manual. Mude a frequência do chopper aos poucos; cada ponto\n'
-                                      'espera 9τ e mede por 1τ. "Concluir" salva o CSV (DUPLO_freq_…_externa_…).')
+                                      'espera 9τ e mede por 1τ. "Concluir" salva o CSV (DUPLO_freq_…_optica_…).')
         self.btn_man_start.clicked.connect(lambda: self.toggle_manual_sweep())
         row.addWidget(self.btn_man_start)
         self.btn_man_point = QtWidgets.QPushButton('Gravar ponto')
@@ -6082,7 +6082,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_excluded = set()
         self.dual_ref_cfg = []
         self.dual_fit = None
-        self.dual_params = {'kind': 'F', 'values': [], 'freq': None, 'pwm': 0.0, 'mod': 'externa',
+        self.dual_params = {'kind': 'F', 'values': [], 'freq': None, 'pwm': 0.0, 'mod': 'optica',
                             'mode': DUAL_MODE_NAMES[1], 'tau': tau}
         self.dual_restore = None
         self.cal_pending = slot
@@ -6202,7 +6202,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.flash('Varredura do Modo Duplo cancelada pelo usuário.')
             return
         if self.ext_mode:
-            self.flash('Modulação externa: use a varredura manual (o STM32 não muda a frequência do chopper).')
+            self.flash('Modulação óptica: use a varredura manual (o STM32 não muda a frequência do chopper).')
             return
         if self.average_mode:
             self.flash('As varreduras do Modo Duplo precisam do OPT101 no Modo Lock-In.')
@@ -6421,17 +6421,17 @@ class LockInWindow(QtWidgets.QMainWindow):
                                       + text.replace('<br>', ' &nbsp; ') + '</span>' + excl_txt)
             return
 
-        # frequência real: na modulação externa é a medida no OPT101; na interna, a gerada pelo TIM4
-        fa = (np.asarray(x, dtype=float) if getattr(self, 'dual_params', {}).get('mod') == 'externa'
+        # frequência real: na modulação óptica é a medida no OPT101; na eletrônica, a gerada pelo TIM4
+        fa = (np.asarray(x, dtype=float) if getattr(self, 'dual_params', {}).get('mod') == 'optica'
               else np.array([actual_mod_freq(v) for v in x]))
         # Diagnóstico: τ efetivo do canal óptico pela fase do OPT101, descontada a cadeia digital de cada ponto
         self.dual_opt_tau = None
         lines = []
-        ext_sweep = getattr(self, 'dual_params', {}).get('mod') == 'externa'
+        ext_sweep = getattr(self, 'dual_params', {}).get('mod') == 'optica'
         if ext_sweep:
             # a fase do OPT101 é a própria referência: não diz nada sobre o τ do canal óptico
-            lines.append('<span style="color:#606060;">Modulação externa: a referência é o próprio OPT101 '
-                         '(a fase dele fica perto de −90° por construção; S e Δφ valem como na interna).</span>')
+            lines.append('<span style="color:#606060;">Modulação óptica: a referência é o próprio OPT101 '
+                         '(a fase dele fica perto de −90° por construção; S e Δφ valem como na eletrônica).</span>')
         elif len(self.dual_ref_cfg) == x.size and x.size >= 4:
             hp, mains = (np.array(c) for c in zip(*self.dual_ref_cfg))
             self.dual_opt_tau = fit_opt_tau(fa, po, po_e, opt_digital_phase(fa, hp, mains), ro)
@@ -6873,10 +6873,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             stem = self._stem(f"DUPLO_casada_pwm{v[0]:g}_{v[-1]:g}_f{q['freq']:g}Hz_{now_dt.strftime('%Y%m%d_%H%M%S')}")
             what = f"Varredura casada em PWM {v[0]:g} a {v[-1]:g} % ({len(v)} pontos), modulação {q['freq']:g} Hz"
             col = 'PWM_Pct'
-        elif q.get('mod') == 'externa':
+        elif q.get('mod') == 'optica':
             lo, hi = min(v), max(v)
-            stem = self._stem(f"DUPLO_freq_{lo:.4g}_{hi:.4g}Hz_externa_{now_dt.strftime('%Y%m%d_%H%M%S')}")
-            what = f"Varredura em frequência manual {lo:.4g} a {hi:.4g} Hz ({len(v)} pontos), modulação externa"
+            stem = self._stem(f"DUPLO_freq_{lo:.4g}_{hi:.4g}Hz_optica_{now_dt.strftime('%Y%m%d_%H%M%S')}")
+            what = f"Varredura em frequência manual {lo:.4g} a {hi:.4g} Hz ({len(v)} pontos), modulação óptica"
             col = 'Frequencia_Hz'
         else:
             stem = self._stem(f"DUPLO_freq_{v[0]:g}_{v[-1]:g}Hz_pwm{q['pwm']:g}_{now_dt.strftime('%Y%m%d_%H%M%S')}")
@@ -6897,9 +6897,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
                         f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
-                ext_cols = q.get('mod') == 'externa' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
-                if q.get('mod') == 'externa':
-                    f.write('# Modulacao = externa (chopper; frequência e fase de referência detectadas no OPT101)\n')
+                ext_cols = q.get('mod') == 'optica' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
+                if q.get('mod') == 'optica':
+                    f.write('# Modulacao = optica (chopper; frequência e fase de referência detectadas no OPT101)\n')
                 if q.get('refine'):
                     f.write(f"# {q['refine']}\n")
                 if resave and getattr(self, 'dual_last_csv', None):
@@ -7406,7 +7406,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def apply_frequency(self, val, command=True):
         '''Nova frequência de modulação: cortes automáticos dos dois lock-ins e, com command, envia F ao STM32
-        (command=False: modulação externa, a frequência é a detectada no OPT101).'''
+        (command=False: modulação óptica, a frequência é a detectada no OPT101).'''
         self.ref_freq = val
         tau = auto_tau(val)
         self.cutoff_hp = get_effective_cutoffs(val)[1]
@@ -7437,7 +7437,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def on_freq(self, val):
         if self.ext_mode:
-            # Modulação externa: na simulação o campo é o botão do chopper simulado; com o STM32 fica travado
+            # Modulação óptica: na simulação o campo é o botão do chopper simulado; com o STM32 fica travado
             if self.chopper_sim is not None:
                 self.chopper_sim.set_freq(val, time.perf_counter() - self.sim_epoch)
             return
@@ -7450,10 +7450,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.link.write(f"P{val}\n")
 
     def _link_params(self):
-        '''(F, P) enviados ao STM32 na conexão: no modo externo, o farol (1 Hz, PWM 0).'''
+        '''(F, P) enviados ao STM32 na conexão: no modo óptico, o farol (1 Hz, PWM 0).'''
         return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
 
-    # ------------------------------------------------------------ Modulação externa
+    # ------------------------------------------------------------ Modulação óptica
     def on_mod_mode(self, idx):
         ext = idx == 1
         if ext == self.ext_mode:
@@ -7473,7 +7473,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dsp._unlock()
         if ext:
             self._ext_restart()
-            self.flash('Modulação externa: procurando a frequência no sinal do OPT101. O STM32 fica com PWM 0 '
+            self.flash('Modulação óptica: procurando a frequência no sinal do OPT101. O STM32 fica com PWM 0 '
                        '(farol de 1 Hz só no bit de referência).', 6.0)
         else:
             self.chopper_sim = None
@@ -7488,7 +7488,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self._apply_mod_ui()
 
     def _ext_restart(self):
-        '''Recomeça a referência externa (entrada no modo, reconexão, simulação ligada ou desligada).'''
+        '''Recomeça a referência óptica (entrada no modo, reconexão, simulação ligada ou desligada).'''
         now = time.perf_counter()
         sim = self.simulating and not self.link.connected
         with self.dsp_lock:
@@ -7529,28 +7529,28 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.ext_ref.reset()
 
     def _apply_mod_ui(self):
-        '''Habilita/esconde o que muda entre modulação interna e externa.'''
+        '''Habilita/esconde o que muda entre modulação eletrônica e óptica.'''
         ext = self.ext_mode
         sim = self.simulating and not self.link.connected
         busy = self.sweep_active or self.dual_active
         self.sp_power.setEnabled(not ext and not busy)
         self.sp_freq.setEnabled((ext and sim) or (not ext and not busy))
-        self.sp_freq.setToolTip('Simulação do modo externo: frequência nominal do chopper simulado (o "botão" do '
+        self.sp_freq.setToolTip('Simulação do modo óptico: frequência nominal do chopper simulado (o "botão" do '
                                 'ventilador).' if ext and sim else
-                                'Modo externo: frequência detectada no OPT101.' if ext else
+                                'Modo óptico: frequência detectada no OPT101.' if ext else
                                 'Frequência da modulação do laser (STM32).')
         self.lbl_ext.setVisible(ext)
         self.lbl_power.setVisible(not ext)
         self.sp_power.setVisible(not ext)
         self.ext_range_w.setVisible(ext)
         self.plot_raw.getPlotItem().setTitle(
-            'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL externo '
+            'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico '
             '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real' if ext else
             'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
             '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
         for b in list(self.btn_sweeps.values()) + list(getattr(self, 'btn_sweeps_aud', {}).values()):
             b.setEnabled(not ext and not busy)
-            b.setToolTip('Use o Modo Duplo (varredura manual) na modulação externa.' if ext else '')
+            b.setToolTip('Use o Modo Duplo (varredura manual) na modulação óptica.' if ext else '')
         if hasattr(self, 'dual_manual_box'):
             self.dual_manual_box.setVisible(ext)
             self.dual_box_f.setVisible(not ext)
@@ -7565,7 +7565,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         r = self.ext_ref
         sim = self.simulating and not self.link.connected
         if not self.link.connected and not sim:
-            self.lbl_ext.setText('<span style="color:#b05000;">Externa: STM32 não conectado</span>')
+            self.lbl_ext.setText('<span style="color:#b05000;">Óptica: STM32 não conectado</span>')
             return
         if r.state == 'TRACK' and r.f_mean is not None:
             col = '#006400' if r.locked else '#b05000'
@@ -7584,7 +7584,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'depois que o farol do STM32 alinha os dois fluxos (alguns segundos depois de conectar).')
 
     def _ext_follow(self, now):
-        '''Modo externo: a frequência de trabalho (FFT, janelas, cortes automáticos, ganho do OSR) segue a
+        '''Modo óptico: a frequência de trabalho (FFT, janelas, cortes automáticos, ganho do OSR) segue a
         detectada no OPT101.'''
         self._update_ext_label()
         r = self.ext_ref
@@ -9158,7 +9158,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _audio_lockin(self, sequence, samples):
         '''Um ponto (R e fase) a cada AUDIO_LOCKIN_BLOCK amostras, com a mesma cadeia do OPT101.
-        Na modulação externa a referência é a fase do OPT101 levada à grade do I2S: o trecho espera
+        Na modulação óptica a referência é a fase do OPT101 levada à grade do I2S: o trecho espera
         (audio_ext_pending) até o OPT101 ter sido processado naquele instante.'''
         if self.ext_mode:
             self.audio_ext_pending.append((sequence, samples))
@@ -9322,7 +9322,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         padrão de 5 Hz...). O lock-in do INMP441 não tem PLL e daria resultado errado sem aviso:
         reenvia F, o que reinicia a onda quadrada e manda um novo marcador de fase.'''
         if self.ext_mode:
-            # Modulação externa: o PLL do bit 15 não é usado. Sem o alinhamento com o I2S (marcador perdido,
+            # Modulação óptica: o PLL do bit 15 não é usado. Sem o alinhamento com o I2S (marcador perdido,
             # placa reiniciada), reenvia o farol.
             self._pll_bad_since = None
             if connected and not self.ext_sync.ready() and now - self._ext_resync_t >= 4.0:
@@ -9510,8 +9510,8 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _ext_status_short(self):
         r = self.ext_ref
         if r.state == 'TRACK' and r.f_mean is not None:
-            return (f"Ref. externa: {r.f_mean:.2f} Hz " + ('(travada)' if r.locked else '<b>(travando)</b>'))
-        return '<b>Ref. externa: procurando</b>'
+            return (f"Ref. óptica: {r.f_mean:.2f} Hz " + ('(travada)' if r.locked else '<b>(travando)</b>'))
+        return '<b>Ref. óptica: procurando</b>'
 
     def update_status(self, now):
         self.txt_sat.setVisible(False)
