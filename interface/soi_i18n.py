@@ -63,6 +63,7 @@ _POST = (
 EN_EXACT = {
     'a': 'to',
     'fim': 'end',
+    'de': 'from',
 }
 
 
@@ -1660,4 +1661,30 @@ EN = {
     '\nMicrofone: aguardando o farol do STM32 (alinhamento com o OPT101).': '\nMicrophone: waiting for the STM32 beacon (alignment with the OPT101).',
     '\n\nFrequência detectada no OPT101 (média do último segundo), desvio padrão dela e\noscilação rms da fase da luz em relação ao PLL (● travado). O INMP441 usa a mesma referência\ndepois que o farol do STM32 alinha os dois fluxos (alguns segundos depois de conectar).': '\n\nFrequency detected in the OPT101 (mean of the last second), its standard deviation and\nrms phase wander of the light relative to the PLL (● locked). The INMP441 uses the same reference\nonce the STM32 beacon aligns both streams (a few seconds after connecting).',
     ', fase ±': ', phase ±',
+    # Configurações (2.3.0)
+    'Escala do osciloscópio fixa pela alimentação do OPT101': 'Oscilloscope scale fixed by the OPT101 supply',
+    'Marcado: o eixo do osciloscópio do OPT101 vai de 0 até 2,2 V (alimentação de 3,3 V)\nou 3,3 V (alimentação de 5 V). Desmarcado: o eixo acompanha o sinal (como antes).': 'Checked: the OPT101 oscilloscope axis goes from 0 to 2.2 V (3.3 V supply)\nor 3.3 V (5 V supply). Unchecked: the axis follows the signal (as before).',
+    '⚙ Configurações': '⚙ Settings',
+    'Trigger dos lock-ins (eletrônico pelo STM32 ou óptico pelo OPT101), alimentação do\nOPT101 (3,3 V ou 5 V) e Finalizar experimento.': 'Lock-in trigger (electronic from the STM32 or optical from the OPT101), OPT101\nsupply (3.3 V or 5 V) and Finish experiment.',
+    'Tensão no PA0 (V)': 'Voltage at PA0 (V)',
+    'Configurações': 'Settings',
+    'Trigger (referência dos lock-ins)': 'Trigger (lock-in reference)',
+    'Eletrônico (STM32)': 'Electronic (STM32)',
+    'Óptico (OPT101, chopper)': 'Optical (OPT101, chopper)',
+    'Alimentação do OPT101': 'OPT101 supply',
+    '3,3 V (padrão)': '3.3 V (default)',
+    '⚠ Com 5 V o PA0 <b>precisa de proteção</b>: resistor de 1 kΩ em série entre a saída do OPT101 e o PA0 e diodo Schottky BAT54 do PA0 para os 3,3 V. Sem isso o STM32 pode queimar.': '⚠ With 5 V, PA0 <b>needs protection</b>: a 1 kΩ resistor in series between the OPT101 output and PA0, and a BAT54 Schottky diode from PA0 to 3.3 V. Without it the STM32 can burn out.',
+    'Experimento': 'Experiment',
+    'O STM32 modula o laser pelo PWM em PA8 na frequência do campo <b>Freq</b>, e o instante de cada borda vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.': 'The STM32 modulates the laser with the PWM on PA8 at the frequency in the <b>Freq</b> field, and the time of each edge travels with the samples. This is the normal mode, with the laser on the SOI driver.',
+    'A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI acha a frequência no sinal do OPT101, que precisa ver a luz <b>já modulada</b>, e usa a fase dele como referência do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de 1 Hz no bit de referência, que alinha o microfone ao OPT101: <b>não ligue nada em PA8</b>. A faixa de busca da frequência fica na aba OPT101; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).': 'The light is modulated outside SOI (chopper, fan) and the source has its own supply. SOI finds the frequency in the OPT101 signal, which must see the light <b>after modulation</b>, and uses its phase as the reference for the OPT101 and the microphone. The STM32 stays at PWM 0 and only makes a 1 Hz "beacon" on the reference bit, which aligns the microphone with the OPT101: <b>connect nothing to PA8</b>. The frequency search range is in the OPT101 tab; in Dual Mode the frequency sweep becomes manual (you change the chopper).',
+    'A saída do OPT101 vai de ~7,5 mV até V<sub>s</sub> − 1,3 V ≈ <b>2,0 V</b>: nunca passa do limite do ADC do STM32 (3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. Osciloscópio de 0 a 2,2 V.': 'The OPT101 output goes from ~7.5 mV to V<sub>s</sub> − 1.3 V ≈ <b>2.0 V</b>: it never exceeds the STM32 ADC limit (3.3 V), so no protection is needed. Uses ~60 % of the ADC range. Oscilloscope from 0 to 2.2 V.',
+    'A saída chega a ≈ <b>3,7 V</b>, acima do limite do ADC. Ajuste o ganho (resistor de realimentação) ou a luz para o pico ficar em ~3,0 V: usa quase toda a faixa do ADC. Osciloscópio de 0 a 3,3 V.': 'The output reaches ≈ <b>3.7 V</b>, above the ADC limit. Adjust the gain (feedback resistor) or the light so the peak stays at ~3.0 V: uses almost the whole ADC range. Oscilloscope from 0 to 3.3 V.',
+    'ZIP com os arquivos salvos nesta sessão e a calibração em uso.': 'ZIP with the files saved in this session and the calibration in use.',
+    'OPT101 alimentado com 3,3 V: osciloscópio de 0 a 2,2 V.': 'OPT101 powered with 3.3 V: oscilloscope from 0 to 2.2 V.',
+    'OPT101 alimentado com 5 V: osciloscópio de 0 a 3,3 V.': 'OPT101 powered with 5 V: oscilloscope from 0 to 3.3 V.',
+    '<i>Termine ou cancele a varredura em andamento para trocar o trigger.</i>': '<i>Finish or cancel the running sweep to change the trigger.</i>',
+    'Alimentação de 5 V': '5 V supply',
+    'Com o OPT101 em 5 V a saída pode chegar a ~3,7 V, acima do limite do ADC do STM32 (3,3 V).\n\nA proteção do PA0 está instalada? (1 kΩ em série + diodo Schottky BAT54 do PA0 para 3,3 V)': 'With the OPT101 at 5 V the output can reach ~3.7 V, above the STM32 ADC limit (3.3 V).\n\nIs the PA0 protection installed? (1 kΩ in series + BAT54 Schottky diode from PA0 to 3.3 V)',
+    '[OPT101 perto da saturação (~2,0 V com 3,3 V)]': '[OPT101 near saturation (~2.0 V at 3.3 V)]',
+    '<b>[Acima de 3,0 V: perto do limite do ADC]</b>': '<b>[Above 3.0 V: near the ADC limit]</b>',
 }

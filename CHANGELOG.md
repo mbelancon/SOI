@@ -18,13 +18,18 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Added: optical modulation (chopper)
 - **Why:** to measure with a light source that SOI does not modulate (LED or laser in continuous mode with a mechanical chopper or a fan), without a reference output from the chopper.
-- **Selector** at the start of the excitation bar: **Electronic** (STM32 PWM) or **Optical** (chopper). Applies to the three tabs. In optical mode PWM is hidden and its place shows the detected frequency.
+- **Trigger choice** in the new **⚙ Settings** window: **Electronic** (STM32 PWM) or **Optical** (chopper). Applies to the three tabs. In optical mode PWM is hidden and its place shows the detected frequency.
 - **Reference from the OPT101:** the frequency is the largest peak of the OPT101 FFT in a search range (OPT101 tab, default 20–5000 Hz); a second-order PLL on the OPT101 signal (bandwidth f/50, 0.5–10 Hz, updated in blocks of a whole number of periods) gives the reference phase of both lock-ins. Errors of the reference cancel in S and Δφ. The detected frequency and the lock state appear on the excitation bar (deviation and phase wander in the tooltip) and in the OPT101 status; the scope's green trace becomes the PLL reference.
 - **Microphone alignment without new firmware:** in optical mode the interface sends `P0` + `F1`; the 1 Hz "beacon" on the reference bit and the I2S marker give the offset between the optical and the audio streams (exact rate ratio, same crystal), with < 1 µs error. The serial reader now numbers the optical words and records where each marker arrives in the optical stream. The beacon is resent if the alignment is missing.
 - **Same phase convention as electronic modulation** (Δφ, calibrations and fits valid in both modes): checked in simulation and with emulated firmware packets, Δφ within 0.3° of the electronic-mode value up to 1.5 kHz.
 - **Dual Mode, manual frequency sweep:** points recorded automatically when the frequency is stable and far enough from the last point (or with **Record point**); 9τ wait and 1τ average; point discarded if the frequency moves or the PLL unlocks. CSV `DUPLO_freq_…_optica_…` with `# Modulacao = optica` and the column `Frequencia_DP_Hz`. **Measure A/B** of the two-sample calibration uses the manual sweep.
 - **Simulation:** simulated fan (drift, uneven blades, trapezoidal light) and beacon; Freq is the knob of the simulated chopper.
 - OPT101 and INMP441 sweeps and **Refine resonance** are disabled in optical mode.
+
+#### Added: Settings window
+- **⚙ Settings** button at the end of the excitation bar, in place of **Finish experiment** (which moved into the window). The window has the lock-in trigger (electronic or optical), the OPT101 supply and Finish experiment, each with a short explanation.
+- **OPT101 supply:** 3.3 V (default; output up to ≈ 2.0 V, scope 0–2.2 V) or 5 V (output up to ≈ 3.7 V; adjust gain or light for a ≈ 3.0 V peak; scope 0–3.3 V). Choosing 5 V asks for confirmation and shows a warning: PA0 needs a 1 kΩ series resistor and a BAT54 Schottky diode to 3.3 V, or the STM32 can burn. The choice is remembered.
+- **OPT101 scope:** fixed scale set by the supply (option **Oscilloscope scale fixed by the OPT101 supply**, on by default; off = autoscale as before) and a right axis in volts at PA0. The status warns near saturation (above 95 % of 2.0 V with 3.3 V, or of 3.0 V with 5 V); the peak colour follows the same limits.
 
 ## [2.2.0] - 2026-11-13
 

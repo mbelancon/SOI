@@ -65,6 +65,11 @@ ADC_OVS_FACTOR = 1.0
 ADC_FULL_SCALE = 16380.0  # 4095 * 4: a média é exibida na escala de 14 bits da 1.0.0, qualquer que seja o OSR
 ADC_LSB = ADC_FULL_SCALE / 4095.0          # 1 LSB do ADC de 12 bits na escala exibida (= 4)
 ADC_VREF = 3.3
+# Alimentação do OPT101 (Configurações): a saída vai de ~7,5 mV até Vs − 1,3 V. Com 3,3 V ela nunca passa de
+# ~2,0 V; com 5 V chega a ~3,7 V, acima do ADC (3,3 V): o ganho deve deixar o pico em ~3,0 V e o PA0 precisa
+# de proteção (1 kΩ em série + Schottky BAT54 para 3,3 V). Por alimentação: (escala do osciloscópio em V,
+# pico útil em V: acima de 85 % dele o %ADC fica laranja, acima de 95 % vermelho com o aviso no gráfico).
+OPT_SUPPLY = {3.3: (2.2, 2.0), 5.0: (3.3, 3.0)}
 AUDIO_FS = 48000          # = AUDIO_FS_HZ do firmware (nominal)
 # Taxa real do I2S: PLLI2S = 1 MHz * 384 / 5 = 76,8 MHz; quadro de 64 bits; I2SDIV = 12 com ODD = 1
 # (divisor 25) -> 76,8e6 / 64 / 25 = 48000 Hz exatos. A referência numérica do lock-in de áudio usa a
@@ -3829,7 +3834,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             'de 1 Hz no bit de referência, que alinha o OPT101 ao microfone (não ligue nada em PA8).\n'
             'Vale para as três abas; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).')
         self.cmb_mod.currentIndexChanged.connect(self.on_mod_mode)
-        excitation.addWidget(self.cmb_mod)
+        # O seletor fica na janela Configurações (trigger eletrônico ou óptico); este combo guarda o estado
         for label, w in (('Freq (Hz):', self.sp_freq), ('PWM (%):', self.sp_power)):
             lbl = QtWidgets.QLabel(label)
             excitation.addWidget(lbl)
@@ -3886,6 +3891,21 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_sim.toggled.connect(self.on_simulate)
         self.chk_sim.setVisible(False)
         excitation.addWidget(self.chk_sim)
+        self.opt_supply = 3.3                 # alimentação do OPT101 (V), escolhida em Configurações
+        self.chk_scope_fixed = QtWidgets.QCheckBox('Escala do osciloscópio fixa pela alimentação do OPT101')
+        self.chk_scope_fixed.setChecked(True)
+        self.chk_scope_fixed.setToolTip('Marcado: o eixo do osciloscópio do OPT101 vai de 0 até 2,2 V (alimentação de 3,3 V)\n'
+                                        'ou 3,3 V (alimentação de 5 V). Desmarcado: o eixo acompanha o sinal (como antes).')
+        self.chk_scope_fixed.toggled.connect(lambda _: self._apply_scope_scale())
+        self.btn_settings = QtWidgets.QPushButton('⚙ Configurações')
+        self.btn_settings.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;background:#e8eef7;'
+                                        'border:1px solid #4a6fa5;border-radius:4px;}'
+                                        'QPushButton:hover{background:#d3def0;}')
+        self.btn_settings.setToolTip('Trigger dos lock-ins (eletrônico pelo STM32 ou óptico pelo OPT101), alimentação do\n'
+                                     'OPT101 (3,3 V ou 5 V) e Finalizar experimento.')
+        self.btn_settings.clicked.connect(self.open_settings)
+        excitation.addWidget(self.btn_settings)
+        # "Finalizar experimento" agora fica dentro de Configurações
         self.btn_finish = QtWidgets.QPushButton('Finalizar experimento')
         self.btn_finish.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;background:#d4edda;'
                                       'border:1px solid #2e7d32;border-radius:4px;}'
@@ -3894,7 +3914,6 @@ class LockInWindow(QtWidgets.QMainWindow):
                                    'desde que a interface abriu (ou desde o último "Finalizar experimento"),\n'
                                    'junto com a calibração do microfone em uso.')
         self.btn_finish.clicked.connect(self.finish_experiment)
-        excitation.addWidget(self.btn_finish)
         central_layout.addLayout(excitation)
 
         tabs = QtWidgets.QTabWidget()
@@ -3991,6 +4010,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         pi.hideButtons()
         pi.setXRange(0, self.raw.window, padding=0)
         pi.setYRange(0, ADC_FULL_SCALE * 1.003, padding=0)
+        pi.showAxis('right')                   # o mesmo eixo em volts no PA0
+        pi.getAxis('right').setScale(ADC_VREF / ADC_FULL_SCALE)
+        pi.getAxis('right').enableAutoSIPrefix(False)
+        pi.setLabel('right', 'Tensão no PA0 (V)')
         self.txt_sat = pg.TextItem('Limiar de Saturação', color=(208, 0, 0), anchor=(0.5, 0.5))
         self.txt_sat.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
         self.txt_sat.setZValue(100)
@@ -7453,6 +7476,126 @@ class LockInWindow(QtWidgets.QMainWindow):
         '''(F, P) enviados ao STM32 na conexão: no modo óptico, o farol (1 Hz, PWM 0).'''
         return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
 
+    # ------------------------------------------------------------ Configurações
+    def open_settings(self):
+        '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101 e Finalizar experimento.'''
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle('Configurações')
+        dlg.setMinimumWidth(620)
+        lay = QtWidgets.QVBoxLayout(dlg)
+
+        def info(text):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
+            lbl.setStyleSheet('color:#404040;margin-left:22px;margin-bottom:4px;')
+            return lbl
+
+        busy = self.sweep_active or self.dual_active
+        box = self._group('Trigger (referência dos lock-ins)')
+        bl = QtWidgets.QVBoxLayout(box)
+        r_el = QtWidgets.QRadioButton('Eletrônico (STM32)')
+        r_op = QtWidgets.QRadioButton('Óptico (OPT101, chopper)')
+        (r_op if self.ext_mode else r_el).setChecked(True)
+        bl.addWidget(r_el)
+        bl.addWidget(info('O STM32 modula o laser pelo PWM em PA8 na frequência do campo <b>Freq</b>, e o instante de '
+                          'cada borda vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.'))
+        bl.addWidget(r_op)
+        bl.addWidget(info('A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI '
+                          'acha a frequência no sinal do OPT101, que precisa ver a luz <b>já modulada</b>, e usa a fase '
+                          'dele como referência do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de '
+                          '1 Hz no bit de referência, que alinha o microfone ao OPT101: <b>não ligue nada em PA8</b>. '
+                          'A faixa de busca da frequência fica na aba OPT101; no Modo Duplo a varredura em frequência '
+                          'vira manual (você muda o chopper).'))
+        if busy:
+            for r in (r_el, r_op):
+                r.setEnabled(False)
+            bl.addWidget(info('<i>Termine ou cancele a varredura em andamento para trocar o trigger.</i>'))
+        lay.addWidget(box)
+
+        box = self._group('Alimentação do OPT101')
+        bl = QtWidgets.QVBoxLayout(box)
+        r33 = QtWidgets.QRadioButton('3,3 V (padrão)')
+        r50 = QtWidgets.QRadioButton('5 V')
+        (r50 if self.opt_supply > 4 else r33).setChecked(True)
+        bl.addWidget(r33)
+        bl.addWidget(info('A saída do OPT101 vai de ~7,5 mV até V<sub>s</sub> − 1,3 V ≈ <b>2,0 V</b>: nunca passa do limite '
+                          'do ADC do STM32 (3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. '
+                          'Osciloscópio de 0 a 2,2 V.'))
+        bl.addWidget(r50)
+        bl.addWidget(info('A saída chega a ≈ <b>3,7 V</b>, acima do limite do ADC. Ajuste o ganho (resistor de '
+                          'realimentação) ou a luz para o pico ficar em ~3,0 V: usa quase toda a faixa do ADC. '
+                          'Osciloscópio de 0 a 3,3 V.'))
+        warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: resistor de 1 kΩ em série entre a saída do '
+                                'OPT101 e o PA0 e diodo Schottky BAT54 do PA0 para os 3,3 V. Sem isso o STM32 pode queimar.')
+        warn.setWordWrap(True)
+        warn.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        warn.setStyleSheet('color:#b00000;background:#fdecea;border:1px solid #e0a0a0;border-radius:4px;padding:4px;')
+        bl.addWidget(warn)
+        warn.setVisible(self.opt_supply > 4)
+        bl.addWidget(self.chk_scope_fixed)
+        self.chk_scope_fixed.show()
+        lay.addWidget(box)
+
+        box = self._group('Experimento')
+        bl = QtWidgets.QHBoxLayout(box)
+        bl.addWidget(self.btn_finish)
+        self.btn_finish.show()
+        bl.addWidget(info('ZIP com os arquivos salvos nesta sessão e a calibração em uso.'), 1)
+        lay.addWidget(box)
+
+        def on_trigger(checked):
+            if not checked:
+                return
+            self.cmb_mod.setCurrentIndex(1 if r_op.isChecked() else 0)
+            (r_op if self.ext_mode else r_el).setChecked(True)       # pode ter sido recusado (varredura)
+
+        def on_supply(checked):
+            if not checked:
+                return
+            v = 5.0 if r50.isChecked() else 3.3
+            if v > 4 and self.opt_supply < 4:
+                ans = QtWidgets.QMessageBox.warning(
+                    dlg, 'Alimentação de 5 V',
+                    'Com o OPT101 em 5 V a saída pode chegar a ~3,7 V, acima do limite do ADC do STM32 (3,3 V).\n\n'
+                    'A proteção do PA0 está instalada? (1 kΩ em série + diodo Schottky BAT54 do PA0 para 3,3 V)',
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No)
+                if ans != QtWidgets.QMessageBox.StandardButton.Yes:
+                    r33.setChecked(True)
+                    return
+            self.set_opt_supply(v)
+            warn.setVisible(v > 4)
+
+        for r in (r_el, r_op):
+            r.toggled.connect(on_trigger)
+        for r in (r33, r50):
+            r.toggled.connect(on_supply)
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        lay.addWidget(btns)
+        for lbl in dlg.findChildren(QtWidgets.QLabel):        # rótulos com quebra de linha: altura certa
+            if lbl.wordWrap():
+                lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 60))
+        dlg.adjustSize()
+        dlg.exec()
+        # o botão Finalizar volta para fora da janela (sem pai visível) para não ser destruído com ela
+        self.btn_finish.setParent(None)
+        self.chk_scope_fixed.setParent(None)
+
+    def set_opt_supply(self, v):
+        self.opt_supply = 5.0 if v > 4 else 3.3
+        self._apply_scope_scale()
+        v = f'{self.opt_supply:g}'.replace('.', ',')
+        top = f'{OPT_SUPPLY[self.opt_supply][0]:g}'.replace('.', ',')
+        self.flash(f'OPT101 alimentado com {v} V: osciloscópio de 0 a {top} V.', 4.0)
+
+    def _apply_scope_scale(self):
+        if self.chk_scope_fixed.isChecked():
+            top = OPT_SUPPLY[self.opt_supply][0] / ADC_VREF * ADC_FULL_SCALE
+            self.plot_raw.getPlotItem().setYRange(0, top * (1.003 if top >= ADC_FULL_SCALE else 1.0), padding=0)
+
     # ------------------------------------------------------------ Modulação óptica
     def on_mod_mode(self, idx):
         ext = idx == 1
@@ -9406,7 +9549,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 wrapped = self.raw.push(adc, ref)
                 if self.opt_fft_enabled:
                     self._store_opt_samples(adc)
-                if wrapped:
+                if wrapped and not self.chk_scope_fixed.isChecked():
                     m = float(self.raw.adc.max())
                     if m > 0:
                         self.plot_raw.getPlotItem().setYRange(0, max(10.0, m * 1.10), padding=0)
@@ -9542,8 +9685,14 @@ class LockInWindow(QtWidgets.QMainWindow):
             else:
                 status = "[Sinal OK]"
                 color = OK_COLOR
-            vcolor = '#006400' if pct < 50.0 else ('#e07000' if pct <= 70.0 else '#d00000')
-            over = pct > 70.0
+            v_peak = peak / ADC_FULL_SCALE * ADC_VREF
+            v_top = OPT_SUPPLY[self.opt_supply][1]
+            vcolor = '#006400' if v_peak < 0.85 * v_top else ('#e07000' if v_peak <= 0.95 * v_top else '#d00000')
+            over = v_peak > 0.95 * v_top
+            if over and color == OK_COLOR:
+                status = ('[OPT101 perto da saturação (~2,0 V com 3,3 V)]' if self.opt_supply < 4 else
+                          '<b>[Acima de 3,0 V: perto do limite do ADC]</b>')
+                color = WARN_COLOR
             self.txt_sat.setVisible(over)
             if over:
                 (x0, x1), (y0, y1) = self.plot_raw.getPlotItem().vb.viewRange()
@@ -9653,6 +9802,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             v = st.value('sample_name')
             if v is not None:
                 self.ed_sample.setText(str(v))
+            v = num('opt_supply')
+            if v is not None:
+                self.opt_supply = 5.0 if v > 4 else 3.3
+            v = st.value('scope_fixed')
+            if v is not None:
+                self.chk_scope_fixed.setChecked(str(v).lower() in ('true', '1'))
+            self._apply_scope_scale()
             lv = st.value('dual_layout')
             if lv in ('side', 'stacked', 'overlay'):
                 self.set_dual_layout(lv)
@@ -9682,6 +9838,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         for name in combos:
             st.setValue(name, int(getattr(self, name).currentIndex()))
         st.setValue('sample_name', self.ed_sample.text())
+        st.setValue('opt_supply', self.opt_supply)
+        st.setValue('scope_fixed', bool(self.chk_scope_fixed.isChecked()))
         st.setValue('geometry', self.saveGeometry())
         st.setValue('dual_layout', self.dual_layout)
         st.setValue('dual_float_rel', '%.4f,%.4f' % self.dual_float.rel)
