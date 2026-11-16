@@ -148,7 +148,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 
 Measures both lock-ins **in the same step**. The OPT101 R (proportional to the optical intensity) is the power reference for the INMP441 R (photoacoustic signal).
 
-**Top of the tab:**
+**Top of the tab** (from left to right: **Sweep ▸**, **Fit ▸**, **Open sweep…**, **Calibration ▸**, the last on the right):
 - **Sweep ▸** opens the **frequency sweep** (a single one, used both to calibrate and to measure), with **Refine resonance**, and, collapsed next to it under **Matched PWM ▸**, the matched PWM sweep.
 - **Calibration ▸** opens the microphone calibration panel: reference, expected curve, mounting tips, cell diagram and the **Generate calibration curve** and **Verify with this measurement** buttons. With it open, running the sweep first shows a warning if PWM is not at 100 %, if any 60 Hz filter is on or if **Use** is ticked (with "Fix and run", "Run anyway" or "Cancel").
 - **Fit ▸** opens the model panel (see below), including **Range with S ∝ f⁻ⁿ**.
@@ -158,6 +158,15 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 - **Limitation:** an opened sweep does not carry the filter settings used at each point, so the optical channel bandwidth does not appear on the "Light (OPT101)" line.
 
 **τ of the frequency sweeps** (calibration and measurements): there is no "Measurement" choice. They always use long integration: during the sweep both low-pass filters take this τ (the values are restored at the end), and at each point the sweep waits 9τ and averages over 1τ. The τ field is the INMP441 τ: it starts with the INMP441 tab value, and changing τ in any of the places (INMP441 tab or sweep panel) changes the others. Changing the excitation frequency sets the INMP441 τ to the automatic value, and the sweeps follow.
+
+**Adaptive time** (frequency sweeps, on by default). The 9τ wait above is only the memory of the digital filter: the acoustic cell and the sensors settle in milliseconds. With **Adaptive time** on, the τ field is not used:
+- During the sweep both lock-ins use a short τ, about 3 modulation periods: τ_p = 3/f, between 50 and 500 ms. Each point waits 9τ_p + 0.3 s (0.75 s above 60 Hz, 4.8 s at 5 Hz).
+- The point is then the plain mean of the lock-in outputs, measured until the **uncertainty of the mean** reaches **Precision** (default 1 %): S = R_INMP441/R_OPT101 within that fraction and Δφ within the same fraction in radians (1 % = 0.57°). The uncertainty comes from the means of 6 to 24 blocks of the data (each block at least 2τ_p), so slow noise is not underestimated.
+- **Stabilization check:** the means of the first and second half of the data must agree (within 3.5 uncertainties). If they do not (the signal is still changing, e.g. at the start of a sweep), the first half is discarded and the measurement goes on.
+- Minimum measurement max(1 s, 16τ_p); maximum per point in **Max.** (default 60 s). If the precision is not reached by then, the point is saved with the uncertainty obtained and a message says so.
+- So a clean point at high frequency takes about 2 s, and a noisy point at low frequency integrates longer, up to Max. The estimated time shows the range (all points at the minimum to all at Max.); during the sweep the remaining time uses the points already measured.
+- In the CSV the `_DP` columns are the **uncertainty of the mean** of each point, and the header records `tempo adaptativo (precisão …, máx. … s por ponto; …)`.
+- With **Adaptive time** off, the sweep works as before (9τ wait and 1τ average with the τ of the box). The manual sweep (optical modulation) and the matched PWM sweep do not use the adaptive time.
 
 **Measurement** for the matched PWM sweep:
 - *Time average (current τ)*: uses the current filters. Waits 9τ of the slower lock-in and averages over 4τ.

@@ -143,6 +143,34 @@ CAL_SWEEP_F0 = 5.0
 CAL_SWEEP_F1 = 2440.0
 CAL_SWEEP_N = 35
 CAL_SWEEP_TAU = 2.0
+# Tempo adaptativo das varreduras em frequência do Modo Duplo (2.3.0). A espera de 9τ do modo fixo é só a
+# memória do filtro digital (a célula acústica e o sensor se acomodam em ms). Com o adaptativo, durante a
+# varredura os lock-ins usam um τ curto, τ_p = 3/f entre 50 e 500 ms (espera 9τ_p + 0,3 s), e o ponto é a
+# média simples das saídas; a medida continua até a incerteza da média (médias em blocos) chegar à precisão
+# pedida, sem deriva entre a 1ª e a 2ª metade dos dados (se houver, a 1ª metade é descartada), com um
+# mínimo de max(1 s, 16τ_p) e um máximo por ponto.
+ADAPT_TOL_DEF = 1.0       # precisão alvo de S (%); a de Δφ é a mesma em radianos (1 % -> 0,57°)
+ADAPT_TMAX_DEF = 60.0     # máximo de medida por ponto (s)
+ADAPT_DRIFT_Z = 3.5       # deriva: |média da 1ª metade − 2ª metade| > 3,5 incertezas
+
+
+def adapt_tau(f):
+    '''τ dos lock-ins num ponto da varredura adaptativa: ~3 períodos, entre 50 e 500 ms.'''
+    return float(min(0.5, max(0.05, 3.0 / max(f, 1e-3))))
+
+
+def adapt_tmin(f):
+    return max(1.0, 16.0 * adapt_tau(f))
+
+
+def batch_se(x, nb):
+    '''Incerteza da média de uma série correlacionada por médias em nb blocos; também as médias dos blocos.'''
+    x = np.asarray(x, dtype=np.float64)
+    m = len(x) // nb
+    if m < 2:
+        return float('inf'), None
+    b = x[:m * nb].reshape(nb, m).mean(axis=1)
+    return float(b.std(ddof=1) / np.sqrt(nb)), b
 CAL_SWEEP_PWM = 100.0
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
@@ -640,6 +668,9 @@ def load_dual_csv(path):
               'tau': num(r'tau = ([\d.eE+-]+) s \(integração longa\)', header)}
     if re.search(r'# Modulacao = (optica|externa)', header):
         params['mod'] = 'optica'
+    m = re.search(r'tempo adaptativo \(precisão ([\d.]+) %, máx\. ([\d.]+) s', header)
+    if m:
+        params['adapt'] = (float(m.group(1)), float(m.group(2)))
     refine = re.findall(r'# (Refino da ressonância:[^\n]+)', header)
     if refine:
         params['refine'] = refine[-1]
@@ -4709,12 +4740,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.sp_dual_tau_p, self.sp_dual_tau_f = self.dual_tau_w['P'], self.dual_tau_w['F']
         self.cmb_dual_mode_m, self.sp_dual_tau_m = self.dual_mode_w['M'], self.dual_tau_w['M']
 
-        def sweep_box(title, fields, kind, mid=()):
+        def sweep_box(title, fields, kind, mid=(), adapt=()):
             # Varreduras em frequência: sempre integração longa, com o τ do INMP441 (os campos andam juntos)
             meas = ((('Medida:', self.dual_mode_w[kind]),) if kind == 'P' else ()) + (('τ:', self.dual_tau_w[kind]),)
             box, btn, eta, bar = self._make_sweep_box(
                 title, fields, lambda _=False, k=kind: self.toggle_dual_sweep(k),
-                extra=mid if mid else meas, more=(meas,) if mid else ())
+                extra=mid if mid else meas, more=((meas + tuple(adapt)),) if mid else ())
             self.dual_bars[kind] = bar
             return box, btn, eta
 
@@ -4731,9 +4762,28 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cmb_dual_fspace.addItems(['Logarítmico', 'Linear'])
         self.sp_dual_fn = self._dspin(1.0, 5000.0, CAL_SWEEP_N, 1, 1.0, None, 90)
         self.lbl_dual_fn = QtWidgets.QLabel('N pontos:')
+        # Tempo adaptativo (vale para as duas varreduras em frequência; o quadro 'M' fica escondido)
+        self.chk_dual_adapt = QtWidgets.QCheckBox('Tempo adaptativo')
+        self.chk_dual_adapt.setChecked(True)
+        self.chk_dual_adapt.setToolTip(
+            'Ligado: cada ponto espera só o necessário. Durante a varredura os lock-ins usam um τ curto (~3 períodos,\n'
+            '50–500 ms; espera 9τ + 0,3 s) e o ponto é a média das saídas, medida até a incerteza da média chegar à\n'
+            'Precisão (S em %, Δφ na mesma fração em radianos: 1 % = 0,57°), sem deriva entre a 1ª e a 2ª metade dos\n'
+            'dados (com deriva, a 1ª metade é descartada e a medida continua). Mínimo max(1 s, 16τ); máximo por ponto\n'
+            'no campo Máx. Em frequência alta, com sinal limpo, o ponto leva ~2 s; em frequência baixa, com ruído, mais.\n'
+            'O DP gravado passa a ser a incerteza da média. O τ do quadro não é usado.\n'
+            'Desligado: espera 9τ e faz a média por 1τ com o τ do quadro (como antes).')
+        self.sp_dual_adapt_tol = self._dspin(0.1, 20.0, ADAPT_TOL_DEF, 1, 0.5, None, 80, ' %')
+        self.sp_dual_adapt_tol.setToolTip('Incerteza alvo de S em cada ponto (Δφ: a mesma fração em radianos).')
+        self.sp_dual_adapt_tmax = self._dspin(5.0, 600.0, ADAPT_TMAX_DEF, 0, 10.0, None, 80, ' s')
+        self.sp_dual_adapt_tmax.setToolTip('Tempo máximo de medida por ponto: se a precisão não for alcançada, o ponto é\n'
+                                           'gravado assim mesmo com a incerteza obtida.')
+        adapt_row = (('', self.chk_dual_adapt), ('Precisão:', self.sp_dual_adapt_tol),
+                     ('Máx.:', self.sp_dual_adapt_tmax))
         box_f, btn_f, eta_f = sweep_box('Varredura em frequência',
                                         (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1)), 'F',
-                                        mid=(('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn)))
+                                        mid=(('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn)),
+                                        adapt=adapt_row)
         # Varredura em frequência das medidas (painel "Varreduras"): parâmetros próprios, para não mexer nos da calibração
         self.sp_dual_m_f0 = self._dspin(0.1, 5000.0, 10.0, 2, 1.0, None, 110, ' Hz')
         self.sp_dual_m_f1 = self._dspin(0.1, 5000.0, 2000.0, 2, 10.0, None, 110, ' Hz')
@@ -4784,12 +4834,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_sweeps_panel.setToolTip('Calibração do microfone com duas amostras (A e B) de materiais diferentes:\n'
                                               'medir ou abrir as duas varreduras e Gerar calibração (já sai verificada ou não).')
         self.btn_dual_sweeps_panel.toggled.connect(self.on_dual_sweeps_panel)
-        top_row.addWidget(self.btn_dual_sweeps_panel)
         self.btn_dual_open = QtWidgets.QPushButton('Abrir varredura…')
         self.btn_dual_open.setToolTip('Carrega uma varredura do Modo Duplo já salva (CSV da pasta Medidas) para analisar:\n'
                                       'calibração, ajuste com modelos, exclusão de pontos, Fitar padrão e Salvar de novo.')
         self.btn_dual_open.clicked.connect(self.open_dual_sweep)
         top_row.addWidget(self.btn_dual_open)
+        top_row.addWidget(self.btn_dual_sweeps_panel)       # Calibração: o último à direita
         top_row.addStretch(1)
         lay.addLayout(top_row)
         # Painel "Calibração": o quadro da calibração (preenchido mais abaixo) à esquerda e a varredura em
@@ -5128,8 +5178,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_model_panel.setToolTip('Ajusta a varredura em frequência (magnitude, fase ou as duas) com modelos\n'
                                              'físicos de célula aberta. Use com a calibração aplicada ("Usar").')
         self.btn_dual_model_panel.toggled.connect(self.on_dual_model_panel)
-        # No topo, depois de "Calibração" e "Varreduras"; o quadro abre acima dos gráficos
-        self.dual_top_row.insertWidget(self.dual_top_row.indexOf(self.btn_dual_sweeps_panel) + 1, self.btn_dual_model_panel)
+        # No topo, depois de "Varredura" (Calibração fica por último); o quadro abre acima dos gráficos
+        self.dual_top_row.insertWidget(self.dual_top_row.indexOf(self.btn_dual_pwm_panel) + 1, self.btn_dual_model_panel)
         self.dual_model_box = self._group('Ajuste da varredura em frequência')
         self.dual_model_box.setVisible(False)
         mv = QtWidgets.QVBoxLayout(self.dual_model_box)
@@ -5301,10 +5351,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                           'cada ponto. É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa (e na outra varredura).')
             sp.valueChanged.connect(lambda v, k=kind: self._on_sweep_tau_edit(k, v))
         self.dual_tau_w['M'].valueChanged.connect(self.update_dual_eta)
+        for wdg in (self.sp_dual_adapt_tol, self.sp_dual_adapt_tmax):
+            wdg.valueChanged.connect(self.update_dual_eta)
+        self.chk_dual_adapt.toggled.connect(lambda _: (self._apply_adapt_ui(), self.update_dual_eta()))
         self.sp_audio_tau.valueChanged.connect(self._sync_sweep_tau)
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._on_cal_cell())
         self._on_cal_cell()
         self._setup_dual_plots('F')
+        self._apply_adapt_ui()
         self.update_dual_eta()
         self.refresh_mic_cal()
 
@@ -5924,8 +5978,31 @@ class LockInWindow(QtWidgets.QMainWindow):
             return [round(float(v), 3) for v in np.geomspace(f0, f1, n)]
         return self._planned_range(f0, f1, spn.value())
 
-    def _dual_times(self, kind, value):
-        '''(espera, medida) do ponto. O LP de 2 polos chega a ~1e-3 do degrau em 9τ.'''
+    def _dual_adaptive(self, kind):
+        return kind in ('F', 'M') and self.chk_dual_adapt.isChecked()
+
+    def _apply_adapt_ui(self):
+        '''Com o tempo adaptativo o τ do quadro não é usado: o campo fica desabilitado.'''
+        on = self.chk_dual_adapt.isChecked()
+        for k in ('F', 'M'):
+            self.dual_tau_w[k].setEnabled(not on and not self.dual_active)
+        for wdg in (self.sp_dual_adapt_tol, self.sp_dual_adapt_tmax):
+            wdg.setEnabled(on and not self.dual_active)
+        self.chk_dual_adapt.setEnabled(not self.dual_active)
+
+    def _dual_times(self, kind, value, bound=None):
+        '''(espera, medida) do ponto. O LP de 2 polos chega a ~1e-3 do degrau em 9τ. Adaptativo: medida
+        mínima (bound None ou 'min'), máxima ('max') ou a estimada pelos pontos já medidos ('est').'''
+        if self._dual_adaptive(kind):
+            tp = adapt_tau(value)
+            tmin, tmax = adapt_tmin(value), self.sp_dual_adapt_tmax.value()
+            if bound == 'max':
+                meas = tmax
+            elif bound == 'est' and getattr(self, 'adapt_ratio', None):
+                meas = min(tmax, max(tmin, tmin * self.adapt_ratio))
+            else:
+                meas = tmin
+            return 9.0 * tp + 0.3, meas
         if self.dual_mode_w[kind].currentIndex() == 1:
             tau = self.dual_tau_w[kind].value()
             return 9.0 * tau + 0.3, max(0.5, tau)
@@ -5947,11 +6024,20 @@ class LockInWindow(QtWidgets.QMainWindow):
         for kind, lbl in self.dual_etas.items():
             values = self._dual_planned(kind)
             total = sum(sum(self._dual_times(kind, v)) for v in values)
-            lbl.setText(f'Tempo estimado: {self._fmt_time(total)}')
-            lbl.setToolTip(f'{len(values)} pontos')
+            if self._dual_adaptive(kind):
+                tmax = sum(sum(self._dual_times(kind, v, 'max')) for v in values)
+                lbl.setText(f'Tempo estimado: {self._fmt_time(total)} a {self._fmt_time(tmax)}')
+                lbl.setToolTip(f'{len(values)} pontos. Tempo adaptativo: o total depende do ruído (mínimo a máximo).')
+            else:
+                lbl.setText(f'Tempo estimado: {self._fmt_time(total)}')
+                lbl.setToolTip(f'{len(values)} pontos')
 
     def _dual_set_long_tau(self, kind=None):
-        tau = self.dual_tau_w[kind or self.dual_src].value()
+        kind = kind or self.dual_src
+        if self._dual_adaptive(kind) and self.dual_active:
+            tau = adapt_tau(self.ref_freq)          # τ curto do ponto atual
+        else:
+            tau = self.dual_tau_w[kind].value()
         self.sp_tau.setValue(tau)
         self.sp_audio_tau.setValue(tau)
 
@@ -6273,6 +6359,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dual_params = {'kind': self.dual_kind, 'values': values, 'freq': self.ref_freq, 'pwm': self.laser_power,
                                 'mode': DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()],
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
+        if self._dual_adaptive(kind):
+            self.dual_params['adapt'] = (self.sp_dual_adapt_tol.value(), self.sp_dual_adapt_tmax.value())
+            self.dual_params['tau'] = None
+        else:
+            self.dual_params.pop('adapt', None)
+        self.adapt_ratio = None             # tempo medido / mínimo, média dos pontos (estimativa do restante)
+        self.adapt_ratios = []
         self.dual_active = True
         btn = self.dual_btns[kind]
         btn.setText('⏹ Cancelar')
@@ -6285,6 +6378,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             w.setEnabled(False)
         for b in list(self.btn_sweeps.values()) + list(self.btn_sweeps_aud.values()):
             b.setEnabled(False)
+        self._apply_adapt_ui()
         self.dual_etas[kind].setStyleSheet('font-weight:bold;font-family:Consolas,monospace;color:#d00000;')
         if not refine:
             self._setup_dual_plots(self.dual_kind)
@@ -6306,6 +6400,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_settle, self.dual_measure = self._dual_times(self.dual_src, value)
         self.dual_state = 'SETTLING'
         self.dual_timer = now
+        self.adapt_info = ''
+        self.adapt_next = 0.0
+        self.adapt_drops = 0
         self.dual_opt = []
         with self.audio_lock:
             self.dual_aud = []
@@ -6331,6 +6428,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             w.setEnabled(True)
         for kind, sp in self.dual_tau_w.items():
             sp.setEnabled(self.dual_mode_w[kind].currentIndex() == 1)
+        self._apply_adapt_ui()
         for b in list(self.btn_sweeps.values()) + list(self.btn_sweeps_aud.values()):
             b.setEnabled(True)
         for lbl in self.dual_etas.values():
@@ -6349,7 +6447,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         elapsed = now - self.dual_timer
         n = len(self.dual_values)
         v = self.dual_values[self.dual_idx]
-        rest = sum(sum(self._dual_times(self.dual_src, x)) for x in self.dual_values[self.dual_idx:]) - elapsed
+        rest = sum(sum(self._dual_times(self.dual_src, x, 'est')) for x in self.dual_values[self.dual_idx:]) - elapsed
         self.dual_rest = rest
         self.dual_bars[self.dual_src].setValue(
             int(1000 * min(1.0, max(0.0, 1.0 - rest / max(self.dual_remaining, 1e-6)))))
@@ -6364,9 +6462,25 @@ class LockInWindow(QtWidgets.QMainWindow):
                 with self.audio_lock:
                     self.dual_aud = []
             return
-        self.lbl_dual_status.setText(f'{head} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)')
-        if elapsed < self.dual_measure:
-            return
+        adaptive = self._dual_adaptive(self.dual_src)
+        if adaptive:
+            tmax = self.sp_dual_adapt_tmax.value()
+            done = False
+            if elapsed >= self.dual_measure and now >= self.adapt_next:
+                self.adapt_next = now + 0.25
+                done = self._adapt_check(v, now)
+            done = done or elapsed >= tmax
+            self.lbl_dual_status.setText(f'{head} | medindo ({elapsed:.1f} s, máx. {tmax:g} s){self.adapt_info}')
+            if not done:
+                return
+            if elapsed >= tmax:
+                self.flash(f'{head}: precisão não alcançada em {tmax:g} s; ponto gravado com a incerteza obtida.', 3.0)
+            self.adapt_ratios.append(max(1.0, elapsed / max(self.dual_measure, 1e-6)))
+            self.adapt_ratio = float(np.median(self.adapt_ratios))
+        else:
+            self.lbl_dual_status.setText(f'{head} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)')
+            if elapsed < self.dual_measure:
+                return
         with self.audio_lock:
             aud = self.dual_aud
             self.dual_aud = []
@@ -6377,8 +6491,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                 r_o = r_o * np.maximum(np.concatenate([c[2] for c in self.dual_opt]), 1.0) / 100.0
             r_a = np.concatenate([c[0] for c in aud])
             p_a = np.concatenate([c[1] for c in aud])
-            row = (v, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
-                   *circ_stats_deg(p_a), *circ_stats_deg(p_o))
+            if adaptive:            # DP = incerteza da média (médias em blocos)
+                st = self._adapt_stats(r_o, p_o, r_a, p_a, v)
+                row = (v, float(r_o.mean()), st['se_ro'], float(r_a.mean()), st['se_ra'],
+                       st['pa'], st['se_pa'], st['po'], st['se_po'])
+            else:
+                row = (v, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
+                       *circ_stats_deg(p_a), *circ_stats_deg(p_o))
             cfg = (self.cutoff_hp, self.chk_mains.isChecked())
             if getattr(self, 'dual_refine', False):
                 # refino: insere em ordem de frequência e desloca os índices dos pontos excluídos
@@ -6406,6 +6525,79 @@ class LockInWindow(QtWidgets.QMainWindow):
             self._export_dual()
             if slot:
                 self._cal_take(slot)
+
+    @staticmethod
+    def _adapt_nb(n_samples, seconds, f):
+        '''Número de blocos (par, 6 a 24): cada bloco com pelo menos 2τ_p de dados.'''
+        nb = int(seconds / (2.0 * adapt_tau(f))) if seconds > 0 else 0
+        nb = min(24, nb) - (min(24, nb) % 2)
+        return nb if nb >= 6 and n_samples >= 2 * nb else 0
+
+    def _adapt_stats(self, r_o, p_o, r_a, p_a, f, seconds=None):
+        '''Médias e incertezas (médias em blocos) de R e da fase dos dois lock-ins, e a deriva (z) entre a
+        1ª e a 2ª metade.'''
+        if seconds is None:
+            seconds = time.perf_counter() - self.dual_timer
+        out = {'drift': 0.0, 'ok': True}
+        pa, _ = circ_stats_deg(p_a)
+        po, _ = circ_stats_deg(p_o)
+        out['pa'], out['po'] = pa, po
+        series = {'ro': np.asarray(r_o, float), 'ra': np.asarray(r_a, float),
+                  'pa': (np.asarray(p_a, float) - pa + 180.0) % 360.0 - 180.0,
+                  'po': (np.asarray(p_o, float) - po + 180.0) % 360.0 - 180.0}
+        for k, x in series.items():
+            nb = self._adapt_nb(len(x), seconds, f)
+            if not nb:
+                out['ok'] = False
+                out['se_' + k] = float(x.std()) if len(x) > 1 else float('inf')
+                continue
+            se, b = batch_se(x, nb)
+            out['se_' + k] = se
+            h = nb // 2
+            s_half = b.std(ddof=1) / np.sqrt(h)
+            if s_half > 0:
+                out['drift'] = max(out['drift'], abs(b[:h].mean() - b[h:].mean()) / (s_half * np.sqrt(2.0)))
+        return out
+
+    def _adapt_check(self, f, now):
+        '''Tempo adaptativo: True quando o ponto está pronto (precisão alcançada e sem deriva). Com deriva,
+        descarta a 1ª metade dos dados e continua.'''
+        with self.audio_lock:
+            aud = list(self.dual_aud)
+        if not (self.dual_opt and aud):
+            self.adapt_info = ' | esperando dados'
+            return False
+        seconds = now - self.dual_timer
+        r_o = np.concatenate([c[0] for c in self.dual_opt])
+        p_o = np.concatenate([c[1] for c in self.dual_opt])
+        r_a = np.concatenate([c[0] for c in aud])
+        p_a = np.concatenate([c[1] for c in aud])
+        st = self._adapt_stats(r_o, p_o, r_a, p_a, f, seconds)
+        if not st['ok']:
+            self.adapt_info = ' | acumulando'
+            return False
+        ro_m, ra_m = max(abs(float(r_o.mean())), 1e-30), max(abs(float(r_a.mean())), 1e-30)
+        err_s = 100.0 * np.hypot(st['se_ro'] / ro_m, st['se_ra'] / ra_m)
+        err_p = float(np.hypot(st['se_pa'], st['se_po']))
+        tol = self.sp_dual_adapt_tol.value()
+        tol_p = np.degrees(tol / 100.0)
+        if st['drift'] > ADAPT_DRIFT_Z:
+            # deriva: joga fora a 1ª metade (dados e tempo) e continua medindo
+            self.adapt_drops += 1
+            self.dual_opt = [tuple(np.asarray(a)[len(a) // 2:] for a in (
+                np.concatenate([c[i] for c in self.dual_opt]) for i in range(3)))]
+            with self.audio_lock:
+                ra2 = np.concatenate([c[0] for c in self.dual_aud])
+                pa2 = np.concatenate([c[1] for c in self.dual_aud])
+                cut = len(ra2) // 2
+                self.dual_aud = [(ra2[cut:], pa2[cut:])]
+            self.dual_timer = now - seconds / 2.0
+            self.adapt_info = (f' | <span style="color:#b05000;">sinal ainda variando: 1ª metade descartada '
+                               f'({self.adapt_drops}x)</span>')
+            return False
+        self.adapt_info = (f' | S ±{err_s:.2f} %  Δφ ±{err_p:.2f}° (alvo {tol:g} % / {tol_p:.2f}°)'
+                           .replace('.', ','))
+        return err_s <= tol and err_p <= tol_p
 
     def _dual_arrays(self):
         res = np.array(self.dual_results, dtype=float).reshape(-1, 9)
@@ -6926,6 +7118,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         os.makedirs(MEDIDAS_DIR, exist_ok=True)
         csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
         tau = f"tau = {q['tau']:g} s (integração longa)" if q['tau'] else 'tau dos filtros dos lock-ins'
+        if q.get('adapt'):
+            tau = (f"tempo adaptativo (precisão {q['adapt'][0]:g} %, máx. {q['adapt'][1]:g} s por ponto; "
+                   f"tau dos lock-ins = 3/f entre 50 e 500 ms; DP = incerteza da média)")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
@@ -9775,11 +9970,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                  'sp_dual_tau_p', 'sp_dual_flat_tol', 'sp_dual_tau_sensor',
                  'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1', 'sp_dual_model_n',
                  'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin',
-                 'sp_cal_a_L', 'sp_cal_b_L')
+                 'sp_cal_a_L', 'sp_cal_b_L', 'sp_dual_adapt_tol', 'sp_dual_adapt_tmax')
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_model_panel', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors')
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
@@ -9840,6 +10035,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             if v is not None:
                 self.chk_scope_fixed.setChecked(str(v).lower() in ('true', '1'))
             self._apply_scope_scale()
+            self._apply_adapt_ui()
             lv = st.value('dual_layout')
             if lv in ('side', 'stacked', 'overlay'):
                 self.set_dual_layout(lv)
