@@ -10475,9 +10475,89 @@ def run_headless(argv):
     return 0 if csv else 7
 
 
+LOG_DIR = os.path.join(os.path.dirname(MEDIDAS_DIR), 'logs')
+LOG_MAX_BYTES = 2_000_000       # soi.log passa a soi.log.1 (… até .3) ao abrir, se já tiver este tamanho
+
+
+class _LogTee:
+    """Cópia de stdout/stderr no arquivo de log, com data e hora em cada linha. Sem terminal (pythonw),
+    sys.stdout é None e só o arquivo recebe o texto."""
+    def __init__(self, stream, fh, tag=''):
+        self.stream, self.fh, self.tag = stream, fh, tag
+        self.lock = threading.Lock()
+        self.bol = True
+
+    def write(self, text):
+        if self.stream is not None:
+            try:
+                self.stream.write(text)
+            except Exception:
+                pass
+        with self.lock:
+            try:
+                out = []
+                for part in text.splitlines(True):
+                    if self.bol:
+                        out.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S ') + self.tag)
+                    out.append(part)
+                    self.bol = part.endswith('\n')
+                self.fh.write(''.join(out))
+                self.fh.flush()
+            except Exception:
+                pass
+        return len(text)
+
+    def flush(self):
+        for f in (self.stream, self.fh):
+            try:
+                f and f.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return False
+
+    def reconfigure(self, **kw):
+        if self.stream is not None and hasattr(self.stream, 'reconfigure'):
+            self.stream.reconfigure(**kw)
+
+
+def setup_log():
+    """Arquivo de log interface/logs/soi.log: tudo o que ia para o terminal (prints, avisos, erros com traceback,
+    mensagens do Qt). Gira ao abrir quando passa de 2 MB (guarda soi.log.1 a .3)."""
+    import traceback
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        path = os.path.join(LOG_DIR, 'soi.log')
+        if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
+            for i in (3, 2, 1):
+                src = path + (f'.{i - 1}' if i > 1 else '')
+                if os.path.exists(src):
+                    os.replace(src, f'{path}.{i}')
+        fh = open(path, 'a', encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    sys.stdout = _LogTee(sys.stdout, fh)
+    sys.stderr = _LogTee(sys.stderr, fh, 'ERRO: ')
+
+    def hook(et, ev, tb):
+        print('Exceção não tratada:\n' + ''.join(traceback.format_exception(et, ev, tb)), file=sys.stderr)
+    sys.excepthook = hook                       # também evita que o PyQt feche o programa num erro em um slot
+    threading.excepthook = lambda a: hook(a.exc_type, a.exc_value, a.exc_traceback)
+
+    def qt_msg(mode, ctx, msg):
+        if 'propagateSizeHints' not in msg:
+            print(f'Qt: {msg}', file=sys.stderr if mode != QtCore.QtMsgType.QtInfoMsg else sys.stdout)
+    QtCore.qInstallMessageHandler(qt_msg)
+    print(f"===== SOI Controller {__version__} ({'executável' if getattr(sys, 'frozen', False) else sys.executable}"
+          f"{' ' + ' '.join(sys.argv[1:]) if sys.argv[1:] else ''}) =====")
+    return path
+
+
 def main():
     import multiprocessing
     multiprocessing.freeze_support()      # executável (PyInstaller): o processo leitor da serial
+    setup_log()
     if '--varredura' in sys.argv[1:] or '-h' in sys.argv[1:] or '--help' in sys.argv[1:]:
         sys.exit(run_headless(sys.argv[1:]))
     if sys.platform == 'win32':

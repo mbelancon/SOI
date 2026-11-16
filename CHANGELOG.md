@@ -42,6 +42,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: logarithmic frequency axes
 - Decades are labelled 10ˣ and the ticks between them only with the digit (2 … 9) instead of 2·10ˣ, which overlapped on wide ranges. With less than one decade in view the full value is shown (200, 300 …); when ticks get too close only 2, 3, 5 (or 2, 5, or only decades) are labelled. Applies to every log x axis (tabs, Dual Mode, saved PNG); y axes unchanged.
 
+#### Added: log file and launch without terminal
+- Everything that went to the terminal (messages, warnings, errors with traceback, Qt messages) also goes to `interface/logs/soi.log`, with date and time on each line. When it passes 2 MB it is rotated at start-up (keeps `soi.log.1` … `.3`). Uncaught errors in Qt slots and threads are logged instead of closing the program.
+- `rodar_interface.bat` opens the interface with `pythonw` (no terminal window); `rodar_interface.bat terminal` opens it with the terminal, `rodar_interface.bat instalar` installs the dependencies. `varredura.bat` (headless sweep) stays in the console.
+
 #### Fixed
 - Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
 
