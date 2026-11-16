@@ -166,6 +166,7 @@ def adapt_times(tau):
 
 
 CAL_SWEEP_PWM = 100.0
+DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verde translúcido)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__)), 'Medidas')
@@ -333,6 +334,9 @@ def load_mic_calibration(path):
         f = data[:, head.index('Frequencia_Hz')]
         sens = data[:, head.index('Sensibilidade_Rel')]
         ph = data[:, head.index('Fase_Sistema_Graus')]
+        # incerteza da calibração (DP da sensibilidade, absoluto, e da fase do sistema); sem as colunas: None
+        sens_e = data[:, head.index('Sensibilidade_Rel_DP')] if 'Sensibilidade_Rel_DP' in head else None
+        ph_e = data[:, head.index('Fase_DP')] if 'Fase_DP' in head else None
         ok = (data[:, head.index('Valido')] > 0) & (sens > 0)
         # Calibração por duas amostras: Concorda = 1 onde a razão A/B foi constante (sem a coluna: tudo concorda)
         agree = data[:, head.index('Concorda')] > 0 if 'Concorda' in head else None
@@ -349,6 +353,8 @@ def load_mic_calibration(path):
             'ref_id': meta.get('Referencia_ID', 'al_opc'), 'verify2': meta.get('Verificacao2', ''),
             'f0': float(meta['Ressonancia_f0_Hz']) if meta.get('Ressonancia_f0_Hz', '').replace('.', '', 1).isdigit() else None,
             'agree': None if agree is None else agree[ok][k],
+            'sens_rel_e': None if sens_e is None else np.abs(sens_e[ok][k]) / sens[ok][k],
+            'phase_e': None if ph_e is None else np.abs(ph_e[ok][k]),
             'method': meta.get('Metodo', ''),
             'verified': None if ver is None else ver.lower().startswith('s'),
             'verify_txt': meta.get('Verificacao', '').split(' - problemas: ')[-1] if ver and not ver.lower().startswith('s') else ''}
@@ -3378,11 +3384,14 @@ def _log_tick_strings(self, values, scale, spacing):
     if not decade.any() or span < 1.0:
         return [f'{v:.4g}' for v in 10 ** vals]
     ppd = max(self.width(), 1.0) / span                        # pixels por década
-    if ppd * np.log10(10 / 9) >= 9:                            # 9 → 10 é o menor intervalo
+    gap = 16.0                                                 # px entre centros de rótulos vizinhos ("9" e "10¹")
+    if ppd * np.log10(10 / 9) >= gap:
         keep = set(range(2, 10))
-    elif ppd * np.log10(3 / 2) >= 9:
+    elif ppd * np.log10(10 / 8) >= gap:                        # sem o 9, colado no 10ˣ
+        keep = set(range(2, 9))
+    elif ppd * np.log10(3 / 2) >= gap:
         keep = {2, 3, 5}
-    elif ppd * np.log10(5 / 2) >= 9:
+    elif ppd * np.log10(5 / 2) >= gap:
         keep = {2, 5}
     else:
         keep = set()
@@ -4989,6 +4998,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                                             symbolBrush='royalblue', symbolPen='royalblue')
         self.c_dual_a.setZValue(10)         # acima do fit e dos "x" vermelhos: recebe o clique
         self.c_dual_a.sigPointsClicked.connect(self._on_dual_point_clicked)
+        # incerteza da calibração (verde, larga, atrás) e da medida (cinza, por cima)
+        self.e_dual_a_cal = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen(DUAL_CAL_ERR_COLOR, width=4))
+        self.pw_dual_a.addItem(self.e_dual_a_cal)
         self.e_dual_a = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen((120, 120, 120)))
         self.pw_dual_a.addItem(self.e_dual_a)
         self.c_dual_a_fit = self.pw_dual_a.plot([], [], pen=pg.mkPen('#e67e22', width=2,
@@ -5000,6 +5012,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                                                 symbolBrush='#d00000', symbolPen=pg.mkPen('#d00000', width=2))
         self.c_dual_b = self.pw_dual_b.plot([], [], pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=6,
                                             symbolBrush='firebrick', symbolPen='firebrick')
+        self.e_dual_b_cal = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen(DUAL_CAL_ERR_COLOR, width=4))
+        self.pw_dual_b.addItem(self.e_dual_b_cal)
         self.e_dual_b = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen((120, 120, 120)))
         self.pw_dual_b.addItem(self.e_dual_b)
         self.c_dual_b_fit = self.pw_dual_b.plot([], [], pen=pg.mkPen('#e67e22', width=2,
@@ -5850,7 +5864,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         # transforma o ErrorBarItem para a escala log)
         self.e_dual_a.setVisible(True)
         self.e_dual_b.setVisible(True)
-        for e in (self.e_dual_a, self.e_dual_b):
+        for e in (self.e_dual_a, self.e_dual_b, self.e_dual_a_cal, self.e_dual_b_cal):
             self._set_errbar(e, x=np.empty(0), y=np.empty(0))
         for c in (self.c_dual_a, self.c_dual_a_fit, self.c_dual_a_bad, self.c_dual_b, self.c_dual_b_fit):
             c.setData([], [])
@@ -6755,6 +6769,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_fit = None
         self.dual_std = None
         self.dual_cal = None        # só a varredura em frequência aplica a calibração (o CSV registra isso)
+        self.dual_cal_err = None
         self.btn_dual_cal.setEnabled(False)
         self.dual_corr = None
         self.btn_cal_verify.setEnabled(False)
@@ -6772,6 +6787,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             self._set_errbar(self.e_dual_a, x=ro, y=ra, height=2 * ra_e, width=2 * ro_e, beam=0)
             self.c_dual_b.setData(x, ro)
             self._set_errbar(self.e_dual_b, x=x, y=ro, height=2 * ro_e, beam=0)
+            for e in (self.e_dual_a_cal, self.e_dual_b_cal):
+                self._set_errbar(e, x=np.empty(0), y=np.empty(0))
             fit = fit_sweep(ro[keep], ra[keep], 'lin') if keep.sum() >= 2 else None
             if fit is None:
                 self.c_dual_a_fit.setData([], [])
@@ -6832,6 +6849,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             dphi[order] = np.degrees(np.unwrap(np.radians(wrap_deg(pa)[order])))
             dphi_e = np.asarray(pa_e, dtype=float)
         cal_txt = ''
+        cal_rel = cal_ph_e = None        # incerteza da calibração em cada ponto (relativa em S; graus em Δφ)
         if self.chk_mic_cal.isChecked() and not norm:
             cal_txt = ('<span style="color:#606060;">Calibração não aplicada: ela vale para o sinal normalizado '
                        '(marque "Normalizar pelo OPT101").</span>')
@@ -6846,6 +6864,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 s_raw = s.copy()
                 s = s / np.exp(np.interp(lf, lc, np.log(c['sens'])))
                 dphi = dphi - np.interp(lf, lc, c['phase'])
+                if c.get('sens_rel_e') is not None:
+                    cal_rel = np.where(inside, np.interp(lf, lc, c['sens_rel_e']), np.nan)
+                if c.get('phase_e') is not None:
+                    cal_ph_e = np.where(inside, np.interp(lf, lc, c['phase_e']), np.nan)
                 ok &= inside
                 cal_txt = (f'<b>Calibração INMP441:</b> {os.path.basename(c["path"])}'
                            + (f' ({int((~inside).sum())} ponto(s) fora da faixa '
@@ -6891,7 +6913,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_cal_verify.setEnabled(self.dual_corr is not None and not self.dual_active)
         self._set_dual_points(x[ok], s[ok], np.flatnonzero(ok), keep[ok])
         self.c_dual_b.setData(x[ok] if self.dual_cal else x, dphi[ok] if self.dual_cal else dphi)
-        self._set_dual_f_errors(x, s, s_rel, dphi, dphi_e, ok)
+        self._set_dual_f_errors(x, s, s_rel, dphi, dphi_e, ok, cal_rel, cal_ph_e)
+        self.dual_cal_err = (cal_rel, cal_ph_e) if self.dual_cal is not None else None
+        if self.dual_cal is not None and (cal_rel is not None or cal_ph_e is not None):
+            cal_txt += ('<br><span style="color:#606060;">Barras de erro (±1 DP): <span style="color:#2ca02c;">'
+                        '<b>verde</b></span> = calibração, <b>cinza</b> = esta medida.</span>')
+            self.lbl_dual_cal.setText(cal_txt)
         self.c_dual_a_fit.setData([], [])
         self.c_dual_b_fit.setData([], [])
         self.c_dual_a_bad.setData([], [])
@@ -6949,12 +6976,22 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_fit.setText(f'<span style="color:#1f4e9c;">{txt}</span>' + excl_txt)
         self.lbl_dual_fit.setToolTip('')
 
-    def _set_dual_f_errors(self, x, s, s_rel, dphi, dphi_e, ok):
+    def _set_dual_f_errors(self, x, s, s_rel, dphi, dphi_e, ok, cal_rel=None, cal_ph_e=None):
         '''Barras de erro da varredura em frequência (±1 DP: S com o DP relativo dos dois R combinados, Δφ com
-        os DP das duas fases), em coordenadas log10 (eixo x log; S também em log).'''
+        os DP das duas fases), em coordenadas log10 (eixo x log; S também em log). Com calibração aplicada,
+        a incerteza dela vai em outras barras (verdes, atrás), separada da incerteza da medida.'''
         m = ok & np.isfinite(s) & (s > 0) & (x > 0)
+        for e in (self.e_dual_a_cal, self.e_dual_b_cal):
+            self._set_errbar(e, x=np.empty(0), y=np.empty(0))
         if not m.any():
             return
+        if cal_rel is not None:
+            rc = np.clip(np.nan_to_num(cal_rel[m]), 0.0, 0.999)
+            self._set_errbar(self.e_dual_a_cal, x=np.log10(x[m]), y=np.log10(s[m]), top=np.log10(1.0 + rc),
+                             bottom=-np.log10(1.0 - rc), beam=0.02)
+        if cal_ph_e is not None:
+            self._set_errbar(self.e_dual_b_cal, x=np.log10(x[m]), y=dphi[m], height=2.0 * np.nan_to_num(cal_ph_e[m]),
+                             beam=0.02)
         lx = np.log10(x[m])
         ls = np.log10(s[m])
         r = np.clip(np.nan_to_num(s_rel[m]), 0.0, 0.999)
@@ -7287,6 +7324,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                     f.write(f"# Inicio = {q['t_start'].strftime('%Y-%m-%d %H:%M:%S')}; "
                             f"Fim = {q['t_end'].strftime('%Y-%m-%d %H:%M:%S')}; Duracao = {dur:.0f} s ({self._fmt_time(dur)})\n")
                 pcol = len(getattr(self, 'dual_pinfo', [])) == len(self.dual_results)
+                ce = getattr(self, 'dual_cal_err', None) if self.dual_cal is not None else None
+                n_res = len(self.dual_results)
+                c_rel = ce[0] if ce and ce[0] is not None and len(ce[0]) == n_res else np.full(n_res, np.nan)
+                c_ph = ce[1] if ce and ce[1] is not None and len(ce[1]) == n_res else np.full(n_res, np.nan)
+                ccol = bool(ce) and (np.isfinite(c_rel).any() or np.isfinite(c_ph).any())
+                if ccol:
+                    f.write('# Cal_S_DP_Pct e Cal_Fase_DP_Graus = incerteza (1 DP) da calibração interpolada em cada '
+                            'frequência (nan fora da faixa dela); os _DP das colunas anteriores são desta medida\n')
                 if pcol:
                     f.write('# Por ponto: Tau_s = tau do lock-in; Tempo_ponto_s = espera + média (inclui refazimentos); '
                             'Refeito = vezes que o tau adaptativo refez o ponto; Flutuacao_S_Pct e Flutuacao_Fase_Graus = '
@@ -7318,12 +7363,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                             f"(aplicada no gráfico/fit; os dados abaixo são brutos)\n")
                 f.write(f'{col},OPT101_R,OPT101_R_DP,INMP441_R,INMP441_R_DP,INMP441_Fase_Graus,'
                         'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '')
-                        + (',' + ','.join(DUAL_POINT_COLUMNS) if pcol else '') + '\n')
+                        + (',' + ','.join(DUAL_POINT_COLUMNS) if pcol else '')
+                        + (',Cal_S_DP_Pct,Cal_Fase_DP_Graus' if ccol else '') + '\n')
                 for i, row in enumerate(self.dual_results):
                     f.write(f'{row[0]:.3f},{row[1]:.6g},{row[2]:.4g},{row[3]:.6g},{row[4]:.4g},'
                             f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f}'
                             + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '')
-                            + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g}'.format(*self.dual_pinfo[i]) if pcol else '') + '\n')
+                            + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g}'.format(*self.dual_pinfo[i]) if pcol else '')
+                            + (f',{100 * c_rel[i]:.3g},{c_ph[i]:.3g}' if ccol else '') + '\n')
             self.dual_plots.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
             self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
             if self.dual_cal is not None:

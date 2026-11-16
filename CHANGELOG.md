@@ -46,6 +46,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - Everything that went to the terminal (messages, warnings, errors with traceback, Qt messages) also goes to `interface/logs/soi.log`, with date and time on each line. When it passes 2 MB it is rotated at start-up (keeps `soi.log.1` … `.3`). Uncaught errors in Qt slots and threads are logged instead of closing the program.
 - `rodar_interface.bat` opens the interface with `pythonw` (no terminal window); `rodar_interface.bat terminal` opens it with the terminal, `rodar_interface.bat instalar` installs the dependencies. `varredura.bat` (headless sweep) stays in the console.
 
+#### Added: calibration and measurement error bars
+- With a microphone calibration applied, the frequency sweep plots show two error bars per point (±1 SD): **green**, wide, behind = calibration (its `Sensibilidade_Rel_DP` and `Fase_DP` interpolated at the frequency); **gray** = this measurement. The Results box says which is which. The CSV (when a calibration is applied) gets `Cal_S_DP_Pct` and `Cal_Fase_DP_Graus` (nan outside the calibration range).
+- Log axes: the 9 label is dropped when it would touch 10ˣ (then 2 … 8; 2, 3, 5; or 2, 5 as space shrinks).
+
 #### Fixed
 - Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
 
