@@ -165,6 +165,7 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 - Fluctuation above 2× Precision: the point is measured again with a larger τ (2–4×, up to 2× the initial τ, at most twice).
 - Each point waits 7τ + 0.3 s and averages for max(1 s, 3τ). At high frequency with a clean signal τ drops to ~0.1 s and a point takes ~2 s; at low frequency it stays at the initial τ (40 s per point with 4 s).
 - The status shows the τ in use and, after each point, its fluctuation. The CSV header records `tau adaptativo (precisão …, tau inicial … s; tau usado de … a … s; …)`; the `_DP` columns keep their meaning (standard deviation during the measurement).
+- **Per point in the CSV** (all automatic sweeps): `Tau_s`, `Tempo_ponto_s` (wait + average, with redos), `Refeito` (redos), `Flutuacao_S_Pct`, `Flutuacao_Fase_Graus`; the header has `# Inicio = …; Fim = …; Duracao = … s`.
 - **Measure A/B** of the calibration uses it too (the calibration preset sets the initial τ to 4 s with adaptive τ on, 2 s with it off). With adaptive τ off the sweep works as before (fixed τ, 9τ wait, 1τ average). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
 
 **Measurement** for the matched PWM sweep:

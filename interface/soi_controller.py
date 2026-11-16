@@ -624,6 +624,11 @@ DUAL_COLUMNS = ('OPT101_R', 'OPT101_R_DP', 'INMP441_R', 'INMP441_R_DP', 'INMP441
                 'INMP441_Fase_DP', 'OPT101_Fase_Graus', 'OPT101_Fase_DP')
 
 
+# colunas por ponto do Modo Duplo (2.3.0): τ do lock-in, tempo gasto no ponto (espera + média, com os refazimentos),
+# vezes que o ponto foi refeito pelo τ adaptativo e flutuação de S e de Δφ durante a média
+DUAL_POINT_COLUMNS = ('Tau_s', 'Tempo_ponto_s', 'Refeito', 'Flutuacao_S_Pct', 'Flutuacao_Fase_Graus')
+
+
 def load_dual_csv(path):
     '''Lê um CSV do Modo Duplo (varredura em frequência ou casada em PWM, inclusive os formatos antigos).
     Devolve (tipo 'F' ou 'P', linhas (valor, 8 colunas de DUAL_COLUMNS), parâmetros da varredura).
@@ -662,6 +667,15 @@ def load_dual_csv(path):
               'tau': num(r'tau = ([\d.eE+-]+) s \(integração longa\)', header)}
     if re.search(r'# Modulacao = (optica|externa)', header):
         params['mod'] = 'optica'
+    pcols = [c for c in DUAL_POINT_COLUMNS if c in cols]
+    if len(pcols) == len(DUAL_POINT_COLUMNS):     # τ, tempo e flutuação por ponto (2.3.0)
+        pidx = [cols.index(c) for c in DUAL_POINT_COLUMNS]
+        params['pinfo'] = [tuple(float(v) if v not in ('', 'nan') else float('nan')
+                                 for v in (ln.split(',')[i] for i in pidx)) for ln in lines[i_head + 1:]]
+    for key, lab in (('t_start', 'Inicio'), ('t_end', 'Fim')):
+        mt = re.search(rf'{lab} = (\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d)', header)
+        if mt:
+            params[key] = datetime.strptime(mt.group(1), '%Y-%m-%d %H:%M:%S')
     m = re.search(r'tau adaptativo \(precisão ([\d.]+) %, tau inicial ([\d.]+) s', header)
     if m:
         params['adapt'] = (float(m.group(1)), float(m.group(2)))
@@ -5794,7 +5808,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.e_dual_a.setVisible(True)
         self.e_dual_b.setVisible(True)
         for e in (self.e_dual_a, self.e_dual_b):
-            e.setData(x=np.empty(0), y=np.empty(0))
+            self._set_errbar(e, x=np.empty(0), y=np.empty(0))
         for c in (self.c_dual_a, self.c_dual_a_fit, self.c_dual_a_bad, self.c_dual_b, self.c_dual_b_fit):
             c.setData([], [])
         for t in self.txt_dual_empty:
@@ -6232,6 +6246,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_refine = False
         self.dual_results = []
         self.dual_fstd = []
+        self.dual_pinfo = []
         self.dual_excluded = set()
         self.dual_ref_cfg = []
         self.dual_fit = None
@@ -6395,6 +6410,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
         self.adapt_tau_cur = None
         self.adapt_taus = []                # τ usado em cada ponto gravado
+        if not refine:
+            self.dual_pinfo = []            # τ, tempo, refazimentos e flutuação de cada ponto (colunas do CSV)
+            self.dual_params['t_start'] = datetime.now()
+        elif len(getattr(self, 'dual_pinfo', [])) != len(self.dual_results):
+            self.dual_pinfo = []
         self.fluct_last = ''
         self.fluct_now = ''
         self.fluct_q = 0.0
@@ -6444,6 +6464,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_timer = now
         self.adapt_info = ''
         self.adapt_redo = 0
+        self.point_t0 = now
         self.dual_opt = []
         with self.audio_lock:
             self.dual_aud = []
@@ -6527,6 +6548,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 r_o = r_o * np.maximum(np.concatenate([c[2] for c in self.dual_opt]), 1.0) / 100.0
             r_a = np.concatenate([c[0] for c in aud])
             p_a = np.concatenate([c[1] for c in aud])
+            _, fl_s, fl_p = self._adapt_fluct(r_o, p_o, r_a, p_a)
+            p_tau = (self.adapt_taus[-1] if adaptive and self.adapt_taus else
+                     (self.dual_params.get('tau') or float('nan')))
+            pinfo = (p_tau, now - getattr(self, 'point_t0', now), self.adapt_redo if adaptive else 0, fl_s, fl_p)
             row = (v, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
                    *circ_stats_deg(p_a), *circ_stats_deg(p_o))
             cfg = (self.cutoff_hp, self.chk_mains.isChecked())
@@ -6536,6 +6561,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 j = bisect.bisect(xs, v)
                 self.dual_results = list(self.dual_results)
                 self.dual_results.insert(j, row)
+                if len(getattr(self, 'dual_pinfo', [])) == len(xs):
+                    self.dual_pinfo.insert(j, pinfo)
+                else:
+                    self.dual_pinfo = []
                 if len(self.dual_ref_cfg) == len(xs):
                     self.dual_ref_cfg.insert(j, cfg)
                 else:
@@ -6544,6 +6573,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             else:
                 self.dual_results.append(row)
                 self.dual_ref_cfg.append(cfg)
+                if len(getattr(self, 'dual_pinfo', [])) == len(self.dual_results) - 1:
+                    self.dual_pinfo.append(pinfo)
             self._show_dual_results()
         else:
             self.flash(f'Modo Duplo: sem dados em {head} (OPT101 e INMP441 conectados?)')
@@ -6695,9 +6726,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             if self.btn_dual_model_panel.isChecked() and self.cmb_dual_model.currentData() is not None:
                 self.lbl_dual_model.setText('O ajuste com modelos vale só para a varredura em frequência.')
             self._set_dual_points(ro, ra, np.arange(x.size), keep)
-            self.e_dual_a.setData(x=ro, y=ra, height=2 * ra_e, width=2 * ro_e, beam=0)
+            self._set_errbar(self.e_dual_a, x=ro, y=ra, height=2 * ra_e, width=2 * ro_e, beam=0)
             self.c_dual_b.setData(x, ro)
-            self.e_dual_b.setData(x=x, y=ro, height=2 * ro_e, beam=0)
+            self._set_errbar(self.e_dual_b, x=x, y=ro, height=2 * ro_e, beam=0)
             fit = fit_sweep(ro[keep], ra[keep], 'lin') if keep.sum() >= 2 else None
             if fit is None:
                 self.c_dual_a_fit.setData([], [])
@@ -6884,8 +6915,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         lx = np.log10(x[m])
         ls = np.log10(s[m])
         r = np.clip(np.nan_to_num(s_rel[m]), 0.0, 0.999)
-        self.e_dual_a.setData(x=lx, y=ls, top=np.log10(1.0 + r), bottom=-np.log10(1.0 - r), beam=0.012)
-        self.e_dual_b.setData(x=lx, y=dphi[m], height=2.0 * np.nan_to_num(dphi_e[m]), beam=0.012)
+        self._set_errbar(self.e_dual_a, x=lx, y=ls, top=np.log10(1.0 + r), bottom=-np.log10(1.0 - r), beam=0.012)
+        self._set_errbar(self.e_dual_b, x=lx, y=dphi[m], height=2.0 * np.nan_to_num(dphi_e[m]), beam=0.012)
 
     def _set_dual_points(self, x, y, idx, keep):
         '''Pontos do gráfico principal do Modo Duplo: incluídos cheios, excluídos do ajuste vazados.
@@ -7206,6 +7237,17 @@ class LockInWindow(QtWidgets.QMainWindow):
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
                         f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
                 ext_cols = q.get('mod') == 'optica' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
+                if not resave and q.get('t_start') and not q.get('t_end'):
+                    q['t_end'] = now_dt
+                if q.get('t_start') and q.get('t_end'):
+                    dur = (q['t_end'] - q['t_start']).total_seconds()
+                    f.write(f"# Inicio = {q['t_start'].strftime('%Y-%m-%d %H:%M:%S')}; "
+                            f"Fim = {q['t_end'].strftime('%Y-%m-%d %H:%M:%S')}; Duracao = {dur:.0f} s ({self._fmt_time(dur)})\n")
+                pcol = len(getattr(self, 'dual_pinfo', [])) == len(self.dual_results)
+                if pcol:
+                    f.write('# Por ponto: Tau_s = tau do lock-in; Tempo_ponto_s = espera + média (inclui refazimentos); '
+                            'Refeito = vezes que o tau adaptativo refez o ponto; Flutuacao_S_Pct e Flutuacao_Fase_Graus = '
+                            'flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a média\n')
                 if q.get('mod') == 'optica':
                     f.write('# Modulacao = optica (chopper; frequência e fase de referência detectadas no OPT101)\n')
                 if q.get('refine'):
@@ -7232,11 +7274,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                     f.write(f"# Arquivo de calibração do microfone: {os.path.basename(self.dual_cal['path'])} "
                             f"(aplicada no gráfico/fit; os dados abaixo são brutos)\n")
                 f.write(f'{col},OPT101_R,OPT101_R_DP,INMP441_R,INMP441_R_DP,INMP441_Fase_Graus,'
-                        'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '') + '\n')
+                        'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '')
+                        + (',' + ','.join(DUAL_POINT_COLUMNS) if pcol else '') + '\n')
                 for i, row in enumerate(self.dual_results):
                     f.write(f'{row[0]:.3f},{row[1]:.6g},{row[2]:.4g},{row[3]:.6g},{row[4]:.4g},'
                             f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f}'
-                            + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '') + '\n')
+                            + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '')
+                            + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g}'.format(*self.dual_pinfo[i]) if pcol else '') + '\n')
             self.dual_plots.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
             self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
             if self.dual_cal is not None:
@@ -7250,6 +7294,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.lbl_dual_status.setText(f'Concluída: {csv_path}')
         except Exception as e:
             print(f'Erro ao salvar a varredura do Modo Duplo: {e}')
+
+    @staticmethod
+    def _set_errbar(e, **kw):
+        '''ErrorBarItem.setData acumula as opções: zera as que não vêm, para não sobrar top/height de outro gráfico.'''
+        for k in ('height', 'width', 'top', 'bottom', 'left', 'right'):
+            kw.setdefault(k, None)
+        e.setData(**kw)
 
     @staticmethod
     def _plain(html):
@@ -7389,6 +7440,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         self.dual_kind = self.dual_src = kind
         self.dual_results = rows
+        self.dual_pinfo = params.pop('pinfo', [])
         self.dual_params = params
         self.dual_excluded = set()
         self.dual_ref_cfg = []          # cortes do OPT101 em cada ponto não ficam no CSV: sem diagnóstico do τ óptico

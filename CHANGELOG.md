@@ -31,6 +31,12 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - **How:** **adaptive τ** option (on by default) next to τ, which becomes the initial τ (default 4 s). After each point the fluctuation of S and Δφ during the measurement (standard deviation or first/second-half drift; OPT101 interpolated at the INMP441 instants, so laser power cancels) sets the τ of the next point (fluctuation at 70 % of **Precision**, default 1 % / 0.57°; at most 3× change per point; minimum ~3 periods, 100 ms). Above 2× Precision the point is measured again with a larger τ (up to 2× the initial τ). Each point: 7τ wait, max(1 s, 3τ) average. The header records the initial τ and the range used.
 - Off: the previous behaviour. Same phases as the fixed mode in simulation (within 0.02°); an 8-point sweep 10 Hz–2 kHz with a clean simulated signal took 84 s from τ = 4 s (fixed τ = 2 s: 2.7 min).
 
+#### Added: timing and fluctuation per point in the Dual Mode CSV
+- Automatic sweeps (frequency and matched PWM, adaptive τ on or off) write new columns `Tau_s` (lock-in τ of the point), `Tempo_ponto_s` (wait + average, including redos), `Refeito` (times adaptive τ measured the point again), `Flutuacao_S_Pct` and `Flutuacao_Fase_Graus` (fluctuation of S and Δφ during the average, as used by adaptive τ), plus a header line `# Inicio = …; Fim = …; Duracao = … s`. **Open sweep…** reads them back, so **Save again** keeps them; older files still open.
+
+#### Fixed
+- Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
+
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).
 - The mounting diagram (Chamber/OPC) moved from the calibration box to the **Frequency sweep** box, The fluctuation of S and Δφ of the point being measured (updated every second) and of the last point, with the τ in use, appears in a status bar at the top of the Dual Mode tab, like the sensor tabs (green within Precision, yellow up to 2×, red above). **Measure A/B** opens the Sweep panel.
