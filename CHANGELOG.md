@@ -64,8 +64,12 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Added: Signal vs t (s), and renamed Dual Mode buttons
 - Top row of the Dual Mode: **Signal vs f (Hz) ▸** (was *Sweep*), Fit, Open sweep…, Calibration, **Signal vs PWM (%) ▸** (the matched PWM sweep, was a sub-button inside *Sweep*) and the new **Signal vs t (s) ▸**. Box titles follow the same names.
 - **Signal vs t**: fixed frequency, PWM and τ; every *Point every* seconds it records the mean and SD of OPT101 R, microphone R and both phases (S and Δφ plotted vs time with ±1 SD error bars, sensor signals in *Show each sensor*), for *Duration* minutes (0 = until Stop). The first 7τ (lock-in settling) are discarded; time counts from the start. Results: change of S, Δφ, OPT101 and microphone between start and end, drift of S in the last third (%/min) and a fit S(t) = A + B·e^(−t/T). CSV `…_DUPLO_tempo_f…Hz_pwm…` (first column `Tempo_s`, per-point and drift columns) + PNG; **Open sweep…** reads it back. Electronic modulation only.
-- Headless: `soi_controller.py --sinal-t --f HZ --pwm % --tau S --dt S --duracao MIN [--desligar]`; `--desligar` (also for `--varredura`) sets PWM 0 at the end. `campanha_deriva.bat [sample]`: overnight drift campaign (~5 h; 7 blocks of 10 min at PWM 0 + 20/60 min at 10 Hz 100/50/25 %, 5, 30, 100 Hz, then an adaptive sweep).
+- Headless: `soi_controller.py --sinal-t --f HZ --pwm % --tau S --dt S --duracao MIN [--desligar]`; `--desligar` (also for `--varredura`) sets PWM 0 at the end. `campanha_deriva.bat [sample]`: overnight drift campaign (~7.5 h; 10 blocks of 10 min at PWM 0 + 20 min at 10 Hz 100/50/25 % and at 5, 30, 100, 300, 1000, 2000 Hz, plus 60 min at 10 Hz; then adaptive sweeps at Precision 1, 2 and 4 %).
 - Adaptive τ: drift is now only recorded (`Deriva_*` columns), not waited for (`ADAPT_MAX_DRIFT_WAIT = 0`): 4 extra averages held a 6 Hz point for minutes. A new rule will come from the drift campaign.
+
+#### Changed: fit boxes instead of the Fit button
+- The **Fit ▸** button is gone: its box (model, target, thickness, range, mark peak) is now a column to the right of the **Signal vs f** box, active whenever a model is chosen.
+- **Signal vs PWM** gets its own **Fit** box: polynomial of degree 1, 2 or 3 (or none) on INMP441 × OPT101 (left plot), OPT101 × PWM (right plot) or both, with coefficients ± error, R² and the maximum deviation; written to the CSV header. Signal vs t has no fit box (its Results keep the start/end change and the exponential).
 
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).

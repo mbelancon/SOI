@@ -2,7 +2,7 @@
 REM Campanha noturna de deriva (Sinal x t pelo modo sem janela). Feche a interface antes.
 REM Uso: campanha_deriva.bat [nome_da_amostra]    (padrao: Deriva)
 REM Cada bloco: 10 min com PWM 0 (laser parado: esfria e mede o fundo) + 20 min com o laser modulando.
-REM Duracao total estimada: ~5 h. Tudo vai para interface\Medidas e para interface\logs\soi.log.
+REM Duracao total estimada: ~7,5 h. Tudo vai para interface\Medidas e para interface\logs\soi.log.
 REM Ctrl+C interrompe a medida atual (salva o que ja foi medido); responda S para parar a campanha.
 cd /d "%~dp0"
 set PY=%USERPROFILE%\miniconda3\python.exe
@@ -11,9 +11,12 @@ set AM=%1
 if "%AM%"=="" set AM=Deriva
 set RUN="%PY%" interface\soi_controller.py --sinal-t --tau 1 --dt 5 --desligar --amostra
 echo Inicio: %date% %time%
-for %%B in ("10 100 20" "10 50 20" "10 25 20" "5 100 20" "30 100 20" "100 100 20" "10 100 60") do call :bloco %%~B
-echo Varredura final (tau adaptativo, precisao 2 %%):
-"%PY%" interface\soi_controller.py --varredura --amostra %AM%_final --tau 4 --precisao 2 --desligar
+for %%B in ("10 100 20" "10 50 20" "10 25 20" "5 100 20" "30 100 20" "100 100 20" "300 100 20" "1000 100 20" "2000 100 20" "10 100 60") do call :bloco %%~B
+for %%P in (1 2 4) do (
+  echo.
+  echo === Varredura 5-2440 Hz, tau adaptativo, precisao %%P %% ===
+  "%PY%" interface\soi_controller.py --varredura --amostra %AM%_final_prec%%P --fmin 5 --fmax 2440 --n 35 --tau 4 --precisao %%P --desligar
+)
 echo Fim: %date% %time%
 pause
 exit /b

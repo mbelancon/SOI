@@ -1731,6 +1731,18 @@ EN = {
     'Barras de erro (±1 DP): ': 'Error bars (±1 SD): ',
     ' = calibração, <b>cinza</b> = esta medida.': ' = calibration, <b>gray</b> = this measurement.',
     'verde': 'green',
+    # Quadros de ajuste (2.3.0)
+    'Ajuste': 'Fit',
+    'Polinômio:': 'Polynomial:',
+    'Grau 1 (reta)': 'Degree 1 (line)',
+    'Grau 2': 'Degree 2',
+    'Grau 3': 'Degree 3',
+    'Os dois': 'Both',
+    ' pontos insuficientes para grau ': ' not enough points for degree ',
+    '; desvio máximo ': '; max deviation ',
+    ' % do maior valor': ' % of the largest value',
+    'INMP441 × OPT101: linearidade do fotoacústico com a luz (gráfico da esquerda).\nOPT101 × PWM: resposta do laser ao PWM (gráfico da direita).':
+        'INMP441 × OPT101: linearity of the photoacoustic signal with light (left plot).\nOPT101 × PWM: laser response to PWM (right plot).',
     # Configurações (2.3.0)
     'Tensão no PA0 (V)': 'Voltage at PA0 (V)',
     'Max OPT101 output': 'Max OPT101 output',

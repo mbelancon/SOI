@@ -716,6 +716,34 @@ def list_mic_calibrations(folder=None):
     return [p for p in sorted(files, key=stamp, reverse=True) if load_mic_calibration(p) is not None]
 
 
+def poly_fit_text(x, y, deg):
+    '''Ajuste polinomial y = c0 + c1·x + … de grau deg (1 a 3). Devolve (coeficientes no formato de np.polyval,
+    texto com os coeficientes ± erro, R² e o desvio relativo máximo da reta em relação aos pontos) ou None.'''
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if x.size < deg + 2:
+        return None
+    try:
+        coef, cov = np.polyfit(x, y, deg, cov=True)
+    except (ValueError, np.linalg.LinAlgError):
+        try:
+            coef, cov = np.polyfit(x, y, deg), None
+        except (ValueError, np.linalg.LinAlgError):
+            return None
+    yf = np.polyval(coef, x)
+    ss = float(np.sum((y - y.mean()) ** 2))
+    r2 = 1.0 - float(np.sum((y - yf) ** 2)) / ss if ss > 0 else float('nan')
+    err = np.sqrt(np.abs(np.diag(cov))) if cov is not None and np.all(np.isfinite(cov)) else np.full(deg + 1, np.nan)
+    terms = []
+    for i, (c, e) in enumerate(zip(coef[::-1], err[::-1])):
+        terms.append(f'c{i} = {c:.4g}' + (f' ± {e:.2g}' if np.isfinite(e) else ''))
+    rng = float(np.max(np.abs(y))) or 1.0
+    dev = 100.0 * float(np.max(np.abs(y - yf))) / rng
+    return coef, ('y = ' + ' + '.join(['c0'] + [f'c{i}·x' + (f'<sup>{i}</sup>' if i > 1 else '') for i in range(1, deg + 1)])
+                  + ': ' + ', '.join(terms) + f'; R² = {r2:.5f}; desvio máximo {dev:.2g} % do maior valor')
+
+
 def circ_stats_deg(p):
     '''Média e desvio-padrão circulares de fases em graus (a média aritmética falha perto de ±180°).'''
     u = np.exp(1j * np.radians(np.asarray(p, dtype=np.float64)))
@@ -4958,6 +4986,35 @@ class LockInWindow(QtWidgets.QMainWindow):
         pp = QtWidgets.QHBoxLayout(self.dual_p_panel)
         pp.setContentsMargins(0, 0, 0, 0)
         pp.addWidget(box_p, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        pfit = self._group('Ajuste')
+        pv = QtWidgets.QVBoxLayout(pfit)
+        pv.setContentsMargins(6, 2, 6, 2)
+        prow = QtWidgets.QHBoxLayout()
+        prow.addWidget(QtWidgets.QLabel('Polinômio:'))
+        self.cmb_dual_p_deg = QtWidgets.QComboBox()
+        for name, d in (('Nenhum', 0), ('Grau 1 (reta)', 1), ('Grau 2', 2), ('Grau 3', 3)):
+            self.cmb_dual_p_deg.addItem(name, d)
+        self.cmb_dual_p_deg.setCurrentIndex(1)
+        prow.addWidget(self.cmb_dual_p_deg)
+        prow.addSpacing(8)
+        prow.addWidget(QtWidgets.QLabel('Ajustar:'))
+        self.cmb_dual_p_target = QtWidgets.QComboBox()
+        for name, k in (('INMP441 × OPT101', 'a'), ('OPT101 × PWM', 'b'), ('Os dois', 'ab')):
+            self.cmb_dual_p_target.addItem(name, k)
+        self.cmb_dual_p_target.setToolTip('INMP441 × OPT101: linearidade do fotoacústico com a luz (gráfico da esquerda).\n'
+                                          'OPT101 × PWM: resposta do laser ao PWM (gráfico da direita).')
+        prow.addWidget(self.cmb_dual_p_target)
+        prow.addStretch(1)
+        pv.addLayout(prow)
+        self.lbl_dual_p_fit = QtWidgets.QLabel('')
+        self.lbl_dual_p_fit.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_p_fit.setWordWrap(True)
+        self.lbl_dual_p_fit.setMaximumWidth(520)
+        pv.addWidget(self.lbl_dual_p_fit)
+        pv.addStretch(1)
+        for c in (self.cmb_dual_p_deg, self.cmb_dual_p_target):
+            c.currentIndexChanged.connect(lambda _: self.dual_kind == 'P' and self._show_dual_results())
+        pp.addWidget(pfit, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         pp.addStretch(1)
         self.dual_p_panel.setVisible(False)
         lay.addWidget(self.dual_p_panel)
@@ -5299,10 +5356,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_model_panel.setToolTip('Ajusta a varredura em frequência (magnitude, fase ou as duas) com modelos\n'
                                              'físicos de célula aberta. Use com a calibração aplicada ("Usar").')
         self.btn_dual_model_panel.toggled.connect(self.on_dual_model_panel)
-        # No topo, depois de "Varredura" (Calibração fica por último); o quadro abre acima dos gráficos
-        self.dual_top_row.insertWidget(self.dual_top_row.indexOf(self.btn_dual_pwm_panel) + 1, self.btn_dual_model_panel)
-        self.dual_model_box = self._group('Ajuste da varredura em frequência')
-        self.dual_model_box.setVisible(False)
+        # Sem botão próprio (2.3.0): o quadro fica à direita do Sinal x f e o ajuste vale sempre que há um modelo
+        self.btn_dual_model_panel.setParent(page)
+        self.btn_dual_model_panel.setVisible(False)
+        self.btn_dual_model_panel.blockSignals(True)
+        self.btn_dual_model_panel.setChecked(True)
+        self.btn_dual_model_panel.blockSignals(False)
+        self.dual_model_box = self._group('Ajuste')
         mv = QtWidgets.QVBoxLayout(self.dual_model_box)
         mv.setContentsMargins(6, 2, 6, 2)
         mrow = QtWidgets.QHBoxLayout()
@@ -5327,7 +5387,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cmb_dual_model_target.currentIndexChanged.connect(lambda _: self._show_dual_results())
         self.cmb_dual_model_target.setEnabled(False)       # habilitado ao escolher um modelo (_on_dual_model)
         mrow.addWidget(self.cmb_dual_model_target)
-        mrow.addSpacing(10)
+        mrow.addStretch(1)
+        mv.addLayout(mrow)
+        mrow = QtWidgets.QHBoxLayout()
         mrow.addWidget(QtWidgets.QLabel('Espessura L:'))
         self.sp_dual_thick = self._dspin(0.0, 100000.0, 0.0, 1, 10.0, lambda _: self._show_dual_results(), 110, ' µm')
         self.sp_dual_thick.setSpecialValueText('não informada')
@@ -5342,7 +5404,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         mrow.addWidget(self.sp_dual_model_n)
         self.lbl_dual_model_n.setVisible(False)
         self.sp_dual_model_n.setVisible(False)
-        mrow.addSpacing(10)
+        mrow.addStretch(1)
+        mv.addLayout(mrow)
+        mrow = QtWidgets.QHBoxLayout()
         mrow.addWidget(QtWidgets.QLabel('Faixa: de'))
         range_tip = ('Limita o ajuste do modelo a esta faixa de frequência (os outros pontos continuam no gráfico).\n'
                      'Use quando o modelo só vale numa região da varredura. Pontos excluídos com clique também\n'
@@ -5356,6 +5420,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         mrow.addWidget(self.sp_dual_model_f0)
         mrow.addWidget(QtWidgets.QLabel('a'))
         mrow.addWidget(self.sp_dual_model_f1)
+        mrow.addStretch(1)
+        mv.addLayout(mrow)
+        mrow = QtWidgets.QHBoxLayout()
         self.btn_dual_peak = QtWidgets.QPushButton('Marcar pico (2 cliques)')
         self.btn_dual_peak.setCheckable(True)
         self.btn_dual_peak.setToolTip('Para o modelo de ressonância: clique no gráfico da esquerda um pouco abaixo e um pouco\n'
@@ -5369,8 +5436,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_model = QtWidgets.QLabel('')
         self.lbl_dual_model.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_model.setWordWrap(True)
+        self.lbl_dual_model.setMaximumWidth(520)
         mv.addWidget(self.lbl_dual_model)
-        lay.insertWidget(lay.indexOf(self.dual_pwm_panel) + 1, self.dual_model_box)
+        mv.addStretch(1)
+        # à direita do quadro Sinal x f (painel Sinal x f)
+        pl = self.dual_pwm_panel.layout()
+        pl.insertWidget(pl.indexOf(self.dual_manual_box) + 1, self.dual_model_box, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         self.dual_model_txt = None
         pen_model = pg.mkPen('#2e7d32', width=2, style=QtCore.Qt.PenStyle.DashLine)
         self.c_dual_a_model = self.pw_dual_a.plot([], [], pen=pen_model)
@@ -7075,17 +7146,27 @@ class LockInWindow(QtWidgets.QMainWindow):
             self._set_errbar(self.e_dual_b, x=x, y=ro, height=2 * ro_e, beam=0)
             for e in (self.e_dual_a_cal, self.e_dual_b_cal):
                 self._set_errbar(e, x=np.empty(0), y=np.empty(0))
-            fit = fit_sweep(ro[keep], ra[keep], 'lin') if keep.sum() >= 2 else None
-            if fit is None:
-                self.c_dual_a_fit.setData([], [])
-                self.lbl_dual_fit.setText(excl_txt)
-                return
-            func, text = fit
-            xx = np.linspace(0.0, float(ro.max()) * 1.05, 100)
-            self.c_dual_a_fit.setData(xx, func(xx))
-            self.dual_fit = 'Fit INMP441 x OPT101: ' + text.replace('<br>', '; ')
-            self.lbl_dual_fit.setText('<span style="color:#b35c00;"><b>Fit INMP441 × OPT101:</b> &nbsp; '
-                                      + text.replace('<br>', ' &nbsp; ') + '</span>' + excl_txt)
+            self.c_dual_a_fit.setData([], [])
+            self.c_dual_b_fit.setData([], [])
+            deg = self.cmb_dual_p_deg.currentData() or 0
+            tgt = self.cmb_dual_p_target.currentData()
+            parts, plain = [], []
+            for key, xs_, ys_, curve, name in (('a', ro, ra, self.c_dual_a_fit, 'INMP441 × OPT101'),
+                                               ('b', x, ro, self.c_dual_b_fit, 'OPT101 × PWM')):
+                if not deg or key not in tgt:
+                    continue
+                res = poly_fit_text(xs_[keep], ys_[keep], deg)
+                if res is None:
+                    parts.append(f'<b>{name}:</b> pontos insuficientes para grau {deg}.')
+                    continue
+                coef, text = res
+                xx = np.linspace(0.0, float(np.max(xs_)) * 1.05, 200)
+                curve.setData(xx, np.polyval(coef, xx))
+                parts.append(f'<span style="color:#b35c00;"><b>{name}:</b> {text}</span>')
+                plain.append(f'Fit {name.replace("×", "x")}: {self._plain(text)}')
+            self.dual_fit = '; '.join(plain) or None
+            self.lbl_dual_p_fit.setText('<br>'.join(parts))
+            self.lbl_dual_fit.setText(excl_txt)
             return
 
         # frequência real: na modulação óptica é a medida no OPT101; na eletrônica, a gerada pelo TIM4
@@ -7838,7 +7919,7 @@ class LockInWindow(QtWidgets.QMainWindow):
     def on_dual_model_panel(self, checked):
         '''Painel "Ajuste com modelos" do Modo Duplo; fechado, nenhum modelo é ajustado.'''
         self.dual_model_box.setVisible(checked)
-        self.btn_dual_model_panel.setText('Ajuste ' + ('▾' if checked else '▸'))
+        self.btn_dual_model_panel.setText('Ajuste ' + ('▾' if checked else '▸'))   # botão escondido (sempre ligado)
         self._show_dual_results()
 
     def _on_dual_model(self, _=None):
@@ -10490,10 +10571,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                  'sp_dt_dur')
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
-                  'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_model_panel', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
+                  'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
                   'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
+                  'cmb_dual_p_deg', 'cmb_dual_p_target',
                   'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
         return spins, checks, combos
 
