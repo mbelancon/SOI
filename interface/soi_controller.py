@@ -3359,6 +3359,47 @@ class AudioSimulator:
         return chunks
 
 
+_SUP = str.maketrans('0123456789-', '⁰¹²³⁴⁵⁶⁷⁸⁹⁻')
+_pg_log_tick_strings = pg.AxisItem.logTickStrings
+
+
+def _log_tick_strings(self, values, scale, spacing):
+    """Eixo x logarítmico (frequência): décadas como 10ˣ e, entre elas, só o algarismo (2 … 9) em vez de 2·10ˣ,
+    que se sobrepunha em faixas grandes. Com menos de uma década à vista, o valor inteiro (200, 300 …).
+    Se as divisões ficam apertadas, mostra só 2 e 5 (ou só as décadas). O eixo y continua como no pyqtgraph."""
+    if self.orientation not in ('bottom', 'top') or not len(values):
+        return _pg_log_tick_strings(self, values, scale, spacing)
+    vals = np.asarray(values, dtype=float) + np.log10(scale)
+    lo, hi = self.range if hasattr(self, 'range') else (vals.min(), vals.max())
+    span = max(abs(hi - lo), 1e-9)
+    exps = np.floor(vals + 1e-6)
+    mant = np.round(10 ** (vals - exps), 6)
+    decade = np.isclose(mant, 1.0)
+    if not decade.any() or span < 1.0:
+        return [f'{v:.4g}' for v in 10 ** vals]
+    ppd = max(self.width(), 1.0) / span                        # pixels por década
+    if ppd * np.log10(10 / 9) >= 9:                            # 9 → 10 é o menor intervalo
+        keep = set(range(2, 10))
+    elif ppd * np.log10(3 / 2) >= 9:
+        keep = {2, 3, 5}
+    elif ppd * np.log10(5 / 2) >= 9:
+        keep = {2, 5}
+    else:
+        keep = set()
+    out = []
+    for e, m, d in zip(exps, mant, decade):
+        if d:
+            out.append('1' if e == 0 else '10' + str(int(e)).translate(_SUP))
+        elif abs(m - round(m)) < 1e-3 and int(round(m)) in keep:
+            out.append(str(int(round(m))))
+        else:
+            out.append('')
+    return out
+
+
+pg.AxisItem.logTickStrings = _log_tick_strings
+
+
 class TimeAxis(pg.AxisItem):
     '''Eixo de tempo com unidade nos rótulos (s ou ms).'''
     lockin_time = True

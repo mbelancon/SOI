@@ -39,6 +39,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - Before starting it checks the serial port and stops with a clear message if the port is busy (interface or serial monitor open) or the board is not found. Exit codes: 0 saved, 2 no board, 3 port busy, 4 no connection, 5 calibration not found, 6/7 sweep not started/not saved, 130 Ctrl+C.
 - `varredura.bat` (next to `rodar_interface.bat`) passes its arguments to it.
 
+#### Changed: logarithmic frequency axes
+- Decades are labelled 10ˣ and the ticks between them only with the digit (2 … 9) instead of 2·10ˣ, which overlapped on wide ranges. With less than one decade in view the full value is shown (200, 300 …); when ticks get too close only 2, 3, 5 (or 2, 5, or only decades) are labelled. Applies to every log x axis (tabs, Dual Mode, saved PNG); y axes unchanged.
+
 #### Fixed
 - Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
 
