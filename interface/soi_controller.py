@@ -67,12 +67,11 @@ ADC_LSB = ADC_FULL_SCALE / 4095.0          # 1 LSB do ADC de 12 bits na escala e
 ADC_VREF = 3.3
 # Alimentação do OPT101 (Configurações): a saída vai de ~7,5 mV até Vs − 1,3 V. Com 3,3 V ela nunca passa de
 # ~2,0 V; com 5 V chega a ~3,7 V, acima do ADC (3,3 V): o ganho deve deixar o pico em ~3,0 V e o PA0 precisa
-# de proteção (1 kΩ em série + Schottky BAT54 para 3,3 V). O osciloscópio e o status mostram o sinal em % da
-# saturação: 100 % = tensão em que o sinal satura (o OPT101 com 3,3 V; o ADC com 5 V). Por alimentação:
-# (100 % em V, topo da escala fixa do osciloscópio em %).
-OPT_SUPPLY = {3.3: (2.0, 110.0), 5.0: (3.3, 100.0)}
-OPT_PCT_ORANGE = 90.0     # pico ≥ 90 % da saturação: laranja
-OPT_PCT_RED = 97.0        # pico ≥ 97 %: vermelho, aviso no status e "Limiar de Saturação" no gráfico
+# de proteção (1 kΩ em série + Schottky BAT54 para 3,3 V). Teto do sinal em V por alimentação (onde o sinal para
+# de crescer: o OPT101 com 3,3 V; o ADC com 5 V): linha "Max OPT101 output" no osciloscópio e base do % do pico.
+OPT_SUPPLY = {3.3: 2.0, 5.0: 3.3}
+OPT_PCT_ORANGE = 80.0     # pico ≥ 80 % do teto: laranja (e o autoajuste do osciloscópio passa a mostrar a linha)
+OPT_PCT_RED = 90.0        # pico ≥ 90 %: vermelho, aviso no status e "Limiar de Saturação" no gráfico
 AUDIO_FS = 48000          # = AUDIO_FS_HZ do firmware (nominal)
 # Taxa real do I2S: PLLI2S = 1 MHz * 384 / 5 = 76,8 MHz; quadro de 64 bits; I2SDIV = 12 com ODD = 1
 # (divisor 25) -> 76,8e6 / 64 / 25 = 48000 Hz exatos. A referência numérica do lock-in de áudio usa a
@@ -3895,10 +3894,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_sim.setVisible(False)
         excitation.addWidget(self.chk_sim)
         self.opt_supply = 3.3                 # alimentação do OPT101 (V), escolhida em Configurações
-        self.chk_scope_fixed = QtWidgets.QCheckBox('Escala do osciloscópio fixa pela alimentação do OPT101')
-        self.chk_scope_fixed.setChecked(True)
-        self.chk_scope_fixed.setToolTip('Marcado: o eixo do osciloscópio do OPT101 vai de 0 a 110 % (alimentação de 3,3 V)\n'
-                                        'ou de 0 a 100 % (alimentação de 5 V). Desmarcado: o eixo acompanha o sinal.')
+        self.chk_scope_fixed = QtWidgets.QCheckBox('Escala do osciloscópio fixa de 0 a 3,3 V')
+        self.chk_scope_fixed.setChecked(False)
+        self.chk_scope_fixed.setToolTip('Marcado: o eixo do osciloscópio do OPT101 vai sempre de 0 a 3,3 V (toda a faixa do ADC).\n'
+                                        'Desmarcado (padrão): o eixo acompanha o sinal e a linha "Max OPT101 output"\n'
+                                        'só entra na vista quando o pico passa de 80 % do teto.')
         self.chk_scope_fixed.toggled.connect(lambda _: self._apply_scope_scale())
         self.btn_settings = QtWidgets.QPushButton('⚙ Configurações')
         self.btn_settings.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;background:#e8eef7;'
@@ -4004,7 +4004,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         # Legenda no título: dentro do gráfico ela ficava em cima do traço
         pi.setTitle('Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
                     '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
-        pi.setLabel('left', 'Sinal (% da saturação)')
+        pi.setLabel('left', 'Tensão no PA0 (V)')
         pi.setLabel('bottom', 'Tempo (s)')
         pi.getAxis('bottom').enableAutoSIPrefix(False)
         pi.showGrid(x=True, y=True, alpha=0.3)
@@ -4013,7 +4013,16 @@ class LockInWindow(QtWidgets.QMainWindow):
         pi.hideButtons()
         pi.setXRange(0, self.raw.window, padding=0)
         pi.setYRange(0, ADC_FULL_SCALE * 1.003, padding=0)
-        pi.getAxis('left').enableAutoSIPrefix(False)   # os dados ficam em contagens; o eixo mostra % (_apply_scope_scale)
+        pi.getAxis('left').enableAutoSIPrefix(False)   # os dados ficam em contagens; o eixo mostra volts
+        pi.getAxis('left').setScale(ADC_VREF / ADC_FULL_SCALE)
+        # Teto do OPT101 (muda com a alimentação); fora da vista quando o sinal é baixo e o eixo se ajusta a ele
+        self.line_opt_max = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen((230, 0, 0), width=2,
+                                                                              style=QtCore.Qt.PenStyle.DashLine),
+                                            label='Max OPT101 output',
+                                            labelOpts={'position': 0.02, 'anchors': [(0, 1), (0, 1)],
+                                                       'color': (208, 0, 0)})
+        self.line_opt_max.setZValue(50)
+        pi.addItem(self.line_opt_max, ignoreBounds=True)
         self.txt_sat = pg.TextItem('Limiar de Saturação', color=(208, 0, 0), anchor=(0.5, 0.5))
         self.txt_sat.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
         self.txt_sat.setZValue(100)
@@ -7522,11 +7531,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         bl.addWidget(r33)
         bl.addWidget(info('A saída do OPT101 vai de ~7,5 mV até V<sub>s</sub> − 1,3 V ≈ <b>2,0 V</b>: nunca passa do limite '
                           'do ADC do STM32 (3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. '
-                          '100 % no osciloscópio = 2,0 V (saturação do OPT101).'))
+                          'Linha "Max OPT101 output" em 2,0 V.'))
         bl.addWidget(r50)
         bl.addWidget(info('A saída chega a ≈ <b>3,7 V</b>, acima do limite do ADC. Ajuste o ganho (resistor de '
-                          'realimentação) ou a luz para o pico ficar em ~3,0 V (~90 %): usa quase toda a faixa do ADC. '
-                          '100 % no osciloscópio = 3,3 V (limite do ADC).'))
+                          'realimentação) ou a luz para o pico ficar abaixo de ~2,9 V (vermelho a partir de 90 % = 3,0 V): usa quase toda '
+                          'a faixa do ADC. Linha "Max OPT101 output" em 3,3 V (limite do ADC, antes do OPT101 saturar).'))
         warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: resistor de 1 kΩ em série entre a saída do '
                                 'OPT101 e o PA0 e diodo Schottky BAT54 do PA0 para os 3,3 V. Sem isso o STM32 pode queimar.')
         warn.setWordWrap(True)
@@ -7588,20 +7597,36 @@ class LockInWindow(QtWidgets.QMainWindow):
     def set_opt_supply(self, v):
         self.opt_supply = 5.0 if v > 4 else 3.3
         self._apply_scope_scale()
-        self.flash('OPT101 alimentado com 3,3 V: 100 % = 2,0 V (saturação do OPT101).' if self.opt_supply < 4 else
-                   'OPT101 alimentado com 5 V: 100 % = 3,3 V (limite do ADC).', 4.0)
+        self.flash('OPT101 alimentado com 3,3 V: teto do sinal em 2,0 V (saturação do OPT101).' if self.opt_supply < 4 else
+                   'OPT101 alimentado com 5 V: teto do sinal em 3,3 V (limite do ADC).', 4.0)
 
     def _sat_counts(self):
-        '''Contagens (escala 0-16380) que correspondem a 100 % da saturação com a alimentação escolhida.'''
-        return OPT_SUPPLY[self.opt_supply][0] / ADC_VREF * ADC_FULL_SCALE
+        '''Contagens (escala 0-16380) do teto do sinal com a alimentação escolhida.'''
+        return OPT_SUPPLY[self.opt_supply] / ADC_VREF * ADC_FULL_SCALE
 
     def _apply_scope_scale(self):
-        pi = self.plot_raw.getPlotItem()
+        '''Linha do teto do OPT101 e escala do osciloscópio (fixa 0-3,3 V ou acompanhando o sinal).'''
         sat = self._sat_counts()
-        pi.getAxis('left').setScale(100.0 / sat)           # contagens -> % da saturação
+        self.line_opt_max.setPos(sat)
+        # texto em cima da linha; no teto do ADC (5 V) não há espaço acima, então fica embaixo
+        a = (0, 0) if sat >= ADC_FULL_SCALE - 1 else (0, 1)
+        self.line_opt_max.label.anchors = [a, a]
+        self.line_opt_max.label.setAnchor(a)
         if self.chk_scope_fixed.isChecked():
-            top = OPT_SUPPLY[self.opt_supply][1] / 100.0 * sat
-            pi.setYRange(0, top * (1.003 if top >= ADC_FULL_SCALE - 1 else 1.0), padding=0)
+            self.plot_raw.getPlotItem().setYRange(0, ADC_FULL_SCALE * 1.003, padding=0)
+        else:
+            self._autoscale_raw()
+
+    def _autoscale_raw(self):
+        '''Eixo do osciloscópio pelo sinal (como antes); perto do teto (≥ 80 %) a linha entra na vista.'''
+        m = float(self.raw.adc.max()) if len(self.raw.adc) else 0.0
+        if m <= 0:
+            return
+        top = max(10.0, m * 1.10)
+        sat = self._sat_counts()
+        if m >= OPT_PCT_ORANGE / 100.0 * sat:
+            top = max(top, min(sat * 1.10, ADC_FULL_SCALE * 1.003))
+        self.plot_raw.getPlotItem().setYRange(0, top, padding=0)
 
     # ------------------------------------------------------------ Modulação óptica
     def on_mod_mode(self, idx):
@@ -9557,9 +9582,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 if self.opt_fft_enabled:
                     self._store_opt_samples(adc)
                 if wrapped and not self.chk_scope_fixed.isChecked():
-                    m = float(self.raw.adc.max())
-                    if m > 0:
-                        self.plot_raw.getPlotItem().setYRange(0, max(10.0, m * 1.10), padding=0)
+                    self._autoscale_raw()
                 if self.average_mode and self.avg.push(adc, ref):
                     self.avg_dirty = True
                 self.peak_hist.append((now, float(np.max(adc))))
@@ -9683,7 +9706,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             dc = self.dsp.dc_offset / ADC_OVS_FACTOR
             peak = max((v for _, v in self.peak_hist), default=0.0)
             sat = self._sat_counts()
-            pct = peak / sat * 100.0                       # % da saturação (100 % = OPT101 ou ADC)
+            pct = peak / sat * 100.0                       # % do teto (OPT101 com 3,3 V, ADC com 5 V)
             over = pct >= OPT_PCT_RED
             if dc > 0.95 * ADC_FULL_SCALE or peak >= 0.995 * ADC_FULL_SCALE:
                 status = "<b>[SATURAÇÃO DO ADC]</b>"
@@ -9694,7 +9717,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                           "<b>[Perto do limite do ADC]</b>")
                 color = ALERT_COLOR if pct >= 100.0 else WARN_COLOR
             elif dc < 0.05 * sat:
-                status = "[Sinal baixo: nível médio &lt; 5 % da saturação]"
+                status = "[Sinal baixo: nível médio &lt; 5 % do teto]"
                 color = WARN_COLOR
             else:
                 status = "[Sinal OK]"
@@ -9813,7 +9836,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             v = num('opt_supply')
             if v is not None:
                 self.opt_supply = 5.0 if v > 4 else 3.3
-            v = st.value('scope_fixed')
+            v = st.value('scope_fixed_33v')
             if v is not None:
                 self.chk_scope_fixed.setChecked(str(v).lower() in ('true', '1'))
             self._apply_scope_scale()
@@ -9847,7 +9870,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             st.setValue(name, int(getattr(self, name).currentIndex()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('opt_supply', self.opt_supply)
-        st.setValue('scope_fixed', bool(self.chk_scope_fixed.isChecked()))
+        st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))
         st.setValue('geometry', self.saveGeometry())
         st.setValue('dual_layout', self.dual_layout)
         st.setValue('dual_float_rel', '%.4f,%.4f' % self.dual_float.rel)
