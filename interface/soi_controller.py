@@ -4839,6 +4839,19 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_cal_boxes = QtWidgets.QHBoxLayout(self.dual_sweeps_panel)
         self.dual_cal_boxes.setContentsMargins(0, 0, 0, 0)
         self.dual_box_f = box_f
+        # Flutuação do ponto em medida e do último ponto (S e Δφ), embaixo dos campos
+        self.lbl_dual_fluct = QtWidgets.QLabel('')
+        self.lbl_dual_fluct.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_fluct.setStyleSheet('color:#404040;')
+        self.lbl_dual_fluct.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
+                                       '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.')
+        box_f.layout().addWidget(self.lbl_dual_fluct)
+        # Campos à esquerda e o esquema da montagem (Câmara/OPC, preenchido no quadro da calibração) à direita
+        inner = QtWidgets.QWidget()
+        inner.setLayout(box_f.layout())
+        self.dual_box_f_h = QtWidgets.QHBoxLayout(box_f)
+        self.dual_box_f_h.setContentsMargins(0, 0, 4, 2)
+        self.dual_box_f_h.addWidget(inner, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         box_f.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Maximum)
         # Numa área com rolagem horizontal: em tela estreita o painel não alarga a janela além da tela
         self.dual_cal_scroll = QtWidgets.QScrollArea()
@@ -5065,17 +5078,18 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_cal_ref_info.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_cal_ref_info.setWordWrap(True)
         cal_v.addWidget(self.lbl_cal_ref_info)
+        # Esquema da montagem (Câmara/OPC): fica no quadro Varredura (ao lado dos campos da varredura)
+        self.cal_schematic = CellSchematic()
         sch_v = QtWidgets.QVBoxLayout()
         sch_v.setSpacing(2)
-        self.cal_schematic = CellSchematic()
         sch_v.addWidget(self.cal_schematic)
         sch_v.addStretch(1)
+        self.dual_box_f_h.addLayout(sch_v)
         # Dicas de montagem na coluna da esquerda (largura livre): nunca invadem o desenho
         self.lbl_cal_tips = QtWidgets.QLabel('')
         self.lbl_cal_tips.setWordWrap(True)
         self.lbl_cal_tips.setStyleSheet('color:#404040;')
         cal_v.addWidget(self.lbl_cal_tips)
-        cal_h.addLayout(sch_v)
         # Widgets do antigo "Fitar padrão" (fora do layout): a calibração agora é M = S·fⁿ, sem ajuste de modelo,
         # e a faixa com S ∝ f⁻ⁿ é procurada no painel Ajuste
         self.chk_dual_std = QtWidgets.QCheckBox()
@@ -5086,7 +5100,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         frow = QtWidgets.QHBoxLayout()
         cal_v.addLayout(frow)
         self.lbl_cal_steps = QtWidgets.QLabel(
-            'Monte a <b>A</b> como no esquema e clique em <b>Medir A</b>; troque pela <b>B</b> sem mexer em mais nada e '
+            'Monte a <b>A</b> como no esquema (quadro Varredura) e clique em <b>Medir A</b>; troque pela <b>B</b> sem mexer em mais nada e '
             'clique em <b>Medir B</b>; depois, <b>Gerar calibração</b> (verificada se a razão A/B for constante em ≥ 1 década).')
         self.lbl_cal_steps.setWordWrap(True)
         frow.addWidget(self.lbl_cal_steps, 1)
@@ -5160,7 +5174,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_cal_verify.setWordWrap(True)
         cal_v.addWidget(self.lbl_cal_verify)
         cal_v.addWidget(self.dual_adv_row)
-        cal_v.addStretch(1)                  # passos no alto; o esquema define a altura da caixa
+        cal_v.addStretch(1)                  # passos no alto
         self.dual_cal_boxes.addWidget(cal_box, 1)
 
         # Ajuste da varredura em frequência com modelos físicos conhecidos (painel recolhível)
@@ -5542,6 +5556,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_sim.sample = (m['sim_k'], CAL_CELL_N.get(cell, 1.0), 10.0 * (len(key) % 5) - 20.0)
         self.cal_pending = slot
         self.lbl_cal_s_state[slot].setText('medindo…')
+        if not self.btn_dual_pwm_panel.isChecked():
+            self.btn_dual_pwm_panel.setChecked(True)     # quadro Varredura: progresso, flutuação e esquema
         if self.ext_mode:
             # Modulação óptica: varredura manual; "Concluir" guarda a varredura como amostra do slot
             self.cal_pending = None
@@ -6356,6 +6372,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
         self.adapt_tau_cur = None
         self.adapt_taus = []                # τ usado em cada ponto gravado
+        self.fluct_last = ''
+        self.fluct_next = 0.0
+        self.lbl_dual_fluct.setText('')
         if self._dual_adaptive(kind):
             self.adapt_tau_cur = self.dual_tau_w[kind].value()
             self.adapt_tau_max = 2.0 * self.adapt_tau_cur
@@ -6466,10 +6485,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                    self.adapt_tau_cur else '')
         self.lbl_dual_status.setText(f'{head}{tau_txt} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)'
                                      f'{self.adapt_info if adaptive else ""}')
+        if now >= getattr(self, 'fluct_next', 0.0):
+            self.fluct_next = now + 1.0
+            self._show_live_fluct(v, head, elapsed)
         if elapsed < self.dual_measure:
             return
         if adaptive and self._adapt_point(v, now):
             return                      # ponto refeito com τ maior
+        self._show_live_fluct(v, head, elapsed, final=True)
         with self.audio_lock:
             aud = self.dual_aud
             self.dual_aud = []
@@ -6513,6 +6536,32 @@ class LockInWindow(QtWidgets.QMainWindow):
     @staticmethod
     def _fmt_tau(t):
         return (f'{t * 1e3:.0f} ms' if t < 1.0 else f'{t:.2g} s').replace('.', ',')
+
+    def _show_live_fluct(self, f, head, elapsed, final=False):
+        '''Flutuação de S e Δφ do ponto em medida (atualizada a cada 1 s) no quadro Varredura; no fim do ponto
+        ela passa para a linha do último ponto.'''
+        with self.audio_lock:
+            aud = list(self.dual_aud)
+        if not (self.dual_opt and aud) or (not final and (elapsed < 1.5 or sum(len(c[0]) for c in aud) < 8)):
+            return
+        q, s_s, s_p = self._adapt_fluct(np.concatenate([c[0] for c in self.dual_opt]),
+                                        np.concatenate([c[1] for c in self.dual_opt]),
+                                        np.concatenate([c[0] for c in aud]), np.concatenate([c[1] for c in aud]))
+        tol = self.sp_dual_adapt_tol.value()
+        color = '#006400' if q <= 1.0 else ('#b05000' if q <= ADAPT_Q_REDO else '#d00000')
+        if self._dual_adaptive(self.dual_src) and self.adapt_tau_cur:
+            tau = (self.adapt_taus[-1] if final and self.adapt_taus else max(adapt_tau_min(f), self.adapt_tau_cur))
+        else:
+            tau = self.sp_audio_tau.value()
+        txt = (f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span> "
+               f"(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°), τ {self._fmt_tau(tau)}").replace('.', ',')
+        if final:
+            self.fluct_last = f'Último ponto ({head.split("] ")[-1]}): {txt}'
+            self.lbl_dual_fluct.setText(self.fluct_last)
+        else:
+            last = getattr(self, 'fluct_last', '')
+            self.lbl_dual_fluct.setText(f'Flutuação agora ({elapsed:.0f} s): {txt}'.replace('.', ',')
+                                        + (f'<br>{last}' if last else ''))
 
     def _adapt_fluct(self, r_o, p_o, r_a, p_a):
         """Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida, em unidades da Precisão:
