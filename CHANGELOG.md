@@ -34,6 +34,11 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Added: timing and fluctuation per point in the Dual Mode CSV
 - Automatic sweeps (frequency and matched PWM, adaptive τ on or off) write new columns `Tau_s` (lock-in τ of the point), `Tempo_ponto_s` (wait + average, including redos), `Refeito` (times adaptive τ measured the point again), `Flutuacao_S_Pct` and `Flutuacao_Fase_Graus` (fluctuation of S and Δφ during the average, as used by adaptive τ), plus a header line `# Inicio = …; Fim = …; Duracao = … s`. **Open sweep…** reads them back, so **Save again** keeps them; older files still open.
 
+#### Added: headless sweep (command line)
+- `python soi_controller.py --varredura [--amostra NOME] [--fmin HZ] [--fmax HZ] [--n PONTOS] [--tau S] [--precisao %] [--tau-fixo] [--pwm %] [--celula Camara|OPC] [--cal ARQUIVO|nenhuma] [--porta COMx] [--simulado]` runs a Dual Mode frequency sweep without a window (same code as the interface, Qt offscreen): electronic modulation, **PWM 100 %** by default, adaptive τ unless `--tau-fixo`; options left out take the interface's saved values. It prints one line per point (S, Δφ, τ, time, redos, fluctuation) and the CSV path, and saves CSV + PNG in `Medidas` with the usual name. It does not change the interface preferences.
+- Before starting it checks the serial port and stops with a clear message if the port is busy (interface or serial monitor open) or the board is not found. Exit codes: 0 saved, 2 no board, 3 port busy, 4 no connection, 5 calibration not found, 6/7 sweep not started/not saved, 130 Ctrl+C.
+- `varredura.bat` (next to `rodar_interface.bat`) passes its arguments to it.
+
 #### Fixed
 - Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
 

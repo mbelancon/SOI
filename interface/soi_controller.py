@@ -2639,6 +2639,8 @@ def keep_system_awake(on):
 
 
 def find_arduino_port():
+    if os.environ.get('SOI_NO_SERIAL'):           # modo sem janela com --simulado: não abre a placa
+        return None, []
     configured_port = os.environ.get('TL_ARDUINO_PORT')
     ports = list(list_ports.comports())
     if configured_port and (any(p.device.upper() == configured_port.upper() for p in ports)
@@ -10256,9 +10258,187 @@ def app_icon():
     return icon
 
 
+HEADLESS_HELP = """Modo sem janela (varredura em frequência do Modo Duplo pela linha de comando).
+
+Exemplos:
+  python soi_controller.py --varredura --amostra Al
+  python soi_controller.py --varredura --amostra Al --fmin 5 --fmax 2440 --n 35 --tau 4 --precisao 1
+  python soi_controller.py --varredura --simulado --fmin 100 --fmax 1000 --n 5
+
+Usa o mesmo código da interface (τ adaptativo, colunas por ponto, calibração, nome padrão na pasta Medidas).
+O PWM do laser é posto em 100 % (ou --pwm) e a modulação em Eletrônica. Feche a interface antes: a porta
+serial só pode ser aberta por um programa. Ctrl+C cancela (o que já foi medido não é salvo).
+"""
+
+
+def _headless_args(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog='soi_controller.py --varredura', description=HEADLESS_HELP,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--varredura', action='store_true', help='roda a varredura sem janela')
+    ap.add_argument('--amostra', default=None, help='nome da amostra (prefixo dos arquivos; padrão: o da interface)')
+    ap.add_argument('--fmin', type=float, default=None, help='frequência inicial em Hz (padrão: a da interface)')
+    ap.add_argument('--fmax', type=float, default=None, help='frequência final em Hz (padrão: a da interface)')
+    ap.add_argument('--n', type=int, default=None, help='número de pontos, espaçamento log (padrão: o da interface)')
+    ap.add_argument('--tau', type=float, default=None, help='τ inicial em s (τ adaptativo) ou τ fixo (padrão: o da interface)')
+    ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
+    ap.add_argument('--tau-fixo', action='store_true', help='desliga o τ adaptativo (espera 9τ, média 1τ)')
+    ap.add_argument('--pwm', type=float, default=100.0, help='PWM do laser em %% (padrão 100)')
+    ap.add_argument('--celula', choices=('Camara', 'OPC'), default=None, help='montagem (padrão: a da interface)')
+    ap.add_argument('--cal', default=None, help='arquivo CAL_*.csv da pasta Medidas aplicado no gráfico, ou "nenhuma"')
+    ap.add_argument('--porta', default=None, help='porta serial (ex.: COM5); padrão: detecção automática')
+    ap.add_argument('--simulado', action='store_true', help='amostragem simulada, sem a placa')
+    return ap.parse_args(argv)
+
+
+def run_headless(argv):
+    """Varredura em frequência do Modo Duplo sem janela: a mesma LockInWindow, fora da tela (Qt offscreen),
+    dirigida pelos argumentos. Devolve o código de saída (0 = CSV salvo)."""
+    for stream in (sys.stdout, sys.stderr):         # console do Windows (cp1252/cp850): τ, Δφ, ±
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    a = _headless_args(argv)
+    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+    os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.*=false')
+    if a.simulado:
+        os.environ['SOI_NO_SERIAL'] = '1'
+    else:
+        if a.porta:
+            os.environ['TL_ARDUINO_PORT'] = a.porta
+        port, ports = find_arduino_port()
+        if port is None:
+            print('ERRO: placa não encontrada. Portas vistas: '
+                  + (', '.join(f'{p.device} ({p.description})' for p in ports) or 'nenhuma')
+                  + '. Use --porta COMx ou --simulado.')
+            return 2
+        try:
+            serial.Serial(port, BAUD_RATE, timeout=0.05).close()
+        except (serial.SerialException, OSError) as e:
+            print(f'ERRO: a porta {port} está ocupada ou não abriu ({e}).\n'
+                  'Provavelmente a interface do SOI (ou um monitor serial) está aberta: feche-a e rode de novo.')
+            return 3
+        print(f'Placa em {port}.')
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(['soi_controller'])
+    # nada de janelas modais (ninguém para clicar): as mensagens vão para o terminal
+    def _msg(kind):
+        def f(parent, title, text, *rest, **kw):
+            print(f'[{kind}] {title}: {text}')
+            return QtWidgets.QMessageBox.StandardButton.Ok
+        return f
+    for k in ('warning', 'information', 'critical'):
+        setattr(QtWidgets.QMessageBox, k, staticmethod(_msg(k)))
+    LockInWindow.save_settings = lambda self: None        # não mexe nas preferências da interface
+    win = LockInWindow()
+    win.show()
+
+    def pump(sec):
+        t = time.time()
+        while time.time() - t < sec:
+            app.processEvents()
+            time.sleep(0.005)
+    last_flash = ['']
+    orig_flash = win.flash
+
+    def flash(text, seconds=3.0):
+        if text != last_flash[0]:
+            print(f'  · {re.sub(r"<[^>]+>", "", text)}', flush=True)
+            last_flash[0] = text
+        orig_flash(text, seconds)
+    win.flash = flash
+    if a.simulado:
+        win.chk_sim.setChecked(True)
+    else:
+        t0 = time.time()
+        while not win.link.connected and time.time() - t0 < 20:
+            pump(0.2)
+        if not win.link.connected:
+            print(f'ERRO: não conectou à placa ({win.link.last_error or "sem resposta"}).')
+            win.close()
+            return 4
+    win.cmb_mod.setCurrentIndex(0)                 # modulação eletrônica (o STM32 varre a frequência)
+    win.sp_power.setValue(a.pwm)                   # PWM 100 %: dispara on_power -> P100
+    win.on_power(win.sp_power.value())
+    if a.amostra is not None:
+        win.ed_sample.setText(a.amostra)
+    if a.celula:
+        win.cmb_cell.setCurrentIndex(max(0, win.cmb_cell.findData(a.celula)))
+    if a.cal:
+        if a.cal.lower() in ('nenhuma', 'none', '0'):
+            win.chk_mic_cal.setChecked(False)
+        else:
+            i = next((i for i in range(win.cmb_mic_cal.count())
+                      if os.path.basename(str(win.cmb_mic_cal.itemData(i) or '')) == os.path.basename(a.cal)
+                      or win.cmb_mic_cal.itemText(i).endswith(os.path.splitext(os.path.basename(a.cal))[0])), None)
+            if i is None:
+                print(f'ERRO: calibração {a.cal} não encontrada na pasta Medidas.')
+                win.close()
+                return 5
+            win.cmb_mic_cal.setCurrentIndex(i)
+    sp0, sp1, space, spn, _ = win.dual_fw['F']
+    space.setCurrentIndex(0)                       # pontos em escala log
+    if a.fmin is not None:
+        sp0.setValue(a.fmin)
+    if a.fmax is not None:
+        sp1.setValue(a.fmax)
+    if a.n is not None:
+        spn.setValue(a.n)
+    win.chk_dual_adapt.setChecked(not a.tau_fixo)
+    win._apply_adapt_ui()
+    if a.tau is not None:
+        win.dual_tau_w['F'].setValue(a.tau)
+    if a.precisao is not None:
+        win.sp_dual_adapt_tol.setValue(a.precisao)
+    win.btn_dual_sweeps_panel.setChecked(False)    # sem o aviso de calibração (janela modal)
+    win.tabs.setCurrentIndex(win.tabs.indexOf(win.dual_tab) if hasattr(win, 'dual_tab') else 2)
+    pump(3.0)                                      # lock-ins assentam com PWM e frequência novos
+    vals = win._dual_planned('F')
+    adapt = win.chk_dual_adapt.isChecked()
+    cal = (win.cmb_mic_cal.currentText() if win.cmb_mic_cal.count() else '—')
+    print(f'Varredura: {vals[0]:g} a {vals[-1]:g} Hz, {len(vals)} pontos; PWM {win.sp_power.value():g} %; '
+          + (f'τ adaptativo (τ inicial {win.dual_tau_w["F"].value():g} s, precisão {win.sp_dual_adapt_tol.value():g} %)'
+             if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s')
+          + f'; amostra "{win.ed_sample.text()}"; célula {win.cmb_cell.currentData()}; calibração: '
+          + (cal if win.chk_mic_cal.isChecked() else f'{cal} (não aplicada)')
+          + f'; filtro 60 Hz OPT101/INMP441: {"sim" if win.chk_mains.isChecked() else "não"}/'
+          + f'{"sim" if win.chk_audio_mains.isChecked() else "não"}' + ('; SIMULADO' if a.simulado else ''), flush=True)
+    win.dual_last_csv = None
+    win.toggle_dual_sweep('F')
+    if not win.dual_active:
+        print('ERRO: a varredura não começou (veja as mensagens acima).')
+        win.close()
+        return 6
+    t0 = time.time()
+    shown = -1
+    try:
+        while win.dual_active:
+            pump(0.5)
+            n = len(win.dual_results)
+            if n != shown:
+                shown = n
+                if n and len(getattr(win, 'dual_pinfo', [])) == n:
+                    r, pi = win.dual_results[-1], win.dual_pinfo[-1]
+                    print(f'[{n}/{len(vals)}] {r[0]:g} Hz  S = {r[3] / max(r[1], 1e-30):.4g}  '
+                          f'Δφ = {r[5] - r[7]:.2f}°  τ = {pi[0]:.3g} s  {pi[1]:.0f} s'
+                          + (f'  (refeito {pi[2]:.0f}×)' if pi[2] else '')
+                          + f'  flutuação S {pi[3]:.2g} %, Δφ {pi[4]:.2g}°   [{win._fmt_time(time.time() - t0)}]', flush=True)
+    except KeyboardInterrupt:
+        print('Cancelado pelo usuário.')
+        win.toggle_dual_sweep(win.dual_src)
+        win.close()
+        return 130
+    csv = getattr(win, 'dual_last_csv', None)
+    print(f'Concluída em {win._fmt_time(time.time() - t0)}: {csv}' if csv else 'ERRO: o CSV não foi salvo.')
+    win.close()
+    return 0 if csv else 7
+
+
 def main():
     import multiprocessing
     multiprocessing.freeze_support()      # executável (PyInstaller): o processo leitor da serial
+    if '--varredura' in sys.argv[1:] or '-h' in sys.argv[1:] or '--help' in sys.argv[1:]:
+        sys.exit(run_headless(sys.argv[1:]))
     if sys.platform == 'win32':
         # Sem isto, rodando pelo python.exe, a barra de tarefas mostra o ícone do Python.
         try:
