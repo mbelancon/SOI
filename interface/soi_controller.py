@@ -145,7 +145,7 @@ CAL_SWEEP_N = 35
 CAL_SWEEP_TAU = 2.0
 # Tempo adaptativo das varreduras em frequência do Modo Duplo (2.3.0). A espera de 9τ do modo fixo é só a
 # memória do filtro digital (a célula acústica e o sensor se acomodam em ms). Com o adaptativo, durante a
-# varredura os lock-ins usam um τ curto, τ_p = 3/f entre 50 e 500 ms (espera 9τ_p + 0,3 s), e o ponto é a
+# varredura os lock-ins usam τ_p = 8/f entre 100 ms e 1 s (espera 9τ_p + 0,3 s; maior em baixa frequência), e o ponto é a
 # média simples das saídas; a medida continua até a incerteza da média (médias em blocos) chegar à precisão
 # pedida, sem deriva entre a 1ª e a 2ª metade dos dados (se houver, a 1ª metade é descartada), com um
 # mínimo de max(1 s, 16τ_p) e um máximo por ponto.
@@ -155,8 +155,9 @@ ADAPT_DRIFT_Z = 3.5       # deriva: |média da 1ª metade − 2ª metade| > 3,5 
 
 
 def adapt_tau(f):
-    '''τ dos lock-ins num ponto da varredura adaptativa: ~3 períodos, entre 50 e 500 ms.'''
-    return float(min(0.5, max(0.05, 3.0 / max(f, 1e-3))))
+    '''τ dos lock-ins num ponto da varredura adaptativa: ~8 períodos, entre 100 ms e 1 s (o traço fica calmo
+    em baixa frequência; a integração de verdade é a média acumulada do ponto).'''
+    return float(min(1.0, max(0.1, 8.0 / max(f, 1e-3))))
 
 
 def adapt_tmin(f):
@@ -4766,8 +4767,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_dual_adapt = QtWidgets.QCheckBox('Tempo adaptativo')
         self.chk_dual_adapt.setChecked(True)
         self.chk_dual_adapt.setToolTip(
-            'Ligado: cada ponto espera só o necessário. Durante a varredura os lock-ins usam um τ curto (~3 períodos,\n'
-            '50–500 ms; espera 9τ + 0,3 s) e o ponto é a média das saídas, medida até a incerteza da média chegar à\n'
+            'Ligado: cada ponto espera só o necessário. Durante a varredura os lock-ins usam τ de ~8 períodos (100 ms\n'
+            'a 1 s; espera 9τ + 0,3 s) e o ponto é a média acumulada das saídas, medida até a incerteza da média chegar à\n'
             'Precisão (S em %, Δφ na mesma fração em radianos: 1 % = 0,57°), sem deriva entre a 1ª e a 2ª metade dos\n'
             'dados (com deriva, a 1ª metade é descartada e a medida continua). Mínimo max(1 s, 16τ); máximo por ponto\n'
             'no campo Máx. Em frequência alta, com sinal limpo, o ponto leva ~2 s; em frequência baixa, com ruído, mais.\n'
@@ -6595,8 +6596,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.adapt_info = (f' | <span style="color:#b05000;">sinal ainda variando: 1ª metade descartada '
                                f'({self.adapt_drops}x)</span>')
             return False
-        self.adapt_info = (f' | S ±{err_s:.2f} %  Δφ ±{err_p:.2f}° (alvo {tol:g} % / {tol_p:.2f}°)'
-                           .replace('.', ','))
+        # média acumulada de T s: mesmo ruído que um lock-in de τ ≈ T/4 (ENBW 1/(2T) = 1/(8τ))
+        self.adapt_info = (f' | média de {seconds:.0f} s (≈ τ {seconds / 4.0:.1f} s): S ±{err_s:.2f} %  '
+                           f'Δφ ±{err_p:.2f}° (alvo {tol:g} % / {tol_p:.2f}°)').replace('.', ',')
         return err_s <= tol and err_p <= tol_p
 
     def _dual_arrays(self):
@@ -7120,7 +7122,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         tau = f"tau = {q['tau']:g} s (integração longa)" if q['tau'] else 'tau dos filtros dos lock-ins'
         if q.get('adapt'):
             tau = (f"tempo adaptativo (precisão {q['adapt'][0]:g} %, máx. {q['adapt'][1]:g} s por ponto; "
-                   f"tau dos lock-ins = 3/f entre 50 e 500 ms; DP = incerteza da média)")
+                   f"tau dos lock-ins = 8/f entre 0,1 e 1 s; DP = incerteza da média)")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"

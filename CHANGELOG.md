@@ -28,8 +28,8 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Added: adaptive time in the Dual Mode frequency sweeps
 - **Why:** with τ = 2 s the 9τ wait (18 s) was too long at high frequency, where the signal is clean, and the 2 s average too short at low frequency, where it is noisy (2026-11-16 Ni sweep: INMP441 scatter ≈ 5 % below 20 Hz, ≈ 0.3 % above 1 kHz).
-- **How:** **Adaptive time** option (on by default) next to τ. During the sweep both lock-ins use τ_p = 3/f (50–500 ms) and wait 9τ_p + 0.3 s; the point is the mean of the outputs, measured until the uncertainty of the mean (block means) of S and Δφ reaches **Precision** (default 1 %, Δφ 0.57°), with a stabilization check (first and second half must agree, otherwise the first half is discarded), minimum max(1 s, 16τ_p) and **Max.** per point (default 60 s). The `_DP` columns become the uncertainty of the mean; the header records the settings.
-- Off: the previous behaviour (9τ wait, 1τ average). Same phase as the fixed mode in simulation (within 0.02°); an 8-point sweep 10 Hz–2 kHz took 24 s instead of 2.7 min with clean signal.
+- **How:** **Adaptive time** option (on by default) next to τ. During the sweep both lock-ins use τ_p = 8/f (0.1–1 s, longer at low frequency) and wait 9τ_p + 0.3 s; the point is the mean of the outputs, measured until the uncertainty of the mean (block means) of S and Δφ reaches **Precision** (default 1 %, Δφ 0.57°), with a stabilization check (first and second half must agree, otherwise the first half is discarded), minimum max(1 s, 16τ_p) and **Max.** per point (default 60 s). The `_DP` columns become the uncertainty of the mean; the header records the settings. The status shows the accumulated time of the point and the equivalent τ (≈ T/4).
+- Off: the previous behaviour (9τ wait, 1τ average). Same phase as the fixed mode in simulation (within 0.02°); an 8-point sweep 10 Hz–2 kHz took 49 s instead of 2.7 min with clean signal.
 
 #### Changed: Dual Mode top row
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).
