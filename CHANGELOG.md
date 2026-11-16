@@ -28,7 +28,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Added: adaptive τ in the Dual Mode frequency sweeps
 - **Why:** in the sweeps of 2026-11-16 (Al, stainless steel, brass, Ni, Ni film; τ = 2 s) the scatter between neighbouring points below 40 Hz was 5–35 %, much larger than the scatter inside each point (1–8 %): the low-frequency acoustic noise is slow and needs a longer τ. Above 400 Hz the signal was clean (0.04–0.4 %) and the 18 s wait was wasted.
-- **How:** **adaptive τ** option (on by default) next to τ, which becomes the initial τ (default 4 s). After each point the fluctuation of S and Δφ during the measurement (standard deviation or first/second-half drift; OPT101 interpolated at the INMP441 instants, so laser power cancels) sets the τ of the next point (fluctuation at 70 % of **Precision**, default 1 % / 0.57°; at most 3× change per point; minimum ~3 periods, 100 ms). Above 2× Precision the point is measured again with a larger τ (up to 2× the initial τ). Each point: 7τ wait, max(1 s, 3τ) average. The header records the initial τ and the range used.
+- **How:** **adaptive τ** option (on by default) next to τ, which becomes the initial τ (default 4 s). After each point the fluctuation of S and Δφ during the measurement (standard deviation or first/second-half drift; OPT101 interpolated at the INMP441 instants, so laser power cancels) sets the τ of the next point (fluctuation at 70 % of **Precision**, default 2 % / 1.15°; at most 3× change per point; minimum ~3 periods, 100 ms). Above 2× Precision the point is measured again with a larger τ (up to 2× the initial τ). Each point: 7τ wait, max(1 s, 3τ) average. The header records the initial τ and the range used.
 - Off: the previous behaviour. Same phases as the fixed mode in simulation (within 0.02°); an 8-point sweep 10 Hz–2 kHz with a clean simulated signal took 84 s from τ = 4 s (fixed τ = 2 s: 2.7 min).
 
 #### Added: timing and fluctuation per point in the Dual Mode CSV
@@ -52,6 +52,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Fixed
 - Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
+
+#### Changed: adaptive τ rule and default Precision (2 %)
+- **Default Precision 2 %** (S; 1.15° in Δφ), was 1 %. Sweeps of 2026-11-16 (Al, closed cell, τ from 4 s): the real scatter between neighbouring points was 2 % below 40 Hz and 0.6 % at 40–400 Hz, of the same order as the per-point fluctuation, and the microphone calibration itself is uncertain by several % / degrees at low frequency; with white noise, halving the precision cuts τ by 4×. Existing installations switch to 2 % once at start-up (setting `adapt_tol_2pct`).
+- The next τ uses the **median of the last 3 points** (scaled to the current τ) instead of only the last point, and rises at most 2× per point (was 3×): one noisy point no longer pushes the following points to the τ ceiling.
 
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).

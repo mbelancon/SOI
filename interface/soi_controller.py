@@ -148,7 +148,7 @@ CAL_SWEEP_TAU = 2.0
 # dos lock-ins (desvio-padrão de S e de Δφ durante a medida, e a diferença entre a 1ª e a 2ª metade). Se a
 # flutuação está bem abaixo da Precisão, o τ do ponto seguinte diminui (a flutuação cai com 1/√τ); se passa
 # muito da Precisão, o ponto é refeito com τ maior. Cada ponto: espera 7τ + 0,3 s e média por max(1 s, 3τ).
-ADAPT_TOL_DEF = 1.0       # precisão alvo da flutuação de S (%); a de Δφ é a mesma em radianos (1 % -> 0,57°)
+ADAPT_TOL_DEF = 2.0       # precisão alvo da flutuação de S (%); a de Δφ é a mesma em radianos (2 % -> 1,15°)
 ADAPT_TAU0_DEF = 4.0      # τ inicial padrão (s) com o τ adaptativo
 ADAPT_Q_TARGET = 0.7      # o τ seguinte é escolhido para a flutuação ficar em 70 % da Precisão
 ADAPT_Q_REDO = 2.0        # flutuação acima de 2× a Precisão: refaz o ponto com τ maior
@@ -4835,7 +4835,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             'Desligado: τ fixo do quadro, espera 9τ e média por 1τ (como antes).')
         self.sp_dual_adapt_tol = self._dspin(0.1, 20.0, ADAPT_TOL_DEF, 1, 0.5, None, 80, ' %')
         self.sp_dual_adapt_tol.setToolTip('Flutuação aceitável da saída em cada ponto: S em %, Δφ na mesma fração em radianos\n'
-                                          '(1 % = 0,57°). Menor = τ maior e varredura mais lenta.')
+                                          '(2 % = 1,15°; padrão 2 %). Menor = τ maior e varredura mais lenta.')
         adapt_row = (('', self.chk_dual_adapt), ('Precisão:', self.sp_dual_adapt_tol))
         box_f, btn_f, eta_f = sweep_box('Varredura em frequência',
                                         (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1)), 'F',
@@ -6467,6 +6467,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
         self.adapt_tau_cur = None
         self.adapt_taus = []                # τ usado em cada ponto gravado
+        self.adapt_q_hist = []              # (q, τ) dos pontos gravados: o τ seguinte usa a mediana dos últimos 3
         if not refine:
             self.dual_pinfo = []            # τ, tempo, refazimentos e flutuação de cada ponto (colunas do CSV)
             self.dual_params['t_start'] = datetime.now()
@@ -6746,8 +6747,14 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.adapt_info = (f' | <span style="color:#b05000;">{fl}: refazendo com τ maior</span>')
             return True
         self.adapt_taus.append(tau)
-        # próximo ponto: flutuação ∝ 1/√τ -> τ para ficar em 70 % da Precisão (muda no máximo 3× por ponto)
-        k = min(3.0, max(1.0 / 3.0, (q / ADAPT_Q_TARGET) ** 2)) if q > 0 else 1.0 / 3.0
+        # próximo ponto: flutuação ∝ 1/√τ -> τ para ficar em 70 % da Precisão. Usa a mediana dos 3 últimos pontos
+        # (levados ao τ atual), para um ponto isolado ruim não triplicar o τ dos seguintes; sobe no máximo 2× e
+        # desce no máximo 3× por ponto (o ruído cai com a frequência; um ponto muito ruim já é refeito)
+        hist = getattr(self, 'adapt_q_hist', [])
+        hist.append((q, tau))
+        self.adapt_q_hist = hist
+        q_eff = float(np.median([qi * np.sqrt(ti / tau) for qi, ti in hist[-3:]]))
+        k = min(2.0, max(1.0 / 3.0, (q_eff / ADAPT_Q_TARGET) ** 2)) if q_eff > 0 else 1.0 / 3.0
         self.adapt_tau_cur = min(self.adapt_tau_max, tau * k)
         self.adapt_info = f' | último ponto: τ = {self._fmt_tau(tau)}, {fl}'
         return False
@@ -10275,6 +10282,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             v = num('tab')
             if v is not None:
                 self.tabs.setCurrentIndex(int(v))
+            if st.value('adapt_tol_2pct') is None:      # 2.3.0: Precisão padrão passou de 1 % para 2 % (uma vez)
+                self.sp_dual_adapt_tol.setValue(ADAPT_TOL_DEF)
+                st.setValue('adapt_tol_2pct', 1)
         except Exception as e:
             print(f'Preferências ignoradas ({e})')
 
