@@ -28,8 +28,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Added: Settings window
 - **⚙ Settings** button at the end of the excitation bar, in place of **Finish experiment** (which moved into the window). The window has the lock-in trigger (electronic or optical), the OPT101 supply and Finish experiment, each with a short explanation.
-- **OPT101 supply:** 3.3 V (default; output up to ≈ 2.0 V, scope 0–2.2 V) or 5 V (output up to ≈ 3.7 V; adjust gain or light for a ≈ 3.0 V peak; scope 0–3.3 V). Choosing 5 V asks for confirmation and shows a warning: PA0 needs a 1 kΩ series resistor and a BAT54 Schottky diode to 3.3 V, or the STM32 can burn. The choice is remembered.
-- **OPT101 scope:** fixed scale set by the supply (option **Oscilloscope scale fixed by the OPT101 supply**, on by default; off = autoscale as before) and a right axis in volts at PA0. The status warns near saturation (above 95 % of 2.0 V with 3.3 V, or of 3.0 V with 5 V); the peak colour follows the same limits.
+- **OPT101 supply:** 3.3 V (default; output up to ≈ 2.0 V) or 5 V (output up to ≈ 3.7 V, above the ADC; adjust gain or light for a ≈ 3.0 V peak). Choosing 5 V asks for confirmation and shows a warning: PA0 needs a 1 kΩ series resistor and a BAT54 Schottky diode to 3.3 V, or the STM32 can burn. The choice is remembered.
+- **OPT101 scope in % of saturation** (replaces the ADC counts axis): 100 % = 2.0 V with the 3.3 V supply (OPT101 saturation) or 3.3 V with 5 V (ADC limit). Fixed scale set by the supply (0–110 % or 0–100 %; option **Oscilloscope scale fixed by the OPT101 supply**, on by default; off = autoscale).
+- **Status bar:** **Peak** in % of saturation and in volts (replaces **%ADC**): orange from 90 %, red from 97 % with *Near OPT101 saturation* / *OPT101 SATURATION* (3.3 V) or *Near the ADC limit* (5 V). *Low signal* is now a mean level below 5 % of saturation.
 
 ## [2.2.0] - 2026-11-13
 

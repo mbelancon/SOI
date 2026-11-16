@@ -61,7 +61,7 @@ The spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) l
 
 ## OPT101 tab
 
-**Status bar:** signal state (*Signal OK*, *Low signal* with mean level < 5 % of the ADC, or *ADC SATURATION*), the peak **%ADC** (green < 50 %, orange up to 70 %, red above), the **real frequency measured by the PLL** and the rate in use (e.g. *12.5 kS/s (OSR 16)*). If USB loses optical samples, *USB losses: N samples* appears in red: the interface fills the gap by repeating the last sample, so that time and the PLL stay correct.
+**Status bar:** signal state (*Signal OK*, *Low signal* with mean level < 5 % of saturation, *Near OPT101 saturation* / *OPT101 SATURATION* with the 3.3 V supply, *Near the ADC limit* with 5 V, or *ADC SATURATION*), the **Peak** in % of saturation with its voltage at PA0 (green < 90 %, orange from 90 %, red from 97 %; see [OPT101 supply](#opt101-supply)), the **real frequency measured by the PLL** and the rate in use (e.g. *12.5 kS/s (OSR 16)*). If USB loses optical samples, *USB losses: N samples* appears in red: the interface fills the gap by repeating the last sample, so that time and the PLL stay correct.
 
 **Oscilloscope:** raw ADC signal (0–16,380) and the laser reference (dashed green), in real time.
 - *Window (s)*: 0.005 to 30 s. Above 50 Hz the window is limited to 50 cycles ("Reduced view").
@@ -256,10 +256,10 @@ Choose **Optical** under **Trigger** in the **⚙ Settings** window when the lig
 
 Set in **⚙ Settings → OPT101 supply**. The OPT101 output goes from about 7.5 mV to V<sub>s</sub> − 1.3 V.
 
-- **3.3 V (default).** Output up to ≈ 2.0 V, always below the 3.3 V limit of the STM32 ADC, so PA0 needs no protection; it uses about 60 % of the ADC range. Scope from 0 to 2.2 V.
-- **5 V.** Output up to ≈ 3.7 V, **above** the ADC limit. Adjust the gain (feedback resistor) or the light so that the peak stays at about 3.0 V; this uses almost the whole ADC range (about 0.6 bit more than 3.3 V). Scope from 0 to 3.3 V. **PA0 must be protected:** a 1 kΩ resistor in series between the OPT101 output and PA0, and a BAT54 Schottky diode from PA0 to 3.3 V. Without it the STM32 can burn. The interface asks for confirmation before switching to 5 V.
+- **3.3 V (default).** Output up to ≈ 2.0 V, always below the 3.3 V limit of the STM32 ADC, so PA0 needs no protection; it uses about 60 % of the ADC range. **100 % = 2.0 V** (OPT101 saturation); the fixed scope scale goes to 110 %.
+- **5 V.** Output up to ≈ 3.7 V, **above** the ADC limit. Adjust the gain (feedback resistor) or the light so that the peak stays at about 3.0 V; this uses almost the whole ADC range (about 0.6 bit more than 3.3 V), i.e. about 90 %. **100 % = 3.3 V** (ADC limit, reached before the OPT101 saturates); the fixed scope scale goes to 100 %. **PA0 must be protected:** a 1 kΩ resistor in series between the OPT101 output and PA0, and a BAT54 Schottky diode from PA0 to 3.3 V. Without it the STM32 can burn. The interface asks for confirmation before switching to 5 V.
 
-The OPT101 scope has a right axis in volts at PA0. With **Oscilloscope scale fixed by the OPT101 supply** (on by default) its scale is fixed by the supply; off, it follows the signal. The status warns when the peak is above 95 % of the useful maximum (2.0 V with 3.3 V, 3.0 V with 5 V), and the peak colour turns orange above 85 % and red above 95 %. The interface does not measure the supply: the option only sets the scale and the limits.
+The vertical axis of the OPT101 scope is the **signal in % of saturation** (100 % = the voltage where the signal stops growing: the OPT101 with 3.3 V, the ADC with 5 V). With **Oscilloscope scale fixed by the OPT101 supply** (on by default) the scale is fixed by the supply; off, it follows the signal. The status bar shows the peak in % and in volts at PA0; the peak turns orange from 90 % and red from 97 %, where the status warns and the scope shows "Saturation threshold". The interface does not measure the supply: the option only sets the scale and the limits.
 
 ## Generated files (`Medidas/`)
 
