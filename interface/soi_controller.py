@@ -4845,7 +4845,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_fluct.setStyleSheet('color:#404040;')
         self.lbl_dual_fluct.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
                                        '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.')
-        box_f.layout().addWidget(self.lbl_dual_fluct)
+        self.lbl_dual_fluct.setVisible(False)          # a flutuação vai na barra de status do topo da aba
         # Campos à esquerda e o esquema da montagem (Câmara/OPC, preenchido no quadro da calibração) à direita
         inner = QtWidgets.QWidget()
         inner.setLayout(box_f.layout())
@@ -4881,8 +4881,16 @@ class LockInWindow(QtWidgets.QMainWindow):
         pbox.addStretch(1)
         self.dual_pwm_panel.setVisible(False)
         lay.addWidget(self.dual_pwm_panel)
-        self.lbl_dual_status = QtWidgets.QLabel('')
-        lay.addWidget(self.lbl_dual_status)
+        # Barra de status no topo da aba (como nas abas dos sensores): varredura, τ e flutuação de S e Δφ
+        self.lbl_dual_status = QtWidgets.QLabel('Modo Duplo: escolha uma varredura (Varredura ▸ ou Calibração ▸).')
+        self.lbl_dual_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.lbl_dual_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_status.setWordWrap(True)
+        self.lbl_dual_status.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
+                                        '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.\n'
+                                        'Verde: dentro da Precisão; amarelo: até 2×; vermelho: acima.')
+        self._dual_bar_color(OK_COLOR)
+        lay.insertWidget(0, self.lbl_dual_status)
 
         self.dual_plots = QtWidgets.QWidget()
         # Grade: lado a lado, empilhado ou sobrepostos (mesma célula), escolhido no menu do botão direito
@@ -5769,9 +5777,12 @@ class LockInWindow(QtWidgets.QMainWindow):
             for c in cc:
                 c.setData([], [])
         self.chk_dual_norm.setEnabled(kind == 'F')
-        # Barras de erro só nos eixos lineares (o pyqtgraph não as transforma em escala log)
-        self.e_dual_a.setVisible(kind == 'P')
-        self.e_dual_b.setVisible(kind == 'P')
+        # Barras de erro nos dois tipos (na frequência, em coordenadas log calculadas aqui: o pyqtgraph não
+        # transforma o ErrorBarItem para a escala log)
+        self.e_dual_a.setVisible(True)
+        self.e_dual_b.setVisible(True)
+        for e in (self.e_dual_a, self.e_dual_b):
+            e.setData(x=np.empty(0), y=np.empty(0))
         for c in (self.c_dual_a, self.c_dual_a_fit, self.c_dual_a_bad, self.c_dual_b, self.c_dual_b_fit):
             c.setData([], [])
         for t in self.txt_dual_empty:
@@ -6373,8 +6384,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.adapt_tau_cur = None
         self.adapt_taus = []                # τ usado em cada ponto gravado
         self.fluct_last = ''
+        self.fluct_now = ''
+        self.fluct_q = 0.0
         self.fluct_next = 0.0
-        self.lbl_dual_fluct.setText('')
         if self._dual_adaptive(kind):
             self.adapt_tau_cur = self.dual_tau_w[kind].value()
             self.adapt_tau_max = 2.0 * self.adapt_tau_cur
@@ -6469,10 +6481,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_etas[self.dual_src].setText(f'Restante: {self._fmt_time(rest)}')
         head = f'[{self.dual_idx + 1}/{n}] ' + (f'PWM {v:.1f} %' if self.dual_kind == 'P' else f'{v:g} Hz')
         if self.dual_state == 'SETTLING':
-            tau_txt = (f' | τ {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}'
+            tau_txt = (f' | τ = {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}'
                        if self._dual_adaptive(self.dual_src) and self.adapt_tau_cur else '')
-            self.lbl_dual_status.setText(f'{head}{tau_txt} | estabilizando os lock-ins '
-                                         f'({elapsed:.1f}/{self.dual_settle:.1f} s){self.adapt_info}')
+            self._dual_bar(f'{head}{tau_txt} | estabilizando os lock-ins ({elapsed:.1f}/{self.dual_settle:.1f} s)')
             if elapsed >= self.dual_settle:
                 self.dual_state = 'MEASURING'
                 self.dual_timer = now
@@ -6481,10 +6492,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self.dual_aud = []
             return
         adaptive = self._dual_adaptive(self.dual_src)
-        tau_txt = (f' | τ {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}' if adaptive and
+        tau_txt = (f' | τ = {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}' if adaptive and
                    self.adapt_tau_cur else '')
-        self.lbl_dual_status.setText(f'{head}{tau_txt} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)'
-                                     f'{self.adapt_info if adaptive else ""}')
+        self._dual_bar(f'{head}{tau_txt} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)')
         if now >= getattr(self, 'fluct_next', 0.0):
             self.fluct_next = now + 1.0
             self._show_live_fluct(v, head, elapsed)
@@ -6537,6 +6547,21 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _fmt_tau(t):
         return (f'{t * 1e3:.0f} ms' if t < 1.0 else f'{t:.2g} s').replace('.', ',')
 
+    def _dual_bar_color(self, color):
+        if getattr(self, '_dual_bar_c', None) != color:
+            self._dual_bar_c = color
+            self.lbl_dual_status.setStyleSheet(
+                f'background:{color}; border:1px solid gray; border-radius:6px; padding:4px;')
+
+    def _dual_bar(self, text):
+        '''Barra de status do Modo Duplo durante a varredura: andamento na 1ª linha; flutuação do ponto em medida
+        e do último ponto na 2ª; cor pela flutuação (verde dentro da Precisão, amarelo até 2×, vermelho acima).'''
+        parts = [p for p in (getattr(self, 'fluct_now', ''), getattr(self, 'fluct_last', '')) if p]
+        info = getattr(self, 'adapt_info', '') if 'refazendo' in getattr(self, 'adapt_info', '') else ''
+        self.lbl_dual_status.setText(text + info + ('<br>' + ' &nbsp;|&nbsp; '.join(parts) if parts else ''))
+        q = getattr(self, 'fluct_q', 0.0)
+        self._dual_bar_color(OK_COLOR if q <= 1.0 else (WARN_COLOR if q <= ADAPT_Q_REDO else ALERT_COLOR))
+
     def _show_live_fluct(self, f, head, elapsed, final=False):
         '''Flutuação de S e Δφ do ponto em medida (atualizada a cada 1 s) no quadro Varredura; no fim do ponto
         ela passa para a linha do último ponto.'''
@@ -6554,14 +6579,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         else:
             tau = self.sp_audio_tau.value()
         txt = (f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span> "
-               f"(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°), τ {self._fmt_tau(tau)}").replace('.', ',')
+               f"(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°), τ = {self._fmt_tau(tau)}").replace('.', ',')
         if final:
             self.fluct_last = f'Último ponto ({head.split("] ")[-1]}): {txt}'
-            self.lbl_dual_fluct.setText(self.fluct_last)
+            self.fluct_now = ''
         else:
-            last = getattr(self, 'fluct_last', '')
-            self.lbl_dual_fluct.setText(f'Flutuação agora ({elapsed:.0f} s): {txt}'.replace('.', ',')
-                                        + (f'<br>{last}' if last else ''))
+            self.fluct_now = f'Agora ({elapsed:.0f} s): {txt}'.replace('.', ',')
+        self.fluct_q = q
 
     def _adapt_fluct(self, r_o, p_o, r_a, p_a):
         """Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida, em unidades da Precisão:
@@ -6619,7 +6643,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         # próximo ponto: flutuação ∝ 1/√τ -> τ para ficar em 70 % da Precisão (muda no máximo 3× por ponto)
         k = min(3.0, max(1.0 / 3.0, (q / ADAPT_Q_TARGET) ** 2)) if q > 0 else 1.0 / 3.0
         self.adapt_tau_cur = min(self.adapt_tau_max, tau * k)
-        self.adapt_info = f' | último ponto: τ {self._fmt_tau(tau)}, {fl}'
+        self.adapt_info = f' | último ponto: τ = {self._fmt_tau(tau)}, {fl}'
         return False
 
     def _dual_arrays(self):
@@ -6653,9 +6677,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             if self.btn_dual_model_panel.isChecked() and self.cmb_dual_model.currentData() is not None:
                 self.lbl_dual_model.setText('O ajuste com modelos vale só para a varredura em frequência.')
             self._set_dual_points(ro, ra, np.arange(x.size), keep)
-            self.e_dual_a.setData(x=ro, y=ra, height=2 * ra_e, width=2 * ro_e)
+            self.e_dual_a.setData(x=ro, y=ra, height=2 * ra_e, width=2 * ro_e, beam=0)
             self.c_dual_b.setData(x, ro)
-            self.e_dual_b.setData(x=x, y=ro, height=2 * ro_e)
+            self.e_dual_b.setData(x=x, y=ro, height=2 * ro_e, beam=0)
             fit = fit_sweep(ro[keep], ra[keep], 'lin') if keep.sum() >= 2 else None
             if fit is None:
                 self.c_dual_a_fit.setData([], [])
@@ -6775,6 +6799,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_cal_verify.setEnabled(self.dual_corr is not None and not self.dual_active)
         self._set_dual_points(x[ok], s[ok], np.flatnonzero(ok), keep[ok])
         self.c_dual_b.setData(x[ok] if self.dual_cal else x, dphi[ok] if self.dual_cal else dphi)
+        self._set_dual_f_errors(x, s, s_rel, dphi, dphi_e, ok)
         self.c_dual_a_fit.setData([], [])
         self.c_dual_b_fit.setData([], [])
         self.c_dual_a_bad.setData([], [])
@@ -6831,6 +6856,18 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_fit = self._plain(txt)
         self.lbl_dual_fit.setText(f'<span style="color:#1f4e9c;">{txt}</span>' + excl_txt)
         self.lbl_dual_fit.setToolTip('')
+
+    def _set_dual_f_errors(self, x, s, s_rel, dphi, dphi_e, ok):
+        '''Barras de erro da varredura em frequência (±1 DP: S com o DP relativo dos dois R combinados, Δφ com
+        os DP das duas fases), em coordenadas log10 (eixo x log; S também em log).'''
+        m = ok & np.isfinite(s) & (s > 0) & (x > 0)
+        if not m.any():
+            return
+        lx = np.log10(x[m])
+        ls = np.log10(s[m])
+        r = np.clip(np.nan_to_num(s_rel[m]), 0.0, 0.999)
+        self.e_dual_a.setData(x=lx, y=ls, top=np.log10(1.0 + r), bottom=-np.log10(1.0 - r), beam=0.012)
+        self.e_dual_b.setData(x=lx, y=dphi[m], height=2.0 * np.nan_to_num(dphi_e[m]), beam=0.012)
 
     def _set_dual_points(self, x, y, idx, keep):
         '''Pontos do gráfico principal do Modo Duplo: incluídos cheios, excluídos do ajuste vazados.
