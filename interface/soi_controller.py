@@ -4883,14 +4883,26 @@ class LockInWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.dual_pwm_panel)
         # Barra de status no topo da aba (como nas abas dos sensores): varredura, τ e flutuação de S e Δφ
         self.lbl_dual_status = QtWidgets.QLabel('Modo Duplo: escolha uma varredura (Varredura ▸ ou Calibração ▸).')
-        self.lbl_dual_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.lbl_dual_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        self.lbl_dual_status.setWordWrap(True)
-        self.lbl_dual_status.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
+        # Uma linha: andamento à esquerda, flutuação de S e Δφ à direita
+        self.lbl_dual_fl = QtWidgets.QLabel('')
+        self.lbl_dual_fl.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_fl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.dual_bar = QtWidgets.QFrame()
+        self.dual_bar.setObjectName('dualBar')
+        bar_h = QtWidgets.QHBoxLayout(self.dual_bar)
+        bar_h.setContentsMargins(6, 3, 6, 3)
+        self.lbl_dual_now = QtWidgets.QLabel('')         # flutuação do ponto em medida, no meio
+        self.lbl_dual_now.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_dual_now.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        bar_h.addWidget(self.lbl_dual_status, 1)
+        bar_h.addWidget(self.lbl_dual_now, 1)
+        bar_h.addWidget(self.lbl_dual_fl, 1)
+        self.lbl_dual_fl.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
                                         '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.\n'
                                         'Verde: dentro da Precisão; amarelo: até 2×; vermelho: acima.')
         self._dual_bar_color(OK_COLOR)
-        lay.insertWidget(0, self.lbl_dual_status)
+        lay.insertWidget(0, self.dual_bar)
 
         self.dual_plots = QtWidgets.QWidget()
         # Grade: lado a lado, empilhado ou sobrepostos (mesma célula), escolhido no menu do botão direito
@@ -6386,6 +6398,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.fluct_last = ''
         self.fluct_now = ''
         self.fluct_q = 0.0
+        self.lbl_dual_fl.setText('')
+        self.lbl_dual_now.setText('')
         self.fluct_next = 0.0
         if self._dual_adaptive(kind):
             self.adapt_tau_cur = self.dual_tau_w[kind].value()
@@ -6550,15 +6564,19 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _dual_bar_color(self, color):
         if getattr(self, '_dual_bar_c', None) != color:
             self._dual_bar_c = color
-            self.lbl_dual_status.setStyleSheet(
-                f'background:{color}; border:1px solid gray; border-radius:6px; padding:4px;')
+            self.dual_bar.setStyleSheet(
+                f'#dualBar {{ background:{color}; border:1px solid gray; border-radius:6px; }}')
 
     def _dual_bar(self, text):
         '''Barra de status do Modo Duplo durante a varredura: andamento na 1ª linha; flutuação do ponto em medida
         e do último ponto na 2ª; cor pela flutuação (verde dentro da Precisão, amarelo até 2×, vermelho acima).'''
-        parts = [p for p in (getattr(self, 'fluct_now', ''), getattr(self, 'fluct_last', '')) if p]
         info = getattr(self, 'adapt_info', '') if 'refazendo' in getattr(self, 'adapt_info', '') else ''
-        self.lbl_dual_status.setText(text + info + ('<br>' + ' &nbsp;|&nbsp; '.join(parts) if parts else ''))
+        self.lbl_dual_status.setText(text + info)
+        tol = self.sp_dual_adapt_tol.value()
+        now = getattr(self, 'fluct_now', '')
+        self.lbl_dual_now.setText(now + (f' &nbsp;(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°)'.replace('.', ',')
+                                         if now else ''))
+        self.lbl_dual_fl.setText(getattr(self, 'fluct_last', ''))
         q = getattr(self, 'fluct_q', 0.0)
         self._dual_bar_color(OK_COLOR if q <= 1.0 else (WARN_COLOR if q <= ADAPT_Q_REDO else ALERT_COLOR))
 
@@ -6578,13 +6596,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             tau = (self.adapt_taus[-1] if final and self.adapt_taus else max(adapt_tau_min(f), self.adapt_tau_cur))
         else:
             tau = self.sp_audio_tau.value()
-        txt = (f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span> "
-               f"(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°), τ = {self._fmt_tau(tau)}").replace('.', ',')
+        txt = f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span>".replace('.', ',')
         if final:
-            self.fluct_last = f'Último ponto ({head.split("] ")[-1]}): {txt}'
+            fv = head.split('] ')[-1]
+            self.fluct_last = f'Último ({fv}, τ = {self._fmt_tau(tau)}): {txt}'
             self.fluct_now = ''
         else:
-            self.fluct_now = f'Agora ({elapsed:.0f} s): {txt}'.replace('.', ',')
+            self.fluct_now = f'Agora ({elapsed:.0f} s): {txt}'
         self.fluct_q = q
 
     def _adapt_fluct(self, r_o, p_o, r_a, p_a):

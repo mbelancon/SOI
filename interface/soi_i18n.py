@@ -1660,6 +1660,8 @@ EN = {
     '\n\nFrequência detectada no OPT101 (média do último segundo), desvio padrão dela e\noscilação rms da fase da luz em relação ao PLL (● travado). O INMP441 usa a mesma referência\ndepois que o farol do STM32 alinha os dois fluxos (alguns segundos depois de conectar).': '\n\nFrequency detected in the OPT101 (mean of the last second), its standard deviation and\nrms phase wander of the light relative to the PLL (● locked). The INMP441 uses the same reference\nonce the STM32 beacon aligns both streams (a few seconds after connecting).',
     ', fase ±': ', phase ±',
     # τ adaptativo (2.3.0)
+    'Último (': 'Last (',
+    'alvo ': 'target ',
     'Agora (': 'Now (',
     'Modo Duplo: escolha uma varredura (Varredura ▸ ou Calibração ▸).': 'Dual Mode: choose a sweep (Sweep ▸ or Calibration ▸).',
     'Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.\nVerde: dentro da Precisão; amarelo: até 2×; vermelho: acima.': 'Fluctuation of S = R_INMP441/R_OPT101 and of Δφ during the measurement of each point: standard deviation\n(or, if larger, the difference between the 1st and 2nd half). With adaptive τ, this is what sets τ.\nGreen: within the Precision; yellow: up to 2×; red: above.',
