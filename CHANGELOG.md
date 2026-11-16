@@ -57,6 +57,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - **Default Precision 2 %** (S; 1.15° in Δφ), was 1 %. Sweeps of 2026-11-16 (Al, closed cell, τ from 4 s): the real scatter between neighbouring points was 2 % below 40 Hz and 0.6 % at 40–400 Hz, of the same order as the per-point fluctuation, and the microphone calibration itself is uncertain by several % / degrees at low frequency; with white noise, halving the precision cuts τ by 4×. Existing installations switch to 2 % once at start-up (setting `adapt_tol_2pct`).
 - The next τ uses the **median of the last 3 points** (scaled to the current τ) instead of only the last point, and rises at most 2× per point (was 3×): one noisy point no longer pushes the following points to the τ ceiling.
 
+#### Added: slow drift handling in adaptive τ
+- At low frequency the amplitude can keep drifting after the lock-ins settle (sample/cell warming up, pressure equalising); a larger τ does not fix that. The fluctuation is now split into a **random** part (SD, falls with τ) and a **drift** part (difference between the halves of the average). When drift dominates and exceeds Precision, the point is averaged again with the same τ and no new wait, up to 4 times, until it stops (status: *drift S … (OPT101 …, microphone …): redoing the average…*, also in the log). τ follows only the random part.
+- New CSV columns `Deriva_S_Pct`, `Deriva_Fase_Graus`, `Deriva_OPT101_Pct`, `Deriva_INMP441_Pct` (signed, last average of the point): drift in the OPT101 means light (laser/LED), drift only in the microphone means sample/cell. `Refeito` counts both kinds of redo.
+
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).
 - The mounting diagram (Chamber/OPC) moved from the calibration box to the **Frequency sweep** box, The fluctuation of S and Δφ of the point being measured (updated every second) and of the last point, with the τ in use, appears in a status bar at the top of the Dual Mode tab, like the sensor tabs (green within Precision, yellow up to 2×, red above). **Measure A/B** opens the Sweep panel.

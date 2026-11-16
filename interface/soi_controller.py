@@ -153,6 +153,7 @@ ADAPT_TAU0_DEF = 4.0      # τ inicial padrão (s) com o τ adaptativo
 ADAPT_Q_TARGET = 0.7      # o τ seguinte é escolhido para a flutuação ficar em 70 % da Precisão
 ADAPT_Q_REDO = 2.0        # flutuação acima de 2× a Precisão: refaz o ponto com τ maior
 ADAPT_MAX_REDO = 2
+ADAPT_MAX_DRIFT_WAIT = 4  # médias extras (mesmo τ) enquanto S ou Δφ derivam (aquecimento da amostra/célula)
 
 
 def adapt_tau_min(f):
@@ -633,6 +634,8 @@ DUAL_COLUMNS = ('OPT101_R', 'OPT101_R_DP', 'INMP441_R', 'INMP441_R_DP', 'INMP441
 # colunas por ponto do Modo Duplo (2.3.0): τ do lock-in, tempo gasto no ponto (espera + média, com os refazimentos),
 # vezes que o ponto foi refeito pelo τ adaptativo e flutuação de S e de Δφ durante a média
 DUAL_POINT_COLUMNS = ('Tau_s', 'Tempo_ponto_s', 'Refeito', 'Flutuacao_S_Pct', 'Flutuacao_Fase_Graus')
+# deriva na última média do ponto (2ª metade - 1ª): S e Δφ, e R do OPT101 e do microfone em separado (opcionais ao ler)
+DUAL_DRIFT_COLUMNS = ('Deriva_S_Pct', 'Deriva_Fase_Graus', 'Deriva_OPT101_Pct', 'Deriva_INMP441_Pct')
 
 
 def load_dual_csv(path):
@@ -675,9 +678,10 @@ def load_dual_csv(path):
         params['mod'] = 'optica'
     pcols = [c for c in DUAL_POINT_COLUMNS if c in cols]
     if len(pcols) == len(DUAL_POINT_COLUMNS):     # τ, tempo e flutuação por ponto (2.3.0)
-        pidx = [cols.index(c) for c in DUAL_POINT_COLUMNS]
+        pidx = [cols.index(c) for c in DUAL_POINT_COLUMNS] + [cols.index(c) if c in cols else -1 for c in DUAL_DRIFT_COLUMNS]
         params['pinfo'] = [tuple(float(v) if v not in ('', 'nan') else float('nan')
-                                 for v in (ln.split(',')[i] for i in pidx)) for ln in lines[i_head + 1:]]
+                                 for v in ((ln.split(',')[i] if i >= 0 else 'nan') for i in pidx))
+                           for ln in lines[i_head + 1:]]
     for key, lab in (('t_start', 'Inicio'), ('t_end', 'Fim')):
         mt = re.search(rf'{lab} = (\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d)', header)
         if mt:
@@ -6522,6 +6526,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_timer = now
         self.adapt_info = ''
         self.adapt_redo = 0
+        self.adapt_drift_wait = 0
         self.point_t0 = now
         self.dual_opt = []
         with self.audio_lock:
@@ -6609,7 +6614,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             _, fl_s, fl_p = self._adapt_fluct(r_o, p_o, r_a, p_a)
             p_tau = (self.adapt_taus[-1] if adaptive and self.adapt_taus else
                      (self.dual_params.get('tau') or float('nan')))
-            pinfo = (p_tau, now - getattr(self, 'point_t0', now), self.adapt_redo if adaptive else 0, fl_s, fl_p)
+            fp = self.fluct_parts
+            pinfo = (p_tau, now - getattr(self, 'point_t0', now),
+                     (self.adapt_redo + getattr(self, 'adapt_drift_wait', 0)) if adaptive else 0, fl_s, fl_p,
+                     fp['drift_s'], fp['drift_p'], fp['drift_opt'], fp['drift_mic'])
             row = (v, float(r_o.mean()), float(r_o.std()), float(r_a.mean()), float(r_a.std()),
                    *circ_stats_deg(p_a), *circ_stats_deg(p_o))
             cfg = (self.cutoff_hp, self.chk_mains.isChecked())
@@ -6703,6 +6711,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         r_o, p_o = np.asarray(r_o, float), np.asarray(p_o, float)
         r_a, p_a = np.asarray(r_a, float), np.asarray(p_a, float)
         if len(r_o) < 2 or len(r_a) < 4:
+            self.fluct_parts = {'q_rand': 0.0, 'q_drift': 0.0, 'drift_s': float('nan'), 'drift_p': float('nan'),
+                                'drift_opt': float('nan'), 'drift_mic': float('nan')}
             return 0.0, 0.0, 0.0
         t_o, t_a = np.linspace(0.0, 1.0, len(r_o)), np.linspace(0.0, 1.0, len(r_a))
         ro_i = np.interp(t_a, t_o, r_o)
@@ -6712,12 +6722,25 @@ class LockInWindow(QtWidgets.QMainWindow):
         c = np.angle(np.exp(1j * dphi).mean())
         dphi = (dphi - c + np.pi) % (2.0 * np.pi) - np.pi
         h = len(sr) // 2
+        ho = len(r_o) // 2
+
+        def drift(x):
+            return abs(float(x[:h].mean() - x[h:].mean()))
 
         def fl(x, norm):
-            return max(float(x.std()), abs(float(x[:h].mean() - x[h:].mean()))) / norm
+            return max(float(x.std()), drift(x)) / norm
 
-        s_s = fl(sr, max(abs(float(sr.mean())), 1e-30))
+        sm = max(abs(float(sr.mean())), 1e-30)
+        s_s = fl(sr, sm)
         s_p = fl(dphi, 1.0)
+        # partes separadas: aleatória (DP, cai com τ maior) e deriva (2ª metade - 1ª; τ maior não resolve, só esperar).
+        # A deriva também em R do OPT101 e do microfone, com sinal: diz se vem da luz ou da amostra/célula
+        rel = lambda x, n: 100.0 * float(x[n:].mean() - x[:n].mean()) / max(abs(float(x.mean())), 1e-30)
+        self.fluct_parts = {
+            'q_rand': max(float(sr.std()) / sm, float(dphi.std())) / tol,
+            'q_drift': max(drift(sr) / sm, drift(dphi)) / tol,
+            'drift_s': rel(sr, h), 'drift_p': float(np.degrees(dphi[h:].mean() - dphi[:h].mean())),
+            'drift_opt': rel(r_o, ho) if ho else 0.0, 'drift_mic': rel(r_a, h)}
         return max(s_s, s_p) / tol, 100.0 * s_s, float(np.degrees(s_p))
 
     def _adapt_point(self, f, now):
@@ -6732,8 +6755,27 @@ class LockInWindow(QtWidgets.QMainWindow):
         r_a = np.concatenate([c[0] for c in aud])
         p_a = np.concatenate([c[1] for c in aud])
         q, s_s, s_p = self._adapt_fluct(r_o, p_o, r_a, p_a)
+        parts = self.fluct_parts
         tau = max(adapt_tau_min(f), self.adapt_tau_cur)
         fl = f'flutuação S {s_s:.2g} %, Δφ {s_p:.2g}°'.replace('.', ',')
+        # Deriva lenta (S ou Δφ mudando entre as metades da média mais que a Precisão e mais que o ruído): os
+        # lock-ins já assentaram, quem muda é a amostra/célula (aquecimento, pressão). τ maior não ajuda: mede de
+        # novo com o mesmo τ, sem nova espera, até a deriva cair (no máximo ADAPT_MAX_DRIFT_WAIT vezes)
+        if (parts['q_drift'] > 1.0 and parts['q_drift'] > parts['q_rand']
+                and getattr(self, 'adapt_drift_wait', 0) < ADAPT_MAX_DRIFT_WAIT):
+            self.adapt_drift_wait = getattr(self, 'adapt_drift_wait', 0) + 1
+            self.dual_state = 'MEASURING'
+            self.dual_timer = now
+            self.dual_opt = []
+            with self.audio_lock:
+                self.dual_aud = []
+            dtxt = (f"deriva S {parts['drift_s']:+.2g} % (OPT101 {parts['drift_opt']:+.2g} %, microfone "
+                    f"{parts['drift_mic']:+.2g} %), Δφ {parts['drift_p']:+.2g}°").replace('.', ',')
+            self.adapt_info = (f' | <span style="color:#b05000;">{dtxt}: refazendo a média com o mesmo τ, esperando '
+                               f'estabilizar ({self.adapt_drift_wait}/{ADAPT_MAX_DRIFT_WAIT})</span>')
+            print(f'Modo Duplo {f:g} Hz: {dtxt}; média refeita ({self.adapt_drift_wait}/{ADAPT_MAX_DRIFT_WAIT})')
+            return True
+        q = parts['q_rand']             # o τ segue só a parte aleatória (a deriva não cai com τ)
         if q > ADAPT_Q_REDO and tau < self.adapt_tau_max * 0.999 and self.adapt_redo < ADAPT_MAX_REDO:
             self.adapt_redo += 1
             self.adapt_tau_cur = min(self.adapt_tau_max, tau * min(4.0, max(2.0, (q / ADAPT_Q_TARGET) ** 2)))
@@ -7341,8 +7383,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                             'frequência (nan fora da faixa dela); os _DP das colunas anteriores são desta medida\n')
                 if pcol:
                     f.write('# Por ponto: Tau_s = tau do lock-in; Tempo_ponto_s = espera + média (inclui refazimentos); '
-                            'Refeito = vezes que o tau adaptativo refez o ponto; Flutuacao_S_Pct e Flutuacao_Fase_Graus = '
-                            'flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a média\n')
+                            'Refeito = vezes que o tau adaptativo refez o ponto (tau maior ou, com deriva, nova média); '
+                            'Flutuacao_S_Pct e Flutuacao_Fase_Graus = flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a '
+                            'média; Deriva_* = 2ª metade - 1ª da última média (S, Δφ, R do OPT101, R do INMP441)\n')
                 if q.get('mod') == 'optica':
                     f.write('# Modulacao = optica (chopper; frequência e fase de referência detectadas no OPT101)\n')
                 if q.get('refine'):
@@ -7370,13 +7413,14 @@ class LockInWindow(QtWidgets.QMainWindow):
                             f"(aplicada no gráfico/fit; os dados abaixo são brutos)\n")
                 f.write(f'{col},OPT101_R,OPT101_R_DP,INMP441_R,INMP441_R_DP,INMP441_Fase_Graus,'
                         'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '')
-                        + (',' + ','.join(DUAL_POINT_COLUMNS) if pcol else '')
+                        + (',' + ','.join(DUAL_POINT_COLUMNS + DUAL_DRIFT_COLUMNS) if pcol else '')
                         + (',Cal_S_DP_Pct,Cal_Fase_DP_Graus' if ccol else '') + '\n')
                 for i, row in enumerate(self.dual_results):
                     f.write(f'{row[0]:.3f},{row[1]:.6g},{row[2]:.4g},{row[3]:.6g},{row[4]:.4g},'
                             f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f}'
                             + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '')
-                            + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g}'.format(*self.dual_pinfo[i]) if pcol else '')
+                            + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g}'.format(
+                                *(tuple(self.dual_pinfo[i]) + (float('nan'),) * 9)[:9]) if pcol else '')
                             + (f',{100 * c_rel[i]:.3g},{c_ph[i]:.3g}' if ccol else '') + '\n')
             self.dual_plots.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
             self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
