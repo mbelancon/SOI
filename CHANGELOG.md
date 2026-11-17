@@ -10,9 +10,12 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
-## [2.3.0] - 2026-11-13
+## [2.3.0] - 2026-11-17
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
+
+#### Changed: project context files
+- `CLAUDE.md` (working rules) and `CONTEXTO.md` (current state, in Portuguese) replace `CONTEXT_SOI.md`.
 
 ### Interface (`interface/soi_controller.py`)
 

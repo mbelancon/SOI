@@ -1,0 +1,45 @@
+# CLAUDE.md — SOI
+
+Regras permanentes de trabalho neste repositório. O estado atual do projeto (versão, o que está aprovado,
+medidas em andamento) fica no CONTEXTO.md, importado abaixo.
+
+@CONTEXTO.md
+
+## Antes de começar
+- Ler o CONTEXTO.md (já vem pela linha acima) e o CHANGELOG.md, seção da versão em desenvolvimento.
+- Conversar com o Marcos em português. Documentação do repositório (README, docs/, CHANGELOG) em inglês.
+
+## Código
+- Firmware novo de STM32: sempre STM32Cube (HAL/LL), nunca Arduino/STM32duino, salvo pedido explícito.
+- Interface Python (`interface/soi_controller.py`): o modo simulado tem que continuar funcionando sempre.
+  Testar sem janela (`QT_QPA_PLATFORM=offscreen`, `find_arduino_port` sem porta, modo simulado) e conferir
+  capturas de tela antes de entregar.
+- Texto novo na interface: string em português no código e tradução em `EN` de `interface/soi_i18n.py`.
+- Arquivos de dados mantêm nomes, colunas e chaves de cabeçalho em português (`Medidas/`, `Frequencia_Hz`,
+  `# Celula = …`), em qualquer idioma da interface, para os arquivos antigos continuarem abrindo.
+
+## Versão e CHANGELOG
+- Firmware e interface têm o mesmo número de versão (semver). `__version__` na interface e
+  `FIRMWARE_VERSION` em `firmware/src/main.c`. MAJOR = mudança no protocolo USB.
+- Toda mudança atualiza o CHANGELOG.md (Keep a Changelog) junto com a versão, no mesmo commit.
+
+## Aprovação e fluxo
+- O Marcos aprova cada recurso novo antes de ele entrar num PR. O que não foi aprovado fica na branch,
+  listado no CONTEXTO.md como "aguardando aprovação".
+- Não manter cópias de versões anteriores ("estrela"): o histórico fica no git (decisão do Marcos, 17/11).
+- PR só quando o Marcos pedir. Release (tag + executável) também só a pedido dele.
+- Pasta local de trabalho e testes: `C:\Users\mbelancon\ownCloud\Projetos\Claude\SOI` (roda o script Python,
+  não o executável; a interface grava em `interface\Medidas`). Mudanças testadas lá voltam ao repositório por
+  PR antes de cada release.
+- Ao copiar uma versão nova para a pasta local, guardar antes um backup da versão anterior.
+
+## Segurança do hardware
+- A entrada analógica do STM32F401 (PA0) não tolera 5 V. O OPT101 pode ser alimentado com 5 V para ganhar
+  resolução (saída máx. ~3,7 V), mas só com proteção no ADC: 1 kΩ em série + Schottky BAT54 para 3,3 V.
+  Sempre avisar do risco de queimar o STM32 ao sugerir essa opção. Padrão: Vs = 3,3 V, saída máx. ~2,0 V.
+- O laser é sempre acionado por driver, nunca direto pelo PA8.
+
+## CONTEXTO.md e conversas longas
+- Ao fim de uma sessão em que algo mudou, propor a atualização do CONTEXTO.md como diff curto e só gravar
+  depois do OK do Marcos.
+- Avisar o Marcos quando a conversa ficar longa e sugerir "resetar": resumir no CONTEXTO.md e começar outra.
