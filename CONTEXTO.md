@@ -22,29 +22,17 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, lock-in em software, modo simulado.
   `interface/soi_i18n.py` — idioma (pt/en pelo Windows, `SOI_LANG` força) e tabela pt→en.
 - `rodar_interface.bat`, `varredura.bat`, `campanha_deriva.bat` — atalhos (miniconda).
-- `docs/01..06` (inglês), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
+- Pasta local do PC (`Projetos\Claude\SOI`) agora é um clone git do repositório: atualiza com `git pull` do
+  `main`. Medidas, dados e backups ficam fora do git (não versionados).
+- `docs/01..08` (inglês; 07 = calibração, 08 = exemplos com medidas reais), `examples/` (CSVs + script das
+  figuras), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
 
 ## Versões
-- `main`: 2.1.0 (PR #4), firmware 2.0.0. v1.0.0 publicada em 2026-10-27.
-- 2.2.0 — calibração por duas amostras (branch `claude/project-thread-yj1u9s`, commit 250341d): aprovada em 2026-11-13.
-- 2.3.0 — branch `claude/project-thread-b87dn6` (commit d9b51f9), só interface (firmware continua 2.0.0):
-  aprovada em 2026-11-17. Não se mantêm cópias de versões anteriores ("estrela"): o histórico fica no git.
-  É a versão que está na pasta local de testes.
+- `main`: 2.3.0 (PR #5, 17/11), firmware 2.0.0. v1.0.0 publicada em 2026-10-27; ainda sem release da 2.3.0.
+- Versões de firmware e interface são independentes (ver CLAUDE.md).
 
 ## Próximo PR (só quando o Marcos pedir)
-Aprovados:
-- Calibração por duas amostras (2.2.0).
-- Modulação óptica (chopper/ventilador + LED, OPT101 como referência; Modo Duplo e aba OPT101) — 16/11.
-- Gráfico do OPT101 em volts com a linha "Max OPT101 output" — 16/11.
-- Novo layout do quadro Varredura (flutuação + esquema Câmara/OPC) — 16/11.
-- CLAUDE.md e este CONTEXTO.md (substitui o CONTEXT_SOI.md).
-- Todos os itens da 2.3.0 (aprovados em 17/11): Configurações; τ adaptativo com "só f > 40 Hz", campo "τ"/"τ max"
-  (o τ max é o teto; padrão 4 s; abaixo de 40 Hz usa o τ max) e "Permitir médias × N"; warm-up; varredura e
-  Sinal x t sem janela + colunas por ponto; botões Sinal x f/Calibração/PWM/t e quadros de ajuste; barra verde;
-  eixos log e log em arquivo; botões PWM 0/10/[campo]/100; SNR OPT/INMP na barra superior; faixa calibrada
-  (pontos fora vazados, fundo vermelho opcional); aviso "Ressonância deslocada"; zoom manual mantido até duplo
-  clique/nova medida; τ da varredura lembrado; caixa "Resultados" removida (avisos ⚠ num indicador); CSV diz
-  quando a calibração não foi aplicada.
+Nada pendente: tudo o que estava aprovado entrou no PR #5.
 
 ## Campanha de deriva (16–17/11, alumínio) — descobertas
 Dados + relatório: `interface\Medidas\Campanha_deriva_20261116\Campanha_deriva_20261116.zip`
