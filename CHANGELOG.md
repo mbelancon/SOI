@@ -79,6 +79,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Added: wait for warm-up before sweeps
 - **Why:** after the laser turns on, the photoacoustic signal drops ~14 % with a ~4.4 min time constant (10 Hz, campaign of 2026-11-16/17) while the sample and the cell warm up.
 - Every sweep box (OPT101, INMP441 and Dual Mode: frequency, PWM, Signal vs t) has **Wait for warm-up** with a time field (default 300 s): the laser goes on at the measurement PWM (the highest PWM in a PWM sweep) and the sweep starts after the wait; the button shows the countdown and cancels. Headless: `--aquecer S`.
+- The time label shows one text: **Estimated time xx:xx (+warm-up yy:yy)**, with the warm-up counting down during the wait. Before, it alternated between the warm-up and the estimated time and moved part of the window; the label now sits at the end of the row (after the warm-up field) and wraps instead of widening the window (2026-11-17).
 
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).

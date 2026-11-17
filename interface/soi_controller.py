@@ -6325,10 +6325,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             total = sum(sum(self._dual_times(kind, v)) for v in values)
             if self._dual_adaptive(kind):
                 tmin = sum(sum(self._dual_times(kind, v, 'min')) for v in values)
-                lbl.setText(f'Tempo estimado: {self._fmt_time(tmin)} a {self._fmt_time(total)}')
+                self._eta_set(lbl, f'Tempo estimado: {self._fmt_time(tmin)}\u00a0a\u00a0{self._fmt_time(total)}')
                 lbl.setToolTip(f'{len(values)} pontos. τ adaptativo: do τ mínimo em todos os pontos ao τ inicial em todos.')
             else:
-                lbl.setText(f'Tempo estimado: {self._fmt_time(total)}')
+                self._eta_set(lbl, f'Tempo estimado: {self._fmt_time(total)}')
                 lbl.setToolTip(f'{len(values)} pontos')
 
     def _dual_set_long_tau(self, kind=None):
@@ -6566,7 +6566,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             extra=(('τ:', self.sp_dt_tau), ('Ponto a cada:', self.sp_dt_dt), ('Duração:', self.sp_dt_dur)),
             warm_pwm=lambda: self.sp_dt_pwm.value())
         btn.setText('▶ Iniciar')
-        eta.setText('')
+        self._eta_set(eta, '')
         self.btn_dt_start, self.lbl_dt_eta, self.bar_dt = btn, eta, bar
         box.setToolTip('O laser começa a modular na frequência e no PWM escolhidos ao clicar em Iniciar. Os primeiros 7τ\n'
                        '(assentamento dos lock-ins) são descartados; o tempo é contado desde o início (o aquecimento aparece).')
@@ -7926,7 +7926,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.on_power(self.sp_power.value())
         dur = sp_w.value()
         self.warm_state = {'btn': btn, 'start': start, 'until': time.perf_counter() + dur, 'eta': eta,
-                           'text': btn.text(), 'style': btn.styleSheet(), 'eta_text': eta.text(), 'dur': dur}
+                           'text': btn.text(), 'style': btn.styleSheet(), 'dur': dur, 'rest': dur}
         print(f'Warm-up: laser em PWM {pwm:g} % por {dur:g} s antes da varredura.')
         btn.setStyleSheet('background:#fff3cd;')
         for b in self.warm_w:
@@ -7944,7 +7944,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         rest = warm['until'] - time.perf_counter()
         if rest > 0:
             warm['btn'].setText(f'⏹ Warm-up {self._fmt_time(rest)}')
-            warm['eta'].setText(f"Warm-up: {self._fmt_time(warm['dur'] - rest)} de {self._fmt_time(warm['dur'])}")
+            warm['rest'] = rest
+            self._eta_render(warm['eta'])
             return
         start = warm['start']
         self._warm_stop()
@@ -7960,10 +7961,36 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.warm_timer = None
         warm['btn'].setText(warm['text'])
         warm['btn'].setStyleSheet(warm['style'])
-        warm['eta'].setText(warm['eta_text'])
         for b in self.warm_w:
             b.setEnabled(True)
         self.warm_state = None
+        self._eta_render(warm['eta'])
+
+    def _eta_set(self, lbl, base):
+        """Texto do tempo de um quadro de varredura parado: 'Tempo estimado: xx:xx' + '(+warm-up yy:yy)' quando
+        "Aguardar warm-up" está marcado (contando para baixo durante a espera). Um texto só, sem alternar."""
+        if not hasattr(self, 'eta_base'):
+            self.eta_base = {}
+        self.eta_base[lbl] = base
+        self._eta_render(lbl)
+
+    def _eta_render(self, lbl):
+        base = getattr(self, 'eta_base', {}).get(lbl)
+        if base is None:
+            return
+        warm = getattr(self, 'warm_state', None)
+        suffix = ''
+        if warm is not None and warm['eta'] is lbl:
+            suffix = f"+warm\u2011up\u00a0{self._fmt_time(warm['rest'])}"
+        elif warm is None:
+            for chk_w, sp_w, _, eta in getattr(self, 'warm_w', {}).values():
+                if eta is lbl and chk_w.isChecked():
+                    suffix = f'+warm\u2011up\u00a0{self._fmt_time(sp_w.value())}'
+                    break
+        if suffix:
+            lbl.setText(f'{base} ({suffix})' if base else suffix[0].upper() + suffix[1:])
+        else:
+            lbl.setText(base)
 
     def warming_up(self):
         return getattr(self, 'warm_state', None) is not None
@@ -7995,9 +8022,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         btn.clicked.connect(lambda _=False, b=btn, f=on_click: self._warm_click(b, f))
         row2.addWidget(btn)
         eta = QtWidgets.QLabel('Tempo estimado: --:--')
+        # O tempo fica no fim da linha (depois do warm-up): quando o texto muda, nada mais se move; com pouco
+        # espaço ele quebra a linha em vez de alargar a janela. O botão tem largura para "⏹ Warm-up 0:00:00".
+        eta.setWordWrap(True)
+        eta.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
         eta.setMinimumWidth(160)
-        eta.setStyleSheet('font-family:Consolas,monospace;')
-        row2.addWidget(eta)
+        btn.setMinimumWidth(max(110, btn.fontMetrics().horizontalAdvance('⏹ Warm-up 0:00:00') + 24))
         # Aguardar warm-up: laser ligado (no PWM da medida) por N s antes do 1º ponto (aquecimento da amostra/célula)
         chk_w = QtWidgets.QCheckBox('Aguardar warm-up')
         chk_w.setToolTip('Antes do 1º ponto, liga o laser (no PWM da medida) e espera o tempo indicado: depois que o laser\n'
@@ -8006,8 +8036,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         sp_w = self._dspin(10.0, 7200.0, WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
         sp_w.setVisible(False)
         chk_w.toggled.connect(sp_w.setVisible)
+        chk_w.toggled.connect(lambda _=False, e=eta: self._eta_render(e))
+        sp_w.valueChanged.connect(lambda _=0.0, e=eta: self._eta_render(e))
         row2.addWidget(chk_w)
         row2.addWidget(sp_w)
+        row2.addWidget(eta, 4)
         if not hasattr(self, 'warm_w'):
             self.warm_w = {}
         self.warm_w[btn] = (chk_w, sp_w, warm_pwm, eta)
@@ -8017,7 +8050,6 @@ class LockInWindow(QtWidgets.QMainWindow):
         bar.setFixedHeight(12)
         bar.setVisible(False)
         row2.addWidget(bar, 3)
-        row2.addStretch(1)
         lay.addLayout(row2)
         return box, btn, eta, bar
 
@@ -9428,10 +9460,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         for kind, lbl in self.eta_labels.items():
             total = sum(self._point_time(kind, v) for v in self._planned_values(kind, 'OPT'))
-            lbl.setText('Tempo estimado: ' + self._fmt_time(total))
+            self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
         for kind, lbl in getattr(self, 'eta_labels_aud', {}).items():
             total = sum(self._point_time(kind, v) for v in self._planned_values(kind, 'AUDIO'))
-            lbl.setText('Tempo estimado: ' + self._fmt_time(total))
+            self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
 
     def _sweep_remaining(self, now):
         elapsed = now - self.sweep_timer
