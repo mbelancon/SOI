@@ -71,6 +71,15 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - The **Fit ▸** button is gone: its box (model, target, thickness, range, mark peak) is now a column to the right of the **Signal vs f** box, active whenever a model is chosen.
 - **Signal vs PWM** gets its own **Fit** box: polynomial of degree 1, 2 or 3 (or none) on INMP441 × OPT101 (left plot), OPT101 × PWM (right plot) or both, with coefficients ± error, R² and the maximum deviation; written to the CSV header. Signal vs t has no fit box (its Results keep the start/end change and the exponential).
 
+#### Added: low-frequency mode of adaptive τ and warning below 40 Hz
+- **Why:** the drift campaign of 2026-11-16/17 showed that below ~40 Hz the room's acoustic noise (additive, slow) dominates; the fluctuation measured in a point underestimates the real error there and adaptive τ never converges.
+- New check box **only f > 40 Hz** next to **adaptive τ** (on by default): adaptive τ applies only above 40 Hz; below, τ is preset per band (8 s below 15 Hz, 4 s from 15 to 40 Hz; 7τ wait, 3τ average) and adaptive τ restarts from 1 s above 40 Hz. Recorded in the CSV header. Headless: `--adapt-tudo` turns it off.
+- Orange text **high SNR at f < 40 Hz** next to the range when the sweep goes below 40 Hz, and a warning (OK/Cancel) at the start of a frequency sweep or calibration with points below 40 Hz.
+
+#### Added: wait for warm-up before sweeps
+- **Why:** after the laser turns on, the photoacoustic signal drops ~14 % with a ~4.4 min time constant (10 Hz, campaign of 2026-11-16/17) while the sample and the cell warm up.
+- Every sweep box (OPT101, INMP441 and Dual Mode: frequency, PWM, Signal vs t) has **Wait for warm-up** with a time field (default 300 s): the laser goes on at the measurement PWM (the highest PWM in a PWM sweep) and the sweep starts after the wait; the button shows the countdown and cancels. Headless: `--aquecer S`.
+
 #### Changed: Dual Mode layout
 - **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).
 - The mounting diagram (Chamber/OPC) moved from the calibration box to the **Frequency sweep** box, The fluctuation of S and Δφ of the point being measured (updated every second) and of the last point, with the τ in use, appears in a status bar at the top of the Dual Mode tab, like the sensor tabs (green within Precision, yellow up to 2×, red above). **Measure A/B** opens the Sweep panel.

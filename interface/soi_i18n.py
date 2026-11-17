@@ -1731,6 +1731,16 @@ EN = {
     'Barras de erro (±1 DP): ': 'Error bars (±1 SD): ',
     ' = calibração, <b>cinza</b> = esta medida.': ' = calibration, <b>gray</b> = this measurement.',
     'verde': 'green',
+    # Baixa frequência (2.3.0)
+    'só f > 40 Hz': 'only f > 40 Hz',
+    'alto SNR em f < 40 Hz': 'high SNR at f < 40 Hz',
+    'Varredura abaixo de 40 Hz': 'Sweep below 40 Hz',
+    'Ligado (padrão): o τ adaptativo só vale acima de 40 Hz. Abaixo, o τ é pré-definido por faixa\n(8 s abaixo de 15 Hz, 4 s de 15 a 40 Hz; espera 7τ e média por 3τ), e acima de 40 Hz o\nadaptativo recomeça de 1 s. Motivo: abaixo de ~40 Hz o ruído é acústico, do\nambiente, lento; a flutuação medida no ponto subestima o erro e o τ adaptativo não converge.\nDesligado: τ adaptativo em todas as frequências.': 'On (default): adaptive τ only above 40 Hz. Below, τ is preset per band\n(8 s below 15 Hz, 4 s from 15 to 40 Hz; wait 7τ and average 3τ), and above 40 Hz the\nadaptive τ restarts from 1 s. Reason: below ~40 Hz the noise is acoustic, from the\nroom, and slow; the fluctuation measured in the point underestimates the error and adaptive τ does not converge.\nOff: adaptive τ at all frequencies.',
+    'Abaixo de 40 Hz o ruído acústico do ambiente é alto: cada ponto tem alguns % de\nincerteza (até ~10 % em 5–10 Hz com amostra de pouco sinal, como o alumínio). Use uma amostra\nque dê bastante sinal (ex.: inox) ou comece a varredura acima desse limite.': "Below 40 Hz the room's acoustic noise is high: each point has a few % of\nuncertainty (up to ~10 % at 5–10 Hz with a low-signal sample such as aluminium). Use a sample\nthat gives plenty of signal (e.g. stainless steel) or start the sweep above this limit.",
+    'Aguardar warm-up': 'Wait for warm-up',
+    'Warm-up cancelado pelo usuário.': 'Warm-up cancelled by the user.',
+    'Aguarde o fim do warm-up em andamento (ou cancele-o).': 'Wait for the current warm-up to finish (or cancel it).',
+    'Antes do 1º ponto, liga o laser (no PWM da medida) e espera o tempo indicado: depois que o laser\nliga, o sinal fotoacústico cai alguns % até a amostra e a célula aquecerem (campanha de 16-17/11:\n−14 % com constante de ~4,4 min a 10 Hz). Clicar no botão durante a espera cancela.': 'Before the first point, turns the laser on (at the measurement PWM) and waits for the given time: after the laser\nturns on, the photoacoustic signal drops a few % until the sample and the cell warm up (16-17 Nov campaign:\n−14 % with a ~4.4 min time constant at 10 Hz). Clicking the button while waiting cancels.',
     # Quadros de ajuste (2.3.0)
     'Ajuste': 'Fit',
     'Polinômio:': 'Polynomial:',

@@ -157,6 +157,24 @@ ADAPT_MAX_DRIFT_WAIT = 0  # médias extras (mesmo τ) enquanto S ou Δφ derivam
                           # o ponto por minutos em 6 Hz); a regra nova sai da campanha de Sinal x t
 
 
+# Baixa frequência (campanha de deriva 16-17/11): abaixo de ~40 Hz domina o ruído acústico do ambiente, lento e
+# aditivo; a flutuação medida na janela subestima o erro e o τ adaptativo não converge. Opção (padrão): τ adaptativo
+# só acima de LOWF_FMAX, τ fixo por faixa abaixo (f < limite -> τ); acima, o adaptativo recomeça de LOWF_TAU_ABOVE
+WARMUP_DEF_S = 300.0      # "Aguardar warm-up" das varreduras: espera padrão com o laser ligado (s)
+LOWF_FMAX = 40.0
+LOWF_TAU_BANDS = ((15.0, 8.0), (LOWF_FMAX, 4.0))
+LOWF_TAU_ABOVE = 1.0
+LOWF_WARN_COLOR = '#d97000'
+
+
+def lowf_band_tau(f):
+    """τ pré-definido da faixa de baixa frequência (None acima de LOWF_FMAX)."""
+    for fmax, tau in LOWF_TAU_BANDS:
+        if f < fmax:
+            return tau
+    return None
+
+
 def adapt_tau_min(f):
     """Menor τ permitido: ~3 períodos (rejeita o resíduo em 2f), pelo menos 100 ms."""
     return float(max(0.1, 3.0 / max(f, 1e-3)))
@@ -4386,7 +4404,8 @@ class LockInWindow(QtWidgets.QMainWindow):
 
         def build_box(kind, title, fields):
             box, btn, lbl, bar = self._make_sweep_box(
-                title, fields, lambda _=False, k=kind: self.toggle_sweep(k, 'OPT'))
+                title, fields, lambda _=False, k=kind: self.toggle_sweep(k, 'OPT'),
+                warm_pwm=(lambda: max(self.sp_p0.value(), self.sp_p1.value())) if kind == 'P' else None)
             btn.setToolTip('Requer o Modo Lock-In.')
             for _, sb in fields:
                 sb.valueChanged.connect(self.update_eta_idle)
@@ -4594,7 +4613,8 @@ class LockInWindow(QtWidgets.QMainWindow):
 
         def build_audio_sweep_box(kind, title, fields):
             box, btn, lbl, bar = self._make_sweep_box(
-                title, fields, lambda _=False, k=kind: self.toggle_sweep(k, 'AUDIO'))
+                title, fields, lambda _=False, k=kind: self.toggle_sweep(k, 'AUDIO'),
+                warm_pwm=(lambda: max(self.sp_aud_p0.value(), self.sp_aud_p1.value())) if kind == 'P' else None)
             for _, sb in fields:
                 sb.valueChanged.connect(self.update_eta_idle)
             self.btn_sweeps_aud[kind] = btn
@@ -4838,7 +4858,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             meas = ((('Medida:', self.dual_mode_w[kind]),) if kind == 'P' else ()) + (('τ:', self.dual_tau_w[kind]),)
             box, btn, eta, bar = self._make_sweep_box(
                 title, fields, lambda _=False, k=kind: self.toggle_dual_sweep(k),
-                extra=mid if mid else meas, more=((meas + tuple(adapt)),) if mid else ())
+                extra=mid if mid else meas, more=((meas + tuple(adapt)),) if mid else (),
+                warm_pwm=(lambda: max(self.sp_dual_p0.value(), self.sp_dual_p1.value())) if kind == 'P' else None)
             self.dual_bars[kind] = bar
             return box, btn, eta
 
@@ -4866,12 +4887,31 @@ class LockInWindow(QtWidgets.QMainWindow):
             'maior (até 2× o τ inicial). Cada ponto espera 7τ e faz a média por max(1 s, 3τ). Em alta frequência, com\n'
             'sinal limpo, o τ cai para ~0,1 s e o ponto leva ~2 s.\n'
             'Desligado: τ fixo do quadro, espera 9τ e média por 1τ (como antes).')
+        self.chk_dual_adapt40 = QtWidgets.QCheckBox(f'só f > {LOWF_FMAX:g} Hz')
+        self.chk_dual_adapt40.setChecked(True)
+        self.chk_dual_adapt40.setToolTip(
+            f'Ligado (padrão): o τ adaptativo só vale acima de {LOWF_FMAX:g} Hz. Abaixo, o τ é pré-definido por faixa\n'
+            f'(8 s abaixo de 15 Hz, 4 s de 15 a {LOWF_FMAX:g} Hz; espera 7τ e média por 3τ), e acima de {LOWF_FMAX:g} Hz o\n'
+            f'adaptativo recomeça de {LOWF_TAU_ABOVE:g} s. Motivo: abaixo de ~{LOWF_FMAX:g} Hz o ruído é acústico, do\n'
+            'ambiente, lento; a flutuação medida no ponto subestima o erro e o τ adaptativo não converge.\n'
+            'Desligado: τ adaptativo em todas as frequências.')
         self.sp_dual_adapt_tol = self._dspin(0.1, 20.0, ADAPT_TOL_DEF, 1, 0.5, None, 80, ' %')
         self.sp_dual_adapt_tol.setToolTip('Flutuação aceitável da saída em cada ponto: S em %, Δφ na mesma fração em radianos\n'
                                           '(2 % = 1,15°; padrão 2 %). Menor = τ maior e varredura mais lenta.')
-        adapt_row = (('', self.chk_dual_adapt), ('Precisão:', self.sp_dual_adapt_tol))
+        adapt_row = (('', self.chk_dual_adapt), ('', self.chk_dual_adapt40), ('Precisão:', self.sp_dual_adapt_tol))
+        # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
+        self.lbl_dual_lowf = {}
+        for k in ('F', 'M'):
+            lb = QtWidgets.QLabel(f'alto SNR em f < {LOWF_FMAX:g} Hz')
+            lb.setStyleSheet(f'color:{LOWF_WARN_COLOR};font-weight:bold;')
+            lb.setToolTip(f'Abaixo de {LOWF_FMAX:g} Hz o ruído acústico do ambiente é alto: cada ponto tem alguns % de\n'
+                          'incerteza (até ~10 % em 5–10 Hz com amostra de pouco sinal, como o alumínio). Use uma amostra\n'
+                          'que dê bastante sinal (ex.: inox) ou comece a varredura acima desse limite.')
+            lb.setVisible(False)
+            self.lbl_dual_lowf[k] = lb
         box_f, btn_f, eta_f = sweep_box('Sinal x f (Hz)',
-                                        (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1)), 'F',
+                                        (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1),
+                                         ('', self.lbl_dual_lowf['F'])), 'F',
                                         mid=(('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn)),
                                         adapt=adapt_row)
         # Varredura em frequência das medidas (painel "Varreduras"): parâmetros próprios, para não mexer nos da calibração
@@ -4882,13 +4922,17 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.sp_dual_m_fn = self._dspin(1.0, 5000.0, 30.0, 1, 1.0, None, 90)
         self.lbl_dual_m_fn = QtWidgets.QLabel('N pontos:')
         box_m, btn_m, eta_m = sweep_box('Varredura em frequência (normalizada pelo OPT101)',
-                                        (('Início:', self.sp_dual_m_f0), ('Fim:', self.sp_dual_m_f1)), 'M',
+                                        (('Início:', self.sp_dual_m_f0), ('Fim:', self.sp_dual_m_f1),
+                                         ('', self.lbl_dual_lowf['M'])), 'M',
                                         mid=(('Espaçamento:', self.cmb_dual_m_fspace), (self.lbl_dual_m_fn, self.sp_dual_m_fn)))
         self.dual_fw = {'F': (self.sp_dual_f0, self.sp_dual_f1, self.cmb_dual_fspace, self.sp_dual_fn, self.lbl_dual_fn),
                         'M': (self.sp_dual_m_f0, self.sp_dual_m_f1, self.cmb_dual_m_fspace, self.sp_dual_m_fn,
                               self.lbl_dual_m_fn)}
         for k in ('F', 'M'):
             self.dual_fw[k][2].currentIndexChanged.connect(lambda i, k=k: self._on_dual_fspace(i, k))
+            for w in self.dual_fw[k][:2]:
+                w.valueChanged.connect(lambda _=0, k=k: self._update_lowf_warn(k))
+            self._update_lowf_warn(k)
         self.dual_btns = {'P': btn_p, 'F': btn_f, 'M': btn_m}
         # Refinar ressonância: ajusta a ressonância na varredura atual e mede mais pontos em volta do f0 ajustado
         row_ref = QtWidgets.QHBoxLayout()
@@ -6190,6 +6234,43 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _dual_adaptive(self, kind):
         return kind in ('F', 'M') and self.chk_dual_adapt.isChecked()
 
+    def _lowf_fixed_tau(self, kind, f):
+        """τ pré-definido do ponto (adaptativo só acima de LOWF_FMAX); None = o ponto usa o τ adaptativo."""
+        if not (self._dual_adaptive(kind) and self.chk_dual_adapt40.isChecked()):
+            return None
+        return lowf_band_tau(f)
+
+    def _adapt_tau_at(self, kind, f):
+        """τ do ponto f numa varredura com τ adaptativo em andamento."""
+        fixed = self._lowf_fixed_tau(kind, f)
+        if fixed is not None:
+            return fixed
+        return max(adapt_tau_min(f), self.adapt_tau_cur or self.dual_tau_w[kind].value())
+
+    def _confirm_lowf(self, kind, values):
+        """Aviso no início de uma varredura em frequência que inclui pontos abaixo de LOWF_FMAX (ruído acústico)."""
+        low = [v for v in values if v < LOWF_FMAX] if kind in ('F', 'M') else []
+        if not low:
+            return True
+        fixed = self._lowf_fixed_tau(kind, min(low)) is not None
+        msg = (f'A varredura inclui {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g} a {max(low):g} Hz).\n\n'
+               'Nessa faixa o ruído acústico do ambiente (e o do próprio INMP441, especificado para f > 60 Hz) é alto:\n'
+               'a medida exige uma amostra de alto SNR (ex.: inox). Com pouco sinal (ex.: alumínio), cada ponto pode ter\n'
+               'incerteza de 5 a 10 %.\n\n'
+               + (f'τ pré-definido nessa faixa: 8 s abaixo de 15 Hz, 4 s de 15 a {LOWF_FMAX:g} Hz.\n\n' if fixed else '')
+               + 'Continuar?')
+        print(f'Aviso: varredura com {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g}–{max(low):g} Hz): '
+              'exige amostra de alto SNR.')
+        ans = QtWidgets.QMessageBox.warning(
+            self, f'Varredura abaixo de {LOWF_FMAX:g} Hz', msg,
+            QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Ok)
+        return ans == QtWidgets.QMessageBox.StandardButton.Ok
+
+    def _update_lowf_warn(self, kind):
+        sp0, sp1 = self.dual_fw[kind][:2]
+        self.lbl_dual_lowf[kind].setVisible(min(sp0.value(), sp1.value()) < LOWF_FMAX)
+
     def _apply_adapt_ui(self):
         """τ adaptativo: o τ do quadro vira o τ inicial; a Precisão só vale com ele ligado."""
         on = self.chk_dual_adapt.isChecked()
@@ -6197,6 +6278,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.dual_tau_w[k].setEnabled(not self.dual_active)
         self.sp_dual_adapt_tol.setEnabled(on and not self.dual_active)
         self.chk_dual_adapt.setEnabled(not self.dual_active)
+        self.chk_dual_adapt40.setEnabled(on and not self.dual_active)
         for k in ('F', 'M'):
             self.dual_tau_w[k].setToolTip(
                 'τ inicial da varredura (τ adaptativo ligado): o τ muda ao longo da varredura conforme a flutuação.\n'
@@ -6208,6 +6290,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         """(espera, medida) do ponto. O LP de 2 polos chega a ~1e-3 do degrau em 9τ. τ adaptativo: com o τ
         atual da varredura ('est', durante ela), o τ inicial ('max') ou o mínimo da frequência ('min')."""
         if self._dual_adaptive(kind):
+            fixed = self._lowf_fixed_tau(kind, value)
+            if fixed is not None:
+                return adapt_times(fixed)
             tau0 = self.dual_tau_w[kind].value()
             tmin = adapt_tau_min(value)
             if bound == 'est' and getattr(self, 'adapt_tau_cur', None):
@@ -6249,7 +6334,7 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _dual_set_long_tau(self, kind=None):
         kind = kind or self.dual_src
         if self._dual_adaptive(kind) and self.dual_active and getattr(self, 'adapt_tau_cur', None):
-            tau = max(adapt_tau_min(self.ref_freq), self.adapt_tau_cur)     # τ do ponto atual
+            tau = self._adapt_tau_at(kind, self.ref_freq)                    # τ do ponto atual
         else:
             tau = self.dual_tau_w[kind].value()
         self.sp_tau.setValue(tau)
@@ -6478,7 +6563,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         box, btn, eta, bar = self._make_sweep_box(
             'Sinal x t (s)', (('Frequência:', self.sp_dt_f), ('PWM:', self.sp_dt_pwm)),
             lambda _=False: self.toggle_dual_time(),
-            extra=(('τ:', self.sp_dt_tau), ('Ponto a cada:', self.sp_dt_dt), ('Duração:', self.sp_dt_dur)))
+            extra=(('τ:', self.sp_dt_tau), ('Ponto a cada:', self.sp_dt_dt), ('Duração:', self.sp_dt_dur)),
+            warm_pwm=lambda: self.sp_dt_pwm.value())
         btn.setText('▶ Iniciar')
         eta.setText('')
         self.btn_dt_start, self.lbl_dt_eta, self.bar_dt = btn, eta, bar
@@ -6746,6 +6832,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         if kind == 'F' and self.btn_dual_sweeps_panel.isChecked() and not self._check_cal_conditions():
             return
+        if not refine and not self._confirm_lowf(kind, values):
+            return
         if not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
             self.chk_audio_lockin.setChecked(True)     # o lock-in do INMP441 precisa estar rodando
         self.dual_restore = self._excitation_snapshot() if kind != 'P' else None
@@ -6790,6 +6878,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.adapt_tau_max = 2.0 * self.adapt_tau_cur
             if not refine:
                 self.dual_params['adapt'] = (self.sp_dual_adapt_tol.value(), self.adapt_tau_cur)
+                self.dual_params['adapt40'] = self.chk_dual_adapt40.isChecked()
         elif not refine:
             self.dual_params.pop('adapt', None)
         self.dual_active = True
@@ -6884,7 +6973,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_etas[self.dual_src].setText(f'Restante: {self._fmt_time(rest)}')
         head = f'[{self.dual_idx + 1}/{n}] ' + (f'PWM {v:.1f} %' if self.dual_kind == 'P' else f'{v:g} Hz')
         if self.dual_state == 'SETTLING':
-            tau_txt = (f' | τ = {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}'
+            tau_txt = (f' | τ = {self._fmt_tau(self._adapt_tau_at(self.dual_src, v))}'
                        if self._dual_adaptive(self.dual_src) and self.adapt_tau_cur else '')
             self._dual_bar(f'{head}{tau_txt} | estabilizando os lock-ins ({elapsed:.1f}/{self.dual_settle:.1f} s)')
             if elapsed >= self.dual_settle:
@@ -6895,7 +6984,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self.dual_aud = []
             return
         adaptive = self._dual_adaptive(self.dual_src)
-        tau_txt = (f' | τ = {self._fmt_tau(max(adapt_tau_min(v), self.adapt_tau_cur))}' if adaptive and
+        tau_txt = (f' | τ = {self._fmt_tau(self._adapt_tau_at(self.dual_src, v))}' if adaptive and
                    self.adapt_tau_cur else '')
         self._dual_bar(f'{head}{tau_txt} | medindo ({elapsed:.1f}/{self.dual_measure:.1f} s)')
         if now >= getattr(self, 'fluct_next', 0.0):
@@ -6995,7 +7084,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         tol = self.sp_dual_adapt_tol.value()
         color = '#006400' if q <= 1.0 else ('#b05000' if q <= ADAPT_Q_REDO else '#d00000')
         if self._dual_adaptive(self.dual_src) and self.adapt_tau_cur:
-            tau = (self.adapt_taus[-1] if final and self.adapt_taus else max(adapt_tau_min(f), self.adapt_tau_cur))
+            tau = (self.adapt_taus[-1] if final and self.adapt_taus else self._adapt_tau_at(self.dual_src, f))
         else:
             tau = self.sp_audio_tau.value()
         txt = f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span>".replace('.', ',')
@@ -7061,6 +7150,16 @@ class LockInWindow(QtWidgets.QMainWindow):
         p_a = np.concatenate([c[1] for c in aud])
         q, s_s, s_p = self._adapt_fluct(r_o, p_o, r_a, p_a)
         parts = self.fluct_parts
+        fixed = self._lowf_fixed_tau(self.dual_src, f)
+        if fixed is not None:
+            # τ pré-definido da faixa: sem refazer nem adaptar; acima de LOWF_FMAX o adaptativo recomeça de
+            # LOWF_TAU_ABOVE, sem o histórico da baixa frequência
+            self.adapt_taus.append(fixed)
+            self.adapt_q_hist = []
+            self.adapt_tau_cur = min(self.adapt_tau_max, LOWF_TAU_ABOVE)
+            fl = f'flutuação S {s_s:.2g} %, Δφ {s_p:.2g}°'.replace('.', ',')
+            self.adapt_info = f' | último ponto: τ = {self._fmt_tau(fixed)} (faixa < {LOWF_FMAX:g} Hz), {fl}'
+            return False
         tau = max(adapt_tau_min(f), self.adapt_tau_cur)
         fl = f'flutuação S {s_s:.2g} %, Δφ {s_p:.2g}°'.replace('.', ',')
         # Deriva lenta (S ou Δφ mudando entre as metades da média mais que a Precisão e mais que o ruído): os
@@ -7682,8 +7781,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         if q.get('adapt'):
             taus = getattr(self, 'adapt_taus', [])
             rng = (f"; tau usado de {min(taus):.3g} a {max(taus):.3g} s" if taus else '')
+            low = (f"; abaixo de {LOWF_FMAX:g} Hz tau fixo por faixa: "
+                   + ', '.join(f'{t:g} s < {fm:g} Hz' for fm, t in LOWF_TAU_BANDS) if q.get('adapt40') else '')
             tau = (f"tau adaptativo (precisão {q['adapt'][0]:g} %, tau inicial {q['adapt'][1]:g} s{rng}; "
-                   f"espera 7tau, média por max(1 s, 3tau))")
+                   f"espera 7tau, média por max(1 s, 3tau){low})")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
@@ -7799,7 +7900,75 @@ class LockInWindow(QtWidgets.QMainWindow):
         sb.setValue(v)
         sb.blockSignals(False)
 
-    def _make_sweep_box(self, title, fields, on_click, extra=(), more=()):
+    def _warm_click(self, btn, start):
+        """Botão de um quadro de varredura: com "Aguardar warm-up" marcado, o 1º clique liga o laser e espera; o
+        clique durante a espera cancela; no fim da espera a varredura começa (start). Sem a opção, start direto."""
+        warm = getattr(self, 'warm_state', None)
+        if warm is not None:
+            if warm['btn'] is btn:
+                self._warm_stop()
+                self.flash('Warm-up cancelado pelo usuário.')
+            else:
+                self.flash('Aguarde o fim do warm-up em andamento (ou cancele-o).')
+            return
+        chk_w, sp_w, warm_pwm, eta = self.warm_w.get(btn, (None, None, None, None))
+        busy = getattr(self, 'dual_active', False) or getattr(self, 'sweep_active', False)
+        if chk_w is None or not chk_w.isChecked() or busy or not btn.text().startswith('▶'):
+            start()
+            return
+        if self.average_mode:
+            self.flash('As varreduras precisam do Modo Lock-In.')
+            return
+        pwm = warm_pwm() if warm_pwm else self.sp_power.value()
+        if pwm <= 0:
+            pwm = 100.0
+        self.sp_power.setValue(pwm)
+        self.on_power(self.sp_power.value())
+        dur = sp_w.value()
+        self.warm_state = {'btn': btn, 'start': start, 'until': time.perf_counter() + dur, 'eta': eta,
+                           'text': btn.text(), 'style': btn.styleSheet(), 'eta_text': eta.text(), 'dur': dur}
+        print(f'Warm-up: laser em PWM {pwm:g} % por {dur:g} s antes da varredura.')
+        btn.setStyleSheet('background:#fff3cd;')
+        for b in self.warm_w:
+            if b is not btn:
+                b.setEnabled(False)
+        self.warm_timer = QtCore.QTimer(self)
+        self.warm_timer.timeout.connect(self._warm_tick)
+        self.warm_timer.start(500)
+        self._warm_tick()
+
+    def _warm_tick(self):
+        warm = getattr(self, 'warm_state', None)
+        if warm is None:
+            return
+        rest = warm['until'] - time.perf_counter()
+        if rest > 0:
+            warm['btn'].setText(f'⏹ Warm-up {self._fmt_time(rest)}')
+            warm['eta'].setText(f"Warm-up: {self._fmt_time(warm['dur'] - rest)} de {self._fmt_time(warm['dur'])}")
+            return
+        start = warm['start']
+        self._warm_stop()
+        print('Warm-up concluído: começando a varredura.')
+        start()
+
+    def _warm_stop(self):
+        warm = getattr(self, 'warm_state', None)
+        if warm is None:
+            return
+        if getattr(self, 'warm_timer', None) is not None:
+            self.warm_timer.stop()
+            self.warm_timer = None
+        warm['btn'].setText(warm['text'])
+        warm['btn'].setStyleSheet(warm['style'])
+        warm['eta'].setText(warm['eta_text'])
+        for b in self.warm_w:
+            b.setEnabled(True)
+        self.warm_state = None
+
+    def warming_up(self):
+        return getattr(self, 'warm_state', None) is not None
+
+    def _make_sweep_box(self, title, fields, on_click, extra=(), more=(), warm_pwm=None):
         '''Quadro de varredura padrão (mesmo em todas as abas): campos na 1ª linha (e os de 'extra'
         numa linha própria); botão, tempo e barra de progresso na última. Retorna (quadro, botão,
         rótulo do tempo, barra).'''
@@ -7823,12 +7992,25 @@ class LockInWindow(QtWidgets.QMainWindow):
         btn = QtWidgets.QPushButton('▶ Varredura')
         btn.setStyleSheet('background:#cfe2ff;')
         btn.setMinimumWidth(110)
-        btn.clicked.connect(on_click)
+        btn.clicked.connect(lambda _=False, b=btn, f=on_click: self._warm_click(b, f))
         row2.addWidget(btn)
         eta = QtWidgets.QLabel('Tempo estimado: --:--')
         eta.setMinimumWidth(160)
         eta.setStyleSheet('font-family:Consolas,monospace;')
         row2.addWidget(eta)
+        # Aguardar warm-up: laser ligado (no PWM da medida) por N s antes do 1º ponto (aquecimento da amostra/célula)
+        chk_w = QtWidgets.QCheckBox('Aguardar warm-up')
+        chk_w.setToolTip('Antes do 1º ponto, liga o laser (no PWM da medida) e espera o tempo indicado: depois que o laser\n'
+                         'liga, o sinal fotoacústico cai alguns % até a amostra e a célula aquecerem (campanha de 16-17/11:\n'
+                         '−14 % com constante de ~4,4 min a 10 Hz). Clicar no botão durante a espera cancela.')
+        sp_w = self._dspin(10.0, 7200.0, WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
+        sp_w.setVisible(False)
+        chk_w.toggled.connect(sp_w.setVisible)
+        row2.addWidget(chk_w)
+        row2.addWidget(sp_w)
+        if not hasattr(self, 'warm_w'):
+            self.warm_w = {}
+        self.warm_w[btn] = (chk_w, sp_w, warm_pwm, eta)
         bar = QtWidgets.QProgressBar()
         bar.setRange(0, 1000)
         bar.setTextVisible(False)
@@ -10572,7 +10754,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt')
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_dual_p_deg', 'cmb_dual_p_target',
@@ -10751,6 +10933,10 @@ def _headless_args(argv):
     ap.add_argument('--tau', type=float, default=None, help='τ inicial em s (τ adaptativo) ou τ fixo (padrão: o da interface)')
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
     ap.add_argument('--tau-fixo', action='store_true', help='desliga o τ adaptativo (espera 9τ, média 1τ)')
+    ap.add_argument('--aquecer', type=float, default=0.0, metavar='S',
+                    help='warm-up: espera S segundos com o laser ligado (no PWM escolhido) antes de começar')
+    ap.add_argument('--adapt-tudo', action='store_true',
+                    help=f'τ adaptativo também abaixo de {LOWF_FMAX:g} Hz (padrão: τ fixo por faixa abaixo)')
     ap.add_argument('--pwm', type=float, default=100.0, help='PWM do laser em %% (padrão 100)')
     ap.add_argument('--celula', choices=('Camara', 'OPC'), default=None, help='montagem (padrão: a da interface)')
     ap.add_argument('--cal', default=None, help='arquivo CAL_*.csv da pasta Medidas aplicado no gráfico, ou "nenhuma"')
@@ -10905,11 +11091,19 @@ def run_headless(argv):
     if a.n is not None:
         spn.setValue(a.n)
     win.chk_dual_adapt.setChecked(not a.tau_fixo)
+    win.chk_dual_adapt40.setChecked(not a.adapt_tudo)
     win._apply_adapt_ui()
     if a.tau is not None:
         win.dual_tau_w['F'].setValue(a.tau)
     if a.precisao is not None:
         win.sp_dual_adapt_tol.setValue(a.precisao)
+    if a.aquecer > 0:
+        if a.sinal_t:                              # aquece no PWM e na frequência da medida
+            win._set_spin(win.sp_freq, a.f)
+            win.apply_frequency(a.f)
+        print(f'Warm-up: laser em PWM {win.sp_power.value():g} % por {a.aquecer:g} s...', flush=True)
+        pump(a.aquecer)
+        print('Warm-up concluído.', flush=True)
     if a.sinal_t:
         return _headless_time(win, a, pump)
     win.btn_dual_sweeps_panel.setChecked(False)    # sem o aviso de calibração (janela modal)
@@ -10919,7 +11113,8 @@ def run_headless(argv):
     adapt = win.chk_dual_adapt.isChecked()
     cal = (win.cmb_mic_cal.currentText() if win.cmb_mic_cal.count() else '—')
     print(f'Varredura: {vals[0]:g} a {vals[-1]:g} Hz, {len(vals)} pontos; PWM {win.sp_power.value():g} %; '
-          + (f'τ adaptativo (τ inicial {win.dual_tau_w["F"].value():g} s, precisão {win.sp_dual_adapt_tol.value():g} %)'
+          + (f'τ adaptativo (τ inicial {win.dual_tau_w["F"].value():g} s, precisão {win.sp_dual_adapt_tol.value():g} %'
+             + (f'; τ fixo por faixa abaixo de {LOWF_FMAX:g} Hz' if win.chk_dual_adapt40.isChecked() else '') + ')'
              if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s')
           + f'; amostra "{win.ed_sample.text()}"; célula {win.cmb_cell.currentData()}; calibração: '
           + (cal if win.chk_mic_cal.isChecked() else f'{cal} (não aplicada)')

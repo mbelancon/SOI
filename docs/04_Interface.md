@@ -168,6 +168,10 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 - **Per point in the CSV** (all automatic sweeps): `Tau_s`, `Tempo_ponto_s` (wait + average, with redos), `Refeito` (redos), `Flutuacao_S_Pct`, `Flutuacao_Fase_Graus`; the header has `# Inicio = …; Fim = …; Duracao = … s`.
 - **Measure A/B** of the calibration uses it too (the calibration preset sets the initial τ to 4 s with adaptive τ on, 2 s with it off). With adaptive τ off the sweep works as before (fixed τ, 9τ wait, 1τ average). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
 
+**Low frequency (only f > 40 Hz, on by default).** Below ~40 Hz the room's acoustic noise dominates (it does not depend on the laser), and the fluctuation measured within a point underestimates the real error (drift campaign, 2026-11-16/17: sweeps at 1/2/4 % Precision agreed within ~2 % above 40 Hz but differed by 5–11 % below). With the box on, adaptive τ applies only above 40 Hz; below, τ is preset per band (8 s below 15 Hz, 4 s from 15 to 40 Hz; 7τ wait and 3τ average), and above 40 Hz adaptive τ restarts from 1 s. When the range goes below 40 Hz an orange **high SNR at f < 40 Hz** appears next to it, and starting the sweep shows a warning: use a sample with a strong signal (e.g. stainless steel). Headless: `--adapt-tudo` uses adaptive τ at all frequencies.
+
+**Wait for warm-up** (every sweep box: OPT101, INMP441, Dual Mode frequency/PWM/Signal vs t). When checked, a time field appears (default 300 s): clicking the button turns the laser on at the measurement PWM (the highest PWM of a PWM sweep) and waits; the button shows the countdown and a second click cancels. After the laser turns on the photoacoustic signal drops ~14 % with a ~4.4 min time constant at 10 Hz. Headless: `--aquecer S`.
+
 **Measurement** for the matched PWM sweep:
 - *Time average (current τ)*: uses the current filters. Waits 9τ of the slower lock-in and averages over 4τ.
 - *Long integration (sweep τ)*: temporarily applies the chosen τ to both low-pass filters (restored at the end). Waits 9τ and averages over 1τ. Less noise per point, but the sweep takes longer.
