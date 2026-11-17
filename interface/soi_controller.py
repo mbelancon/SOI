@@ -5446,7 +5446,22 @@ class LockInWindow(QtWidgets.QMainWindow):
                                          '(±1 dB ≈ ±12 %). A calibração procura o maior trecho de frequências dentro dela.')
         arow.insertWidget(arow.count() - 1, self.lbl_flat_tol)      # tolerância da faixa plana: no Avançado
         arow.insertWidget(arow.count() - 1, self.sp_dual_flat_tol)
-        frow.addWidget(self.btn_dual_adv)
+        # "Avançado" saiu da tela (17/11): a linha do τ do sensor só aparece se houver um τ salvo (≠ 0)
+        self.btn_dual_adv.setVisible(False)
+        self.chk_dual_cal_err = QtWidgets.QCheckBox('Mostrar barra de erro da calibração')
+        self.chk_dual_cal_err.setChecked(False)
+        self.chk_dual_cal_err.setToolTip('Barras verdes (±1 DP da calibração aplicada) atrás das barras cinza da medida.')
+        self.chk_dual_cal_err.toggled.connect(lambda _: self._show_dual_results())
+        frow.addWidget(self.chk_dual_cal_err)
+        self.chk_dual_out_red = QtWidgets.QCheckBox('Região não calibrada em vermelho')
+        self.chk_dual_out_red.setChecked(False)
+        self.chk_dual_out_red.setToolTip('Fundo avermelhado nos gráficos de S e Δφ fora da faixa da calibração aplicada, e os\n'
+                                         'pontos dessa região em vermelho. Desligado: os pontos aparecem vazados, na cor normal.\n'
+                                         'Nos dois casos eles usam a correção da borda e ficam fora dos ajustes.')
+        self.chk_dual_out_red.toggled.connect(lambda _: (self._dual_cal_regions(self._applied_cal()
+                                                                                if self.dual_kind == 'F' else None),
+                                                         self._show_dual_results()))
+        frow.addWidget(self.chk_dual_out_red)
         frow.addStretch(1)
         self.lbl_cal_verify = QtWidgets.QLabel('')
         self.lbl_cal_verify.setTextFormat(QtCore.Qt.TextFormat.RichText)
@@ -7346,6 +7361,8 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _dual_cal_regions(self, cal):
         """Fundo avermelhado nos gráficos de S e Δφ fora da faixa da calibração aplicada (eixo x em log10)."""
+        if not (getattr(self, 'chk_dual_out_red', None) is not None and self.chk_dual_out_red.isChecked()):
+            cal = None
         for k, (pw, rg) in enumerate(self.rg_dual_out):
             if cal is None:
                 rg.setVisible(False)
@@ -7568,8 +7585,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 ok &= inside
                 cal_txt = (f'<b>Calibração INMP441:</b> {os.path.basename(c["path"])}'
                            + (f' <span style="color:{DUAL_OUT_CAL_COLOR};">({int(out_cal.sum())} ponto(s) fora da '
-                              f'faixa calibrada {c["f"][0]:g}–{c["f"][-1]:g} Hz: fundo avermelhado, pontos vazados, '
-                              'corrigidos pelo valor da borda e fora dos ajustes)</span>' if out_cal.any() else ''))
+                              f'faixa calibrada {c["f"][0]:g}–{c["f"][-1]:g} Hz: '
+                              + ('fundo avermelhado, ' if self.chk_dual_out_red.isChecked() else '')
+                              + 'pontos vazados, corrigidos pelo valor da borda e fora dos ajustes)</span>'
+                              if out_cal.any() else ''))
                 if c.get('agree') is not None and c['agree'].any():
                     fa_lo, fa_hi = float(c['f'][c['agree']].min()), float(c['f'][c['agree']].max())
                     out = ok & ((x < fa_lo * 0.999) | (x > fa_hi * 1.001))
@@ -7606,6 +7625,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'confira com uma segunda referência ("Verificar com esta medida", no painel Calibração).</span>')
         self.lbl_dual_cal.setText(cal_txt)
         self._dual_cal_regions(self.dual_cal)
+        red = self.chk_dual_out_red.isChecked()
+        self.c_dual_a_out.setSymbolPen(pg.mkPen(DUAL_OUT_CAL_COLOR if red else 'royalblue', width=1.5))
+        self.c_dual_b_out.setSymbolPen(pg.mkPen(DUAL_OUT_CAL_COLOR if red else 'firebrick', width=1.5))
         self.c_dual_a_out.setData(x[out_cal], s[out_cal])
         self.c_dual_b_out.setData(x[out_cal], dphi[out_cal])
         snr_ok = ra / np.maximum(ra_e, 1e-30) >= 10.0 ** (self.audio_snr_alert / 20.0)
@@ -7614,9 +7636,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_cal_verify.setEnabled(self.dual_corr is not None and not self.dual_active)
         self._set_dual_points(x[ok], s[ok], np.flatnonzero(ok), keep[ok])
         self.c_dual_b.setData(x[ok] if self.dual_cal else x, dphi[ok] if self.dual_cal else dphi)
-        self._set_dual_f_errors(x, s, s_rel, dphi, dphi_e, ok, cal_rel, cal_ph_e)
+        show_ce = self.chk_dual_cal_err.isChecked()
+        self._set_dual_f_errors(x, s, s_rel, dphi, dphi_e, ok, cal_rel if show_ce else None,
+                                cal_ph_e if show_ce else None)
         self.dual_cal_err = (cal_rel, cal_ph_e) if self.dual_cal is not None else None
-        if self.dual_cal is not None and (cal_rel is not None or cal_ph_e is not None):
+        if self.dual_cal is not None and show_ce and (cal_rel is not None or cal_ph_e is not None):
             cal_txt += ('<br><span style="color:#606060;">Barras de erro (±1 DP): <span style="color:#2ca02c;">'
                         '<b>verde</b></span> = calibração, <b>cinza</b> = esta medida.</span>')
             self.lbl_dual_cal.setText(cal_txt)
@@ -11109,7 +11133,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40', 'chk_dual_blocks')
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40', 'chk_dual_blocks',
+                  'chk_dual_cal_err', 'chk_dual_out_red')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_dual_p_deg', 'cmb_dual_p_target',
@@ -11158,6 +11183,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                 v = num(name)
                 if v is not None:
                     getattr(self, name).setValue(v)
+            # Sem o botão Avançado: um τ do sensor salvo (≠ 0) deixa a linha à vista, para não corrigir escondido
+            if self.sp_dual_tau_sensor.value() > 0:
+                self.btn_dual_adv.setChecked(True)
             # A varredura da calibração sempre abre com os parâmetros recomendados (τ ligado ao do INMP441)
             tau0 = ADAPT_TAU0_DEF if self.chk_dual_adapt.isChecked() else CAL_SWEEP_TAU
             self._set_spin(self.sp_dual_tau_f, tau0)

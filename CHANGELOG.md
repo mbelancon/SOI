@@ -98,6 +98,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - With the calibration not applied ("Use" unchecked, or signal not normalized by the OPT101) the Fit box shows an orange warning that the models only make sense with the calibrated signal; fits are still allowed (2026-11-17).
 - The Frequency sweep and Fit boxes have the same height, and the warning wraps inside the Fit box (2026-11-17).
 
+#### Changed: calibration display options
+- The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
+
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
 - Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).
