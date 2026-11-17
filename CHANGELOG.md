@@ -10,6 +10,161 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-17
+
+Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
+
+#### Added: calibration and examples documentation
+- `docs/07_Calibration.md` (two-sample calibration) and `docs/08_Measurement_Examples.md` (measurements of 2026-11-17: metals, Ni with a dark film, carbon black, SNR vs point error), with the raw CSVs and `make_figures.py` in `examples/2026-11-17/`. `docs/04_Interface.md` updated for 2.3.0 (τ / τ max, Allow averages, SNR readout, PWM buttons, warnings, manual zoom); the old single-reference calibration text was replaced by a summary.
+
+#### Fixed: informative results after removing the floating box
+- Diagnostics, the Signal vs t summary, the PWM fit, the applied calibration and the excluded points were left without a place when the floating Results box was removed; they now appear in a blue "ℹ Results" label (text in the tooltip) next to the warnings label.
+
+#### Changed: project context files
+- `CLAUDE.md` (working rules) and `CONTEXTO.md` (current state, in Portuguese) replace `CONTEXT_SOI.md`.
+- Version rule: firmware and interface are versioned independently; the firmware number changes only when the firmware changes (same MAJOR = same USB protocol). README updated.
+
+### Interface (`interface/soi_controller.py`)
+
+#### Added: optical modulation (chopper)
+- **Why:** to measure with a light source that SOI does not modulate (LED or laser in continuous mode with a mechanical chopper or a fan), without a reference output from the chopper.
+- **Trigger choice** in the new **⚙ Settings** window: **Electronic** (STM32 PWM) or **Optical** (chopper). Applies to the three tabs. In optical mode PWM is hidden and its place shows the detected frequency.
+- **Reference from the OPT101:** the frequency is the largest peak of the OPT101 FFT in a search range (OPT101 tab, default 20–5000 Hz); a second-order PLL on the OPT101 signal (bandwidth f/50, 0.5–10 Hz, updated in blocks of a whole number of periods) gives the reference phase of both lock-ins. Errors of the reference cancel in S and Δφ. The detected frequency and the lock state appear on the excitation bar (deviation and phase wander in the tooltip) and in the OPT101 status; the scope's green trace becomes the PLL reference.
+- **Microphone alignment without new firmware:** in optical mode the interface sends `P0` + `F1`; the 1 Hz "beacon" on the reference bit and the I2S marker give the offset between the optical and the audio streams (exact rate ratio, same crystal), with < 1 µs error. The serial reader now numbers the optical words and records where each marker arrives in the optical stream. The beacon is resent if the alignment is missing.
+- **Same phase convention as electronic modulation** (Δφ, calibrations and fits valid in both modes): checked in simulation and with emulated firmware packets, Δφ within 0.3° of the electronic-mode value up to 1.5 kHz.
+- **Dual Mode, manual frequency sweep:** points recorded automatically when the frequency is stable and far enough from the last point (or with **Record point**); 9τ wait and 1τ average; point discarded if the frequency moves or the PLL unlocks. CSV `DUPLO_freq_…_optica_…` with `# Modulacao = optica` and the column `Frequencia_DP_Hz`. **Measure A/B** of the two-sample calibration uses the manual sweep.
+- **Simulation:** simulated fan (drift, uneven blades, trapezoidal light) and beacon; Freq is the knob of the simulated chopper.
+- OPT101 and INMP441 sweeps and **Refine resonance** are disabled in optical mode.
+
+#### Added: adaptive τ in the Dual Mode frequency sweeps
+- **Why:** in the sweeps of 2026-11-16 (Al, stainless steel, brass, Ni, Ni film; τ = 2 s) the scatter between neighbouring points below 40 Hz was 5–35 %, much larger than the scatter inside each point (1–8 %): the low-frequency acoustic noise is slow and needs a longer τ. Above 400 Hz the signal was clean (0.04–0.4 %) and the 18 s wait was wasted.
+- **How:** **adaptive τ** option (on by default) next to τ, which becomes the initial τ (default 4 s). After each point the fluctuation of S and Δφ during the measurement (standard deviation or first/second-half drift; OPT101 interpolated at the INMP441 instants, so laser power cancels) sets the τ of the next point (fluctuation at 70 % of **Precision**, default 2 % / 1.15°; at most 3× change per point; minimum ~3 periods, 100 ms). Above 2× Precision the point is measured again with a larger τ (up to 2× the initial τ). Each point: 7τ wait, max(1 s, 3τ) average. The header records the initial τ and the range used.
+- Off: the previous behaviour. Same phases as the fixed mode in simulation (within 0.02°); an 8-point sweep 10 Hz–2 kHz with a clean simulated signal took 84 s from τ = 4 s (fixed τ = 2 s: 2.7 min).
+
+#### Added: timing and fluctuation per point in the Dual Mode CSV
+- Automatic sweeps (frequency and matched PWM, adaptive τ on or off) write new columns `Tau_s` (lock-in τ of the point), `Tempo_ponto_s` (wait + average, including redos), `Refeito` (times adaptive τ measured the point again), `Flutuacao_S_Pct` and `Flutuacao_Fase_Graus` (fluctuation of S and Δφ during the average, as used by adaptive τ), plus a header line `# Inicio = …; Fim = …; Duracao = … s`. **Open sweep…** reads them back, so **Save again** keeps them; older files still open.
+
+#### Added: headless sweep (command line)
+- `python soi_controller.py --varredura [--amostra NOME] [--fmin HZ] [--fmax HZ] [--n PONTOS] [--tau S] [--precisao %] [--tau-fixo] [--pwm %] [--celula Camara|OPC] [--cal ARQUIVO|nenhuma] [--porta COMx] [--simulado]` runs a Dual Mode frequency sweep without a window (same code as the interface, Qt offscreen): electronic modulation, **PWM 100 %** by default, adaptive τ unless `--tau-fixo`; options left out take the interface's saved values. It prints one line per point (S, Δφ, τ, time, redos, fluctuation) and the CSV path, and saves CSV + PNG in `Medidas` with the usual name. It does not change the interface preferences.
+- Before starting it checks the serial port and stops with a clear message if the port is busy (interface or serial monitor open) or the board is not found. Exit codes: 0 saved, 2 no board, 3 port busy, 4 no connection, 5 calibration not found, 6/7 sweep not started/not saved, 130 Ctrl+C.
+- `varredura.bat` (next to `rodar_interface.bat`) passes its arguments to it.
+
+#### Changed: logarithmic frequency axes
+- Decades are labelled 10ˣ and the ticks between them only with the digit (2 … 9) instead of 2·10ˣ, which overlapped on wide ranges. With less than one decade in view the full value is shown (200, 300 …); when ticks get too close only 2, 3, 5 (or 2, 5, or only decades) are labelled. Applies to every log x axis (tabs, Dual Mode, saved PNG); y axes unchanged.
+
+#### Added: log file and launch without terminal
+- Everything that went to the terminal (messages, warnings, errors with traceback, Qt messages) also goes to `interface/logs/soi.log`, with date and time on each line. When it passes 2 MB it is rotated at start-up (keeps `soi.log.1` … `.3`). Uncaught errors in Qt slots and threads are logged instead of closing the program.
+- `rodar_interface.bat` opens the interface with `pythonw` (no terminal window); `rodar_interface.bat terminal` opens it with the terminal, `rodar_interface.bat instalar` installs the dependencies. `varredura.bat` (headless sweep) stays in the console.
+
+#### Added: calibration and measurement error bars
+- With a microphone calibration applied, the frequency sweep plots show two error bars per point (±1 SD): **green**, wide, behind = calibration (its `Sensibilidade_Rel_DP` and `Fase_DP` interpolated at the frequency); **gray** = this measurement. The Results box says which is which. The CSV (when a calibration is applied) gets `Cal_S_DP_Pct` and `Cal_Fase_DP_Graus` (nan outside the calibration range).
+- Log axes: the 9 label is dropped when it would touch 10ˣ (then 2 … 8; 2, 3, 5; or 2, 5 as space shrinks).
+
+#### Fixed
+- Error bars kept options from the previous plot (`ErrorBarItem.setData` accumulates them): opening a sweep after a frequency sweep raised an error and the PWM sweep could show bars of the wrong size.
+
+#### Changed: adaptive τ rule and default Precision (2 %)
+- **Default Precision 2 %** (S; 1.15° in Δφ), was 1 %. Sweeps of 2026-11-16 (Al, closed cell, τ from 4 s): the real scatter between neighbouring points was 2 % below 40 Hz and 0.6 % at 40–400 Hz, of the same order as the per-point fluctuation, and the microphone calibration itself is uncertain by several % / degrees at low frequency; with white noise, halving the precision cuts τ by 4×. Existing installations switch to 2 % once at start-up (setting `adapt_tol_2pct`).
+- The next τ uses the **median of the last 3 points** (scaled to the current τ) instead of only the last point, and rises at most 2× per point (was 3×): one noisy point no longer pushes the following points to the τ ceiling.
+
+#### Added: slow drift handling in adaptive τ
+- At low frequency the amplitude can keep drifting after the lock-ins settle (sample/cell warming up, pressure equalising); a larger τ does not fix that. The fluctuation is now split into a **random** part (SD, falls with τ) and a **drift** part (difference between the halves of the average). When drift dominates and exceeds Precision, the point is averaged again with the same τ and no new wait, up to 4 times, until it stops (status: *drift S … (OPT101 …, microphone …): redoing the average…*, also in the log). τ follows only the random part.
+- New CSV columns `Deriva_S_Pct`, `Deriva_Fase_Graus`, `Deriva_OPT101_Pct`, `Deriva_INMP441_Pct` (signed, last average of the point): drift in the OPT101 means light (laser/LED), drift only in the microphone means sample/cell. `Refeito` counts both kinds of redo.
+
+#### Added: Signal vs t (s), and renamed Dual Mode buttons
+- Top row of the Dual Mode: **Signal vs f (Hz) ▸** (was *Sweep*), Fit, Open sweep…, Calibration, **Signal vs PWM (%) ▸** (the matched PWM sweep, was a sub-button inside *Sweep*) and the new **Signal vs t (s) ▸**. Box titles follow the same names.
+- **Signal vs t**: fixed frequency, PWM and τ; every *Point every* seconds it records the mean and SD of OPT101 R, microphone R and both phases (S and Δφ plotted vs time with ±1 SD error bars, sensor signals in *Show each sensor*), for *Duration* minutes (0 = until Stop). The first 7τ (lock-in settling) are discarded; time counts from the start. Results: change of S, Δφ, OPT101 and microphone between start and end, drift of S in the last third (%/min) and a fit S(t) = A + B·e^(−t/T). CSV `…_DUPLO_tempo_f…Hz_pwm…` (first column `Tempo_s`, per-point and drift columns) + PNG; **Open sweep…** reads it back. Electronic modulation only.
+- Headless: `soi_controller.py --sinal-t --f HZ --pwm % --tau S --dt S --duracao MIN [--desligar]`; `--desligar` (also for `--varredura`) sets PWM 0 at the end. `campanha_deriva.bat [sample]`: overnight drift campaign (~7.5 h; 10 blocks of 10 min at PWM 0 + 20 min at 10 Hz 100/50/25 % and at 5, 30, 100, 300, 1000, 2000 Hz, plus 60 min at 10 Hz; then adaptive sweeps at Precision 1, 2 and 4 %).
+- Adaptive τ: drift is now only recorded (`Deriva_*` columns), not waited for (`ADAPT_MAX_DRIFT_WAIT = 0`): 4 extra averages held a 6 Hz point for minutes. A new rule will come from the drift campaign.
+
+#### Changed: fit boxes instead of the Fit button
+- The **Fit ▸** button is gone: its box (model, target, thickness, range, mark peak) is now a column to the right of the **Signal vs f** box, active whenever a model is chosen.
+- **Signal vs PWM** gets its own **Fit** box: polynomial of degree 1, 2 or 3 (or none) on INMP441 × OPT101 (left plot), OPT101 × PWM (right plot) or both, with coefficients ± error, R² and the maximum deviation; written to the CSV header. Signal vs t has no fit box (its Results keep the start/end change and the exponential).
+
+#### Added: low-frequency mode of adaptive τ and warning below 40 Hz
+- **Why:** the drift campaign of 2026-11-16/17 showed that below ~40 Hz the room's acoustic noise (additive, slow) dominates; the fluctuation measured in a point underestimates the real error there and adaptive τ never converges.
+- New check box **only f > 40 Hz** next to **adaptive τ** (on by default): adaptive τ applies only above 40 Hz; below, τ is preset per band (8 s below 15 Hz, 4 s from 15 to 40 Hz; 7τ wait, 3τ average) and adaptive τ restarts from 1 s above 40 Hz. Recorded in the CSV header. Headless: `--adapt-tudo` turns it off.
+- Orange text **high SNR at f < 40 Hz** next to the range when the sweep goes below 40 Hz, and a warning (OK/Cancel) at the start of a frequency sweep or calibration with points below 40 Hz.
+
+#### Added: wait for warm-up before sweeps
+- **Why:** after the laser turns on, the photoacoustic signal drops ~14 % with a ~4.4 min time constant (10 Hz, campaign of 2026-11-16/17) while the sample and the cell warm up.
+- Every sweep box (OPT101, INMP441 and Dual Mode: frequency, PWM, Signal vs t) has **Wait for warm-up** with a time field (default 300 s): the laser goes on at the measurement PWM (the highest PWM in a PWM sweep) and the sweep starts after the wait; the button shows the countdown and cancels. Headless: `--aquecer S`.
+- The time label shows one text: **Estimated time xx:xx (+warm-up yy:yy)**, with the warm-up counting down during the wait. Before, it alternated between the warm-up and the estimated time and moved part of the window; the label now sits at the end of the row (after the warm-up field) and wraps instead of widening the window (2026-11-17).
+
+#### Changed: adaptive τ capped at 4 s
+- The adaptive τ never goes above **4 s** (initial τ, increases and redos). The preset τ below 40 Hz is now 4 s in the whole band (was 8 s below 15 Hz and 4 s from 15 to 40 Hz) (2026-11-17).
+
+#### Added: Allow averaging (adaptive τ)
+- **Why:** above ~4 s what remains is slow drift, which a longer τ does not remove.
+- **Allow averaging × N** (default 3) next to Precision: when the adaptive τ is already at 4 s and the fluctuation is still above Precision, the point takes another measurement with the same τ (no new settling, nothing discarded) instead of raising τ, up to N, and records the mean of all. Below 40 Hz (preset τ) every point takes N measurements. The extra measurements count in the `Refeito` column; the CSV header records the option. Headless: `--medias N` (2026-11-17).
+
+#### Added: SNR indicator in the top bar
+- **SNR OPT/INMP (dB)** between Cell and Settings, updated every second: SNR = 20·log10(|⟨Z⟩|/σ) of each lock-in output Z = X + jY over the last 10τ (4 to 30 s), σ = standard deviation per quadrature (same criterion as the INMP441 Noise/SNR plot). Each value is green ≥ 30 dB (noise ≤ ~3 % of the signal), yellow ≥ 20 dB (~3–10 %), red below (2026-11-17).
+
+#### Changed: double-click auto-range in the Dual Mode plots
+- Double-click on a Dual Mode plot sets x to the sweep range and y to the measured points only (theory curves, fits, models and the out-of-calibration regions no longer stretch the axes). The same y rule is used while the sweep runs (2026-11-17).
+
+#### Added: warning in the Fit box without calibration
+- With the calibration not applied ("Use" unchecked, or signal not normalized by the OPT101) the Fit box shows an orange warning that the models only make sense with the calibrated signal; fits are still allowed (2026-11-17).
+- The Frequency sweep and Fit boxes have the same height, and the warning wraps inside the Fit box (2026-11-17).
+
+#### Changed: calibration display options
+- The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
+
+#### Changed: SNR OPT/INMP colour limits
+- Green ≥ 25 dB, yellow 15–25 dB, red < 15 dB (were 30/20 dB), from the point-error analysis of the 17/11 measurements: ≥ 25 dB is already near the ~7 % low-frequency floor, 15–25 dB gives ~10–25 % per point, < 15 dB ≳ 40 % (2026-11-17).
+
+#### Changed: CSV states when the calibration was not applied
+- Dual Mode frequency-sweep CSVs now always say whether the microphone calibration was applied to the plot/fit: besides the existing calibration-file line, a "not applied" line with the reason ("Use" unchecked, no OPT101 normalization, or no valid calibration). The data columns are raw in both cases (2026-11-17).
+
+#### Changed: sweep τ is remembered
+- The frequency-sweep τ / τ max (linked to the INMP441 τ) now reopens with the last value used instead of the 4 s default; the default is used only when nothing was saved (2026-11-17).
+
+#### Changed: sweep τ field is "τ" or "τ max"
+- In the frequency sweeps the τ field is labelled "τ" (fixed τ) with adaptive τ off, and "τ max" with it on. With adaptive τ it now sets the ceiling: the sweep starts at τ max and never goes above it (also the preset τ below 40 Hz and the trigger for "Allow averages"); the fixed 4 s cap is now just the default value. CSV header writes "tau max" (old files with "tau inicial" still load); `--tau` in the windowless sweep is τ max with adaptive τ (2026-11-17).
+
+#### Added: "Resonance shifted" warning
+- With a calibration applied, the Dual Mode compares the cell resonance of the sweep with the calibration's (from the file, or from the peak of its sensitivity curve). If they differ by more than 5 % (or 1.5 sweep steps), or the resonance shows up in only one of them, a red "⚠ Resonance shifted: check the cell assembly" badge appears in the options row (reason in the tooltip) and a status message is flashed (2026-11-17).
+
+#### Changed: manual zoom in the Dual Mode plots is kept
+- If the user zooms or pans a Dual Mode plot, new points no longer reset the axes; the automatic range comes back with a double-click or a new measurement (2026-11-17).
+
+#### Changed: floating Results box removed
+- The movable "Results" box over the Dual Mode plots is gone. Its ⚠ warnings (wrong cell, unverified/legacy calibration, resonance mismatch) now appear as an orange "⚠ N measurement warning(s)" indicator next to "Show each sensor's signals", with the full text in the tooltip; purely informative lines were dropped (fit results stay in the Fit box) (2026-11-17).
+
+#### Added: one-click PWM buttons
+- **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
+- Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).
+
+#### Changed: Dual Mode layout
+- **Calibration ▸** is now the last button on the right (Sweep, Fit, Open sweep…, Calibration).
+- The mounting diagram (Chamber/OPC) moved from the calibration box to the **Frequency sweep** box, The fluctuation of S and Δφ of the point being measured (updated every second) and of the last point, with the τ in use, appears in a status bar at the top of the Dual Mode tab, like the sensor tabs (green within Precision, yellow up to 2×, red above). **Measure A/B** opens the Sweep panel.
+- Frequency sweep plots show **error bars** (±1 SD) on S and Δφ, as the matched PWM sweep already did.
+- The x axis of the Dual Mode plots follows the sweep range (planned + measured points; Signal vs t: 0 to the duration) instead of starting at ~1 Hz when the first points arrive; auto-range stays on the y axis (2026-11-17).
+- With a calibration applied, frequency sweep points outside the calibrated range are no longer hidden: the plots of S and Δφ get a **reddish background** outside that range (shown already before the sweep), and those points appear as hollow red markers, corrected with the value at the calibration edge and left out of the fits and of the verification. Sweeps outside the calibrated range stay allowed (2026-11-17).
+
+#### Added: Settings window
+- **⚙ Settings** button at the end of the excitation bar, in place of **Finish experiment** (which moved into the window). The window has the lock-in trigger (electronic or optical), the OPT101 supply and Finish experiment, each with a short explanation.
+- **OPT101 supply:** 3.3 V (default; output up to ≈ 2.0 V) or 5 V (output up to ≈ 3.7 V, above the ADC; adjust gain or light for a ≈ 3.0 V peak). Choosing 5 V asks for confirmation and shows a warning: PA0 needs a 1 kΩ series resistor and a BAT54 Schottky diode to 3.3 V, or the STM32 can burn. The choice is remembered.
+- **OPT101 scope in volts at PA0** (replaces the ADC counts axis), with a red dashed line **Max OPT101 output** at the signal ceiling: 2.0 V with the 3.3 V supply (OPT101 saturation) or 3.3 V with 5 V (ADC limit). The axis follows the signal as before, so the line is out of view with a low signal; from 80 % of the ceiling the axis takes in the line. Option **Oscilloscope scale fixed from 0 to 3.3 V** (off by default).
+- **Status bar:** **Peak** in % of the ceiling and in volts (replaces **%ADC**): orange from 80 %, red from 90 % with *Near OPT101 saturation* / *OPT101 SATURATION* (3.3 V) or *Near the ADC limit* (5 V). *Low signal* is now a mean level below 5 % of the ceiling.
+
+## [2.2.0] - 2026-11-13
+
+Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same. Old calibrations and sweeps still open and apply.
+
+### Interface (`interface/soi_controller.py`)
+
+#### Changed: calibration with two samples (replaces the single-reference calibration)
+- **Why:** a single reference cannot be checked by itself. On 2026-11-13 a carbon-black calibration (its raw signal rose ≈ f^+0.9, mounted at another height) produced a false f⁻² in Al and stainless steel.
+- **How:** the Calibration panel now asks for **Sample A** and **Sample B**, two materials measured in the same setup. Both follow S = K·H(f)·f⁻ⁿ (n = 1 in the chamber, opaque thick metal; n = 1.5 in OPC, thin foil), so the ratio S_A/S_B must be a complex constant. The widest range where it is constant (|slope| ≤ 0.15, ≤ 1.5 dB rms, phase ± 10° rms, at least one decade) is the verification. The calibration is M(f) = √(S_A·S_B)·fⁿ, normalized by the flat range; the system phase is the mean of both Δφ. Every new calibration is born verified or not verified; the separate "Verify with this measurement" step is gone.
+- **Materials:** chamber: aluminium, stainless steel (304/316/316L), titanium, nickel, brass, graphite; OPC: Al foil 12 µm, Al foil 25 µm, Cu foil 35 µm. The Sample B list shows in **green** the materials recommended as a pair for A (α at least 3× different in the chamber; f_c = α/(πL²) at least 3× different in OPC) and in **red** those that are not (same material, or similar α, e.g. Ti with stainless steel), with the reason in the tooltip. Red ones can still be used; the calibration file then records a warning.
+- **Thickness check:** chamber, L ≥ 2μ at the lowest frequency (μ = √(α/πf)); OPC, f_c ≥ 10× the highest frequency.
+- **Buttons per sample:** **▶ Measure** (loads the calibration sweep parameters, runs the frequency sweep and stores it), **Use current** (the sweep on screen) and **Open…** (a saved `*DUPLO_freq_*.csv`, refused if it was made in another cell).
+- **CAL file:** named `CAL_<A>-<B>_microfone_<cell>_..._<date>.csv`, with new header keys `Metodo = duas_amostras`, `Amostra_A`, `Amostra_B`, `Razao_AB` and `Faixa_concordancia_Hz`, and a new last column `Concorda` (1 inside the range where the two samples agree). When a measurement uses points outside that range, the interface warns that the correction was not verified there. Files without the column load as before.
+- **Resonance check:** if the cell resonance of A and B differ by more than 3 %, the result says the samples probably have different heights.
+- **Simulation:** with "Simulate sampling", Measure A/B simulates the chosen material (different K, same system response), so the whole flow can be tested without the STM32.
+
 ## [2.1.0] - 2026-11-13
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same. Old calibrations and sweeps still open.

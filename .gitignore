@@ -22,3 +22,6 @@ firmware/.vscode/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Log da interface
+interface/logs/
