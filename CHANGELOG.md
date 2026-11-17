@@ -101,6 +101,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: calibration display options
 - The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
 
+#### Changed: sweep τ is remembered
+- The frequency-sweep τ / τ max (linked to the INMP441 τ) now reopens with the last value used instead of the 4 s default; the default is used only when nothing was saved (2026-11-17).
+
 #### Changed: sweep τ field is "τ" or "τ max"
 - In the frequency sweeps the τ field is labelled "τ" (fixed τ) with adaptive τ off, and "τ max" with it on. With adaptive τ it now sets the ceiling: the sweep starts at τ max and never goes above it (also the preset τ below 40 Hz and the trigger for "Allow averages"); the fixed 4 s cap is now just the default value. CSV header writes "tau max" (old files with "tau inicial" still load); `--tau` in the windowless sweep is τ max with adaptive τ (2026-11-17).
 

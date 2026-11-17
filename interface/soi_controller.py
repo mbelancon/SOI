@@ -11285,8 +11285,11 @@ class LockInWindow(QtWidgets.QMainWindow):
             # Sem o botão Avançado: um τ do sensor salvo (≠ 0) deixa a linha à vista, para não corrigir escondido
             if self.sp_dual_tau_sensor.value() > 0:
                 self.btn_dual_adv.setChecked(True)
-            # A varredura da calibração sempre abre com os parâmetros recomendados (τ ligado ao do INMP441)
-            tau0 = ADAPT_TAU0_DEF if self.chk_dual_adapt.isChecked() else CAL_SWEEP_TAU
+            # τ da varredura (τ / τ max, ligado ao do INMP441): abre com o último valor usado (Marcos, 17/11); sem
+            # valor salvo, o recomendado
+            tau0 = num('dual_sweep_tau')
+            if tau0 is None or tau0 <= 0:
+                tau0 = ADAPT_TAU0_DEF if self.chk_dual_adapt.isChecked() else CAL_SWEEP_TAU
             self._set_spin(self.sp_dual_tau_f, tau0)
             self._on_sweep_tau_edit('F', tau0)
             v = st.value('sample_name')
@@ -11331,6 +11334,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             st.setValue(name, bool(getattr(self, name).isChecked()))
         for name in combos:
             st.setValue(name, int(getattr(self, name).currentIndex()))
+        st.setValue('dual_sweep_tau', float(self.sp_dual_tau_f.value()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('opt_supply', self.opt_supply)
         st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))
