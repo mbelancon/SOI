@@ -1739,6 +1739,7 @@ EN = {
     'Abaixo de 40 Hz o ruído acústico do ambiente é alto: cada ponto tem alguns % de\nincerteza (até ~10 % em 5–10 Hz com amostra de pouco sinal, como o alumínio). Use uma amostra\nque dê bastante sinal (ex.: inox) ou comece a varredura acima desse limite.': "Below 40 Hz the room's acoustic noise is high: each point has a few % of\nuncertainty (up to ~10 % at 5–10 Hz with a low-signal sample such as aluminium). Use a sample\nthat gives plenty of signal (e.g. stainless steel) or start the sweep above this limit.",
     'Aguardar warm-up': 'Wait for warm-up',
     'Permitir médias': 'Allow averaging',
+    ' aviso(s) da medida (passe o mouse)': ' measurement warning(s) (hover to read)',
     'Mostrar barra de erro da calibração': 'Show calibration error bars',
     'Região não calibrada em vermelho': 'Uncalibrated region in red',
     'Barras verdes (±1 DP da calibração aplicada) atrás das barras cinza da medida.': 'Green bars (±1 SD of the applied calibration) behind the grey measurement bars.',

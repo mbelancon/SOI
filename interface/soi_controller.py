@@ -3617,9 +3617,10 @@ class FloatingResults(QtWidgets.QFrame):
     '''Quadro de resultados que flutua sobre os gráficos: arraste pelo título para tirá-lo de cima dos dados;
     ▾/▸ recolhe o conteúdo. Fica sempre dentro do widget pai e some quando todos os textos estão vazios.'''
 
-    def __init__(self, parent, labels, title='Resultados'):
+    def __init__(self, parent, labels, title='Resultados', on_texts=None):
         super().__init__(parent)
         self.labels = labels
+        self.on_texts = on_texts        # com on_texts o quadro não aparece: os textos vão para quem chamou
         self.setObjectName('floatres')
         self.setStyleSheet('#floatres{background:rgba(255,255,255,230);border:1px solid #9a9a9a;border-radius:4px;}')
         v = QtWidgets.QVBoxLayout(self)
@@ -3664,6 +3665,10 @@ class FloatingResults(QtWidgets.QFrame):
         if texts == self._texts and not force:
             return
         self._texts = texts
+        if self.on_texts is not None:
+            self.hide()
+            self.on_texts(texts)
+            return
         for lb, tx in zip(self.labels, texts):
             lb.setVisible(bool(tx.strip()))
         any_txt = any(tx.strip() for tx in texts)
@@ -5246,6 +5251,12 @@ class LockInWindow(QtWidgets.QMainWindow):
                                          '(INMP441 e OPT101) em função da variável da varredura.')
         self.chk_dual_sensors.toggled.connect(self._on_dual_sensors)
         excl_row.addWidget(self.chk_dual_sensors)
+        # O quadro flutuante "Resultados" saiu (17/11): os avisos dele ficam aqui, num indicador com o texto no tooltip
+        self.lbl_dual_warn = QtWidgets.QLabel('')
+        self.lbl_dual_warn.setStyleSheet(f'color:{LOWF_WARN_COLOR};font-weight:bold;')
+        self.lbl_dual_warn.setVisible(False)
+        excl_row.addSpacing(12)
+        excl_row.addWidget(self.lbl_dual_warn)
         excl_row.addStretch(1)
         lay.addLayout(excl_row)
         lay.addWidget(self.dual_plots, 1)
@@ -5638,7 +5649,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         bv = QtWidgets.QVBoxLayout(bottom)
         bv.setContentsMargins(0, 2, 4, 0)
         # Resultados num quadro flutuante sobre os gráficos (arrastável): os gráficos ficam fixos
-        self.dual_float = FloatingResults(self.dual_plots, results)
+        self.dual_float = FloatingResults(self.dual_plots, results, on_texts=self._dual_warn_texts)
         for it in taken:
             wdg, sub = it.widget(), it.layout()
             if wdg is not None and wdg not in results and wdg not in (self.dual_plots, self.dual_sensor_plots):
@@ -7341,6 +7352,19 @@ class LockInWindow(QtWidgets.QMainWindow):
                            f'{self._adapt_blocks_max()}</span>')
         print(f'Modo Duplo {f:g} Hz: média {self.adapt_blocks}/{self._adapt_blocks_max()} com {tau_txt}')
         return True
+
+    def _dual_warn_texts(self, texts):
+        """Avisos que ficavam no quadro "Resultados": indicador "⚠ N aviso(s)" na linha de opções do Modo Duplo,
+        com o texto completo no tooltip (só as linhas com ⚠; as informativas não aparecem)."""
+        lines = []
+        for tx in texts:
+            for part in re.split(r'<br\s*/?>', tx or ''):
+                if '⚠' in part:
+                    lines.append(self._plain(part).strip())
+        lbl = self.lbl_dual_warn
+        lbl.setVisible(bool(lines))
+        lbl.setText(f'⚠ {len(lines)} aviso(s) da medida (passe o mouse)' if lines else '')
+        lbl.setToolTip('\n\n'.join(lines))
 
     def _update_model_nocal(self):
         """Aviso laranja no quadro Ajuste enquanto a calibração não está aplicada."""

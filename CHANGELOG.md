@@ -101,6 +101,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: calibration display options
 - The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
 
+#### Changed: floating Results box removed
+- The movable "Results" box over the Dual Mode plots is gone. Its ⚠ warnings (wrong cell, unverified/legacy calibration, resonance mismatch) now appear as an orange "⚠ N measurement warning(s)" indicator next to "Show each sensor's signals", with the full text in the tooltip; purely informative lines were dropped (fit results stay in the Fit box) (2026-11-17).
+
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
 - Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).
