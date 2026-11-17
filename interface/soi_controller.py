@@ -8195,6 +8195,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                 if self.dual_cal is not None:
                     f.write(f"# Arquivo de calibração do microfone: {os.path.basename(self.dual_cal['path'])} "
                             f"(aplicada no gráfico/fit; os dados abaixo são brutos)\n")
+                elif q['kind'] == 'F':
+                    # Sem esta linha ficava a dúvida se a calibração foi usada (ex.: "Usar" desmarcado no meio da medida)
+                    why = ('"Usar" desmarcado' if not self.chk_mic_cal.isChecked() else
+                           'sem normalização pelo OPT101' if not self.chk_dual_norm.isChecked() else
+                           'nenhuma calibração válida selecionada')
+                    f.write(f"# Calibração do microfone no gráfico/ajuste = não aplicada ({why}; os dados abaixo são "
+                            f"brutos, como sempre)\n")
                 f.write(f'{col},OPT101_R,OPT101_R_DP,INMP441_R,INMP441_R_DP,INMP441_Fase_Graus,'
                         'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '')
                         + (',' + ','.join(DUAL_POINT_COLUMNS + DUAL_DRIFT_COLUMNS) if pcol else '')

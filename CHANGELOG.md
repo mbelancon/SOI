@@ -101,6 +101,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: calibration display options
 - The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
 
+#### Changed: CSV states when the calibration was not applied
+- Dual Mode frequency-sweep CSVs now always say whether the microphone calibration was applied to the plot/fit: besides the existing calibration-file line, a "not applied" line with the reason ("Use" unchecked, no OPT101 normalization, or no valid calibration). The data columns are raw in both cases (2026-11-17).
+
 #### Changed: sweep τ is remembered
 - The frequency-sweep τ / τ max (linked to the INMP441 τ) now reopens with the last value used instead of the 4 s default; the default is used only when nothing was saved (2026-11-17).
 
