@@ -96,6 +96,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Added: warning in the Fit box without calibration
 - With the calibration not applied ("Use" unchecked, or signal not normalized by the OPT101) the Fit box shows an orange warning that the models only make sense with the calibrated signal; fits are still allowed (2026-11-17).
+- The Frequency sweep and Fit boxes have the same height, and the warning wraps inside the Fit box (2026-11-17).
 
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
