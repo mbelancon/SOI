@@ -88,6 +88,15 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - **Why:** above ~4 s what remains is slow drift, which a longer τ does not remove.
 - **Allow averaging × N** (default 3) next to Precision: when the adaptive τ is already at 4 s and the fluctuation is still above Precision, the point takes another measurement with the same τ (no new settling, nothing discarded) instead of raising τ, up to N, and records the mean of all. Below 40 Hz (preset τ) every point takes N measurements. The extra measurements count in the `Refeito` column; the CSV header records the option. Headless: `--medias N` (2026-11-17).
 
+#### Added: SNR indicator in the top bar
+- **SNR OPT/INMP (dB)** between Cell and Settings, updated every second: SNR = 20·log10(|⟨Z⟩|/σ) of each lock-in output Z = X + jY over the last 10τ (4 to 30 s), σ = standard deviation per quadrature (same criterion as the INMP441 Noise/SNR plot). Each value is green ≥ 30 dB (noise ≤ ~3 % of the signal), yellow ≥ 20 dB (~3–10 %), red below (2026-11-17).
+
+#### Changed: double-click auto-range in the Dual Mode plots
+- Double-click on a Dual Mode plot sets x to the sweep range and y to the measured points only (theory curves, fits, models and the out-of-calibration regions no longer stretch the axes). The same y rule is used while the sweep runs (2026-11-17).
+
+#### Added: warning in the Fit box without calibration
+- With the calibration not applied ("Use" unchecked, or signal not normalized by the OPT101) the Fit box shows an orange warning that the models only make sense with the calibrated signal; fits are still allowed (2026-11-17).
+
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
 - Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).

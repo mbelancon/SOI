@@ -190,6 +190,10 @@ def adapt_times(tau):
 CAL_SWEEP_PWM = 100.0
 DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verde translúcido)
 DUAL_OUT_CAL_COLOR = '#c0392b'    # pontos fora da faixa da calibração aplicada (fundo avermelhado no gráfico)
+SNR_TOP_WINDOW_S = 4.0      # janela mínima do SNR da barra superior (s); usa 10τ se maior, até SNR_TOP_MAX_S
+SNR_TOP_MAX_S = 30.0
+SNR_TOP_GOOD_DB = 30.0      # verde: ruído ≤ ~3 % do sinal
+SNR_TOP_OK_DB = 20.0        # amarelo: ~3 a 10 %; abaixo, vermelho (> 10 %)
 PWM_PRESETS = (0.0, 10.0, 100.0)  # botões de um clique ao lado do campo do PWM (o campo fica antes do último)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
@@ -3895,6 +3899,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
         self.last_audio_status_t = 0.0
         self.r_arr = np.empty(0, dtype=np.float32)
+        self.snr_opt_z = np.empty(0, dtype=np.complex128)
         self.phase_arr = np.empty(0, dtype=np.float32)
         self.lockin_dirty = False
 
@@ -4001,7 +4006,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         excitation.addWidget(lbl_sample)
         self.ed_sample = QtWidgets.QLineEdit()
         self.ed_sample.setPlaceholderText('nome da amostra')
-        self.ed_sample.setFixedWidth(150)
+        self.ed_sample.setFixedWidth(130)
         self.ed_sample.setToolTip('Todos os arquivos salvos na pasta Medidas começam com este nome.\n'
                                   'Caracteres inválidos em nomes de arquivo viram "_". Vazio = sem prefixo.')
         excitation.addWidget(self.ed_sample)
@@ -4011,7 +4016,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         lbl_cal.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_cal)
         self.cmb_mic_cal = RefreshComboBox(self.refresh_mic_cal)
-        self.cmb_mic_cal.setFixedWidth(250)
+        self.cmb_mic_cal.setFixedWidth(190)
         self.cmb_mic_cal.currentIndexChanged.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.cmb_mic_cal)
         self.chk_mic_cal = QtWidgets.QCheckBox('Usar')
@@ -4035,6 +4040,25 @@ class LockInWindow(QtWidgets.QMainWindow):
                                    'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.cmb_cell)
+        excitation.addSpacing(10)
+        # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
+        # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
+        self.lbl_snr_top = QtWidgets.QLabel('SNR OPT/INMP: — / — dB')
+        self.lbl_snr_top.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.lbl_snr_top.setMinimumWidth(QtGui.QFontMetrics(self.lbl_snr_top.font()).horizontalAdvance(
+            'SNR OPT/INMP: -10 / 100 dB') + 6)
+        self.lbl_snr_top.setToolTip(
+            f'Quanto a saída de cada lock-in está acima do ruído, nos últimos 10τ (de {SNR_TOP_WINDOW_S:g} a {SNR_TOP_MAX_S:g} s;\n'
+            'atualiza a cada segundo; "—" nos primeiros segundos):\n'
+            'SNR = 20·log10(|⟨Z⟩| / σ), com Z = X + jY a saída do lock-in e σ o desvio-padrão de X e de Y (média das\n'
+            'duas quadraturas). Inclui tudo o que flutua na janela (ruído e deriva) e melhora com τ maior.\n'
+            f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (ruído ≤ ~3 % do sinal), amarelo ≥ {SNR_TOP_OK_DB:g} dB (~3 a 10 %),\n'
+            f'vermelho abaixo (> 10 %).\n'
+            'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.')
+        excitation.addWidget(self.lbl_snr_top)
+        self.snr_top_timer = QtCore.QTimer(self)
+        self.snr_top_timer.timeout.connect(self._update_snr_top)
+        self.snr_top_timer.start(1000)
         excitation.addStretch(1)
         self.chk_sim = QtWidgets.QCheckBox('Simular amostragem')
         self.chk_sim.setStyleSheet('QCheckBox{font-weight:bold;color:#006400;}')
@@ -5515,6 +5539,17 @@ class LockInWindow(QtWidgets.QMainWindow):
         mrow.addWidget(self.btn_dual_peak)
         mrow.addStretch(1)
         mv.addLayout(mrow)
+        # Aviso (os ajustes continuam permitidos, p.ex. durante o desenvolvimento)
+        self.lbl_dual_model_nocal = QtWidgets.QLabel(
+            '⚠ Calibração não aplicada ("Usar" desmarcado na linha de cima): os modelos só fazem sentido com o sinal '
+            'calibrado. O ajuste é feito assim mesmo, sobre o sinal bruto.')
+        self.lbl_dual_model_nocal.setStyleSheet(f'color:{LOWF_WARN_COLOR};font-weight:bold;')
+        self.lbl_dual_model_nocal.setWordWrap(True)
+        self.lbl_dual_model_nocal.setMaximumWidth(520)
+        mv.addWidget(self.lbl_dual_model_nocal)
+        self.chk_mic_cal.toggled.connect(lambda _: self._update_model_nocal())
+        self.chk_dual_norm.toggled.connect(lambda _: self._update_model_nocal())
+        self._update_model_nocal()
         self.lbl_dual_model = QtWidgets.QLabel('')
         self.lbl_dual_model.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_model.setWordWrap(True)
@@ -7290,6 +7325,17 @@ class LockInWindow(QtWidgets.QMainWindow):
         print(f'Modo Duplo {f:g} Hz: média {self.adapt_blocks}/{self._adapt_blocks_max()} com {tau_txt}')
         return True
 
+    def _update_model_nocal(self):
+        """Aviso laranja no quadro Ajuste enquanto a calibração não está aplicada."""
+        lbl = getattr(self, 'lbl_dual_model_nocal', None)
+        if lbl is None:
+            return
+        off = not self.chk_mic_cal.isChecked()
+        lbl.setText(('⚠ Calibração não aplicada ("Usar" desmarcado na linha de cima)' if off else
+                     '⚠ Calibração não aplicada (sinal sem normalizar pelo OPT101)')
+                    + ': os modelos só fazem sentido com o sinal calibrado. O ajuste é feito assim mesmo, sobre o sinal bruto.')
+        lbl.setVisible(off or not self.chk_dual_norm.isChecked())
+
     def _applied_cal(self):
         """Calibração que a varredura em frequência vai aplicar (Usar marcado e sinal normalizado), ou None."""
         if not (self.chk_mic_cal.isChecked() and self.chk_dual_norm.isChecked()):
@@ -7335,7 +7381,53 @@ class LockInWindow(QtWidgets.QMainWindow):
             m = 0.04 * (hi - lo) if hi > lo else 1.0
         for pw in plots:
             pw.setXRange(lo - m, hi + m, padding=0)
-            pw.enableAutoRange(axis='y')
+            self._dual_fit_y(pw)
+
+    def _dual_data_items(self, pw):
+        """Itens com os pontos medidos de um gráfico do Modo Duplo (base do ajuste dos eixos)."""
+        if pw is self.pw_dual_a:
+            items = [self.c_dual_a, self.c_dual_a_out, self.c_dual_a_bad]
+        elif pw is self.pw_dual_b:
+            items = [self.c_dual_b, self.c_dual_b_out]
+        else:
+            items = list(pw.getPlotItem().listDataItems())
+        out = []
+        for it in items:
+            x, _ = it.getData()
+            if it.isVisible() and x is not None and len(x):
+                out.append(it)
+        return out
+
+    def _dual_fit_y(self, pw, pad=0.06):
+        """Eixo y ajustado aos pontos medidos visíveis (curvas teóricas, ajustes e regiões não contam)."""
+        items = self._dual_data_items(pw)
+        if not items:
+            pw.getPlotItem().enableAutoRange(axis='y')
+            return
+        vb = pw.getPlotItem().vb
+        yb = vb.childrenBounds(items=items)[1]
+        if yb is None or not np.isfinite(yb).all():
+            return
+        y0, y1 = yb
+        m = pad * (y1 - y0) if y1 > y0 else max(abs(y0) * 0.05, 0.05)
+        vb.setYRange(y0 - m, y1 + m, padding=0)
+
+    def _dual_fit_view(self):
+        """Duplo clique num gráfico do Modo Duplo: x na faixa da varredura e y nos pontos medidos."""
+        if not getattr(self, 'dual_results', None):
+            for pw in (self.pw_dual_a, self.pw_dual_b):
+                pw.getPlotItem().enableAutoRange()
+            return
+        self._dual_set_xrange(self._dual_arrays()[0])
+        for pw in (self.pw_dual_a, self.pw_dual_b, self.pw_dual_c, self.pw_dual_d):
+            self._dual_fit_y(pw)
+        if self.dual_kind == 'P':           # x do gráfico de S × intensidade: R do OPT101 (não o PWM)
+            vb = self.pw_dual_a.getPlotItem().vb
+            items = self._dual_data_items(self.pw_dual_a)
+            xb = vb.childrenBounds(items=items)[0] if items else None
+            if xb is not None and np.isfinite(xb).all():
+                m = 0.05 * (xb[1] - xb[0]) if xb[1] > xb[0] else 1.0
+                vb.setXRange(xb[0] - m, xb[1] + m, padding=0)
 
     def _dual_arrays(self):
         res = np.array(self.dual_results, dtype=float).reshape(-1, 9)
@@ -8022,6 +8114,39 @@ class LockInWindow(QtWidgets.QMainWindow):
                           'margin-top:8px;padding-top:6px;}'
                           'QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}')
         return box
+
+    def _update_snr_top(self):
+        """Indicador "SNR OPT/INMP (dB)" da barra superior, a cada segundo."""
+        def snr_db(z):
+            z = np.asarray(z, dtype=np.complex128)
+            if z.size < 5:
+                return None
+            sig, sigma = rolling_noise(z, z.size)
+            if sig.size == 0 or not np.isfinite(sig[-1]) or sigma[-1] <= 0:
+                return None
+            return 20.0 * np.log10(max(float(sig[-1]), 1e-30) / float(sigma[-1]))
+
+        def fmt(v):
+            if v is None:
+                return '<span style="color:#808080;">—</span>'
+            col = ('#1e8c1e' if v >= SNR_TOP_GOOD_DB else '#c99a00' if v >= SNR_TOP_OK_DB else '#d00000')
+            return f'<b style="color:{col};">{v:.0f}</b>'
+
+        opt = aud = None
+        connected = self.link.connected or self.simulating
+        win = lambda tau: min(SNR_TOP_MAX_S, max(SNR_TOP_WINDOW_S, 10.0 * tau))   # ~10 amostras independentes
+        zo = getattr(self, 'snr_opt_z', None)
+        if connected and not self.average_mode and zo is not None and zo.size:
+            n = int(win(lp_tau(self.cutoff_lp, FS)) * LOCKIN_OUT_HZ)
+            if zo.size >= int(SNR_TOP_WINDOW_S * LOCKIN_OUT_HZ):      # enquanto enche, usa o que houver
+                opt = snr_db(zo[-n:])
+        if connected and self.audio_lockin_enabled:
+            n = int(win(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)) / self.audio_block_sec)
+            with self.audio_lock:
+                z = (np.array(self.audio_z[-n:]) if len(self.audio_z) * self.audio_block_sec >= SNR_TOP_WINDOW_S
+                     else None)
+            aud = snr_db(z) if z is not None else None
+        self.lbl_snr_top.setText(f'SNR OPT/INMP: {fmt(opt)} / {fmt(aud)} dB')
 
     def _add_pwm_presets(self, layout):
         """Botões segmentados 0 / 10 / [campo do PWM] / 100: um clique aplica o PWM (desligar, alinhamento, potência
@@ -9238,6 +9363,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.set_pretrigger(self.average_pretrigger_sec)
         self.reset_average()
         self.r_arr = np.empty(0, dtype=np.float32)
+        self.snr_opt_z = np.empty(0, dtype=np.complex128)
         self.phase_arr = np.empty(0, dtype=np.float32)
         self.lockin_span = MAX_POINTS * DECIMATION / FS
         if not self.average_mode:
@@ -9605,6 +9731,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             with self.dsp_lock:
                 self.dsp.init(FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
             self.r_arr = np.empty(0, dtype=np.float32)
+            self.snr_opt_z = np.empty(0, dtype=np.complex128)
             self.phase_arr = np.empty(0, dtype=np.float32)
             self.lockin_dirty = True
 
@@ -10186,10 +10313,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         elif pw in (self.plot_audio_wave, self.plot_audio_noise):
             pi.setXRange(-self.audio_span, 0, padding=0)
             pi.enableAutoRange(y=True)
-        elif pw in (self.pw_dual_a, self.pw_dual_b):
-            # os dois gráficos do Modo Duplo andam juntos (eixo x compartilhado no empilhado/sobreposto)
-            for other in (self.pw_dual_a, self.pw_dual_b):
-                other.getPlotItem().enableAutoRange()
+        elif pw in (self.pw_dual_a, self.pw_dual_b, self.pw_dual_c, self.pw_dual_d):
+            # Modo Duplo: só os pontos medidos (curvas teóricas, ajustes, modelos e regiões não esticam os eixos);
+            # os gráficos andam juntos (eixo x compartilhado no empilhado/sobreposto)
+            self._dual_fit_view()
         else:
             pi.enableAutoRange()
 
@@ -10791,6 +10918,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                 r_new = np.array(res.r, dtype=np.float64)
                 p_new = np.array(res.phase, dtype=np.float64)
                 self.r_arr = np.concatenate((self.r_arr, r_new.astype(np.float32)))[-MAX_POINTS:]
+                z_new = r_new * np.exp(1j * np.radians(p_new))
+                self.snr_opt_z = np.concatenate((getattr(self, 'snr_opt_z', np.empty(0, np.complex128)),
+                                                 z_new))[-int(SNR_TOP_MAX_S * LOCKIN_OUT_HZ):]
                 self.phase_arr = np.concatenate((self.phase_arr, p_new.astype(np.float32)))[-MAX_POINTS:]
                 self.lockin_dirty = True
                 if self.sweep_active and getattr(self, 'sweep_target', 'OPT') == 'OPT' and self.sweep_state == 'MEASURING':
