@@ -188,6 +188,7 @@ def adapt_times(tau):
 CAL_SWEEP_PWM = 100.0
 DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verde translúcido)
 DUAL_OUT_CAL_COLOR = '#c0392b'    # pontos fora da faixa da calibração aplicada (fundo avermelhado no gráfico)
+PWM_PRESETS = (0.0, 10.0, 100.0)  # botões de um clique ao lado do campo do PWM (o campo fica antes do último)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__)), 'Medidas')
@@ -3983,7 +3984,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         for label, w in (('Freq (Hz):', self.sp_freq), ('PWM (%):', self.sp_power)):
             lbl = QtWidgets.QLabel(label)
             excitation.addWidget(lbl)
-            excitation.addWidget(w)
+            if w is self.sp_power:
+                self._add_pwm_presets(excitation)
+            else:
+                excitation.addWidget(w)
         self.lbl_power = lbl                  # PWM some na modulação óptica (o lugar vai para a frequência detectada)
         self.lbl_ext = QtWidgets.QLabel('')
         self.lbl_ext.setTextFormat(QtCore.Qt.TextFormat.RichText)
@@ -7953,6 +7957,51 @@ class LockInWindow(QtWidgets.QMainWindow):
                           'QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}')
         return box
 
+    def _add_pwm_presets(self, layout):
+        """Botões segmentados 0 / 10 / [campo do PWM] / 100: um clique aplica o PWM (desligar, alinhamento, potência
+        máxima); o botão do valor atual fica azul e, com um valor digitado, nenhum acende. Os botões seguem o campo
+        (habilitado, visível) e acompanham o valor mesmo quando o programa muda o PWM sem sinais."""
+        on = 'QPushButton{background:#1f6fd1;color:white;font-weight:bold;border:1px solid #1f6fd1;padding:1px 6px;}'
+        off = ('QPushButton{background:#f4f4f4;color:#222;border:1px solid #b9b9b9;padding:1px 6px;}'
+               'QPushButton:hover{background:#e3edfb;}QPushButton:disabled{color:#a0a0a0;}')
+        self.pwm_presets = {}
+        for v in PWM_PRESETS:
+            b = QtWidgets.QPushButton(f'{v:g}')
+            b.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            b.setFixedWidth(QtGui.QFontMetrics(b.font()).horizontalAdvance('100') + 18)
+            b.setToolTip(f'PWM {v:g} % com um clique' + (' (laser parado)' if v == 0 else ''))
+            b.clicked.connect(lambda _=False, val=v: self.sp_power.setValue(val))
+            self.pwm_presets[v] = b
+        for v in PWM_PRESETS:
+            if v == PWM_PRESETS[-1]:
+                layout.addWidget(self.sp_power)
+            layout.addWidget(self.pwm_presets[v])
+
+        def refresh(*_):
+            val = self.sp_power.value()
+            for v, b in self.pwm_presets.items():
+                b.setStyleSheet(on if abs(val - v) < 1e-6 else off)
+        self._pwm_presets_refresh = refresh
+        self.sp_power.valueChanged.connect(refresh)
+        self.sp_power._after_set = refresh       # _set_spin muda o valor com os sinais bloqueados
+        refresh()
+
+        sp, btns = self.sp_power, self.pwm_presets
+
+        class _Mirror(QtCore.QObject):
+            def eventFilter(self, obj, ev):
+                t = ev.type()
+                if t == QtCore.QEvent.Type.EnabledChange:
+                    for bb in btns.values():
+                        bb.setEnabled(sp.isEnabled())
+                elif t in (QtCore.QEvent.Type.Show, QtCore.QEvent.Type.Hide, QtCore.QEvent.Type.ShowToParent,
+                           QtCore.QEvent.Type.HideToParent):
+                    for bb in btns.values():
+                        bb.setVisible(not sp.isHidden())
+                return False
+        self._pwm_mirror = _Mirror(self)
+        sp.installEventFilter(self._pwm_mirror)
+
     def _dspin(self, lo, hi, val, dec, step, slot, width=90, suffix=''):
         sb = QtWidgets.QDoubleSpinBox()
         sb.setRange(lo, hi)
@@ -7972,6 +8021,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         sb.blockSignals(True)
         sb.setValue(v)
         sb.blockSignals(False)
+        hook = getattr(sb, '_after_set', None)
+        if hook is not None:
+            hook()
 
     def _warm_click(self, btn, start):
         """Botão de um quadro de varredura: com "Aguardar warm-up" marcado, o 1º clique liga o laser e espera; o
