@@ -1034,6 +1034,20 @@ EN = {
         ') differs from the calibration (',
     '): perto dela a correção não vale. A amostra tem altura diferente da referência? Use amostras da mesma altura ou ignore a região da ressonância.</span>':
         '): near it the correction does not hold. Does the sample have a different height from the reference? Use samples of the same height or ignore the resonance region.</span>',
+    'Quanto a saída de cada lock-in está acima do ruído, nos últimos 10τ (de 4 a 30 s;':
+        'How far each lock-in output is above the noise, over the last 10τ (4 to 30 s;',
+    'atualiza a cada segundo; "—" nos primeiros segundos):':
+        'updated every second; "—" in the first seconds):',
+    'SNR = 20·log10(|⟨Z⟩| / σ), com Z = X + jY a saída do lock-in e σ o desvio-padrão de X e de Y (média das':
+        'SNR = 20·log10(|⟨Z⟩| / σ), with Z = X + jY the lock-in output and σ the standard deviation of X and Y (mean of the',
+    'duas quadraturas). Inclui tudo o que flutua na janela (ruído e deriva) e melhora com τ maior.':
+        'two quadratures). It includes everything that fluctuates in the window (noise and drift) and improves with a larger τ.',
+    'Verde ≥ 25 dB (erro do ponto ≲ 10 %, perto do piso de ~7 % em baixa frequência),':
+        'Green ≥ 25 dB (point error ≲ 10 %, near the ~7 % low-frequency floor),',
+    'amarelo 15–25 dB (bem detectado, erro ~10 a 25 %), vermelho abaixo (≳ 40 %).':
+        'yellow 15–25 dB (well detected, error ~10 to 25 %), red below (≳ 40 %).',
+    'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.':
+        'OPT: needs Lock-In Mode in the OPT101 tab. INMP: needs the INMP441 lock-in on.',
     'Ressonância deslocada: cheque a montagem da célula':
         'Resonance shifted: check the cell assembly',
     'a ressonância desta medida (':

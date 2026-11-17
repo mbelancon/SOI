@@ -101,6 +101,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: calibration display options
 - The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
 
+#### Changed: SNR OPT/INMP colour limits
+- Green ≥ 25 dB, yellow 15–25 dB, red < 15 dB (were 30/20 dB), from the point-error analysis of the 17/11 measurements: ≥ 25 dB is already near the ~7 % low-frequency floor, 15–25 dB gives ~10–25 % per point, < 15 dB ≳ 40 % (2026-11-17).
+
 #### Changed: CSV states when the calibration was not applied
 - Dual Mode frequency-sweep CSVs now always say whether the microphone calibration was applied to the plot/fit: besides the existing calibration-file line, a "not applied" line with the reason ("Use" unchecked, no OPT101 normalization, or no valid calibration). The data columns are raw in both cases (2026-11-17).
 

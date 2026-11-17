@@ -192,8 +192,8 @@ DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verd
 DUAL_OUT_CAL_COLOR = '#c0392b'    # pontos fora da faixa da calibração aplicada (fundo avermelhado no gráfico)
 SNR_TOP_WINDOW_S = 4.0      # janela mínima do SNR da barra superior (s); usa 10τ se maior, até SNR_TOP_MAX_S
 SNR_TOP_MAX_S = 30.0
-SNR_TOP_GOOD_DB = 30.0      # verde: ruído ≤ ~3 % do sinal
-SNR_TOP_OK_DB = 20.0        # amarelo: ~3 a 10 %; abaixo, vermelho (> 10 %)
+SNR_TOP_GOOD_DB = 25.0      # verde: erro do ponto ≲ 10 %, perto do piso (análise das medidas de 17/11; antes 30)
+SNR_TOP_OK_DB = 15.0        # amarelo: ~10 a 25 %; abaixo, vermelho (≳ 40 %) (antes 20)
 PWM_PRESETS = (0.0, 10.0, 100.0)  # botões de um clique ao lado do campo do PWM (o campo fica antes do último)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
@@ -4091,8 +4091,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             'atualiza a cada segundo; "—" nos primeiros segundos):\n'
             'SNR = 20·log10(|⟨Z⟩| / σ), com Z = X + jY a saída do lock-in e σ o desvio-padrão de X e de Y (média das\n'
             'duas quadraturas). Inclui tudo o que flutua na janela (ruído e deriva) e melhora com τ maior.\n'
-            f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (ruído ≤ ~3 % do sinal), amarelo ≥ {SNR_TOP_OK_DB:g} dB (~3 a 10 %),\n'
-            f'vermelho abaixo (> 10 %).\n'
+            f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (erro do ponto ≲ 10 %, perto do piso de ~7 % em baixa frequência),\n'
+            f'amarelo {SNR_TOP_OK_DB:g}–{SNR_TOP_GOOD_DB:g} dB (bem detectado, erro ~10 a 25 %), vermelho abaixo (≳ 40 %).\n'
             'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.')
         excitation.addWidget(self.lbl_snr_top)
         self.snr_top_timer = QtCore.QTimer(self)
