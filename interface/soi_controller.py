@@ -7205,6 +7205,35 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.adapt_info = f' | último ponto: τ = {self._fmt_tau(tau)}, {fl}'
         return False
 
+    def _dual_set_xrange(self, x):
+        """Eixo x dos gráficos do Modo Duplo na faixa da varredura (planejada + medida), não a partir de 0/1 Hz:
+        o ajuste automático fica só no eixo y."""
+        kind = self.dual_kind
+        vals = [float(v) for v in list(self.dual_params.get('values') or []) + list(x) if np.isfinite(v)]
+        if kind == 'F':
+            plots = (self.pw_dual_a, self.pw_dual_b, self.pw_dual_c, self.pw_dual_d)
+            vals = [v for v in vals if v > 0]
+            if not vals:
+                return
+            lo, hi = np.log10(min(vals)), np.log10(max(vals))
+            m = 0.04 * (hi - lo) if hi > lo else 0.05
+        elif kind == 'T':
+            plots = (self.pw_dual_a, self.pw_dual_b, self.pw_dual_c, self.pw_dual_d)
+            dur = self.sp_dt_dur.value() * 60.0 if self.dual_active else 0.0
+            lo, hi = 0.0, max(max(vals, default=0.0), dur)
+            if hi <= 0:
+                return
+            m = 0.02 * hi
+        else:                                   # PWM: só o gráfico de calibração tem o PWM no eixo x
+            plots = (self.pw_dual_b,)
+            if not vals:
+                return
+            lo, hi = min(vals), max(vals)
+            m = 0.04 * (hi - lo) if hi > lo else 1.0
+        for pw in plots:
+            pw.setXRange(lo - m, hi + m, padding=0)
+            pw.enableAutoRange(axis='y')
+
     def _dual_arrays(self):
         res = np.array(self.dual_results, dtype=float).reshape(-1, 9)
         return res.T
@@ -7218,6 +7247,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.pw_dual_a.enableAutoRange()      # a faixa neutra desligou o ajuste automático
             self.pw_dual_b.enableAutoRange()
         x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
+        self._dual_set_xrange(x)
         self._update_dual_sensor_plots(x, ro, ra, pa, po)
         self.dual_fit = None
         self.dual_std = None
