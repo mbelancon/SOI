@@ -84,6 +84,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: adaptive τ capped at 4 s
 - The adaptive τ never goes above **4 s** (initial τ, increases and redos). The preset τ below 40 Hz is now 4 s in the whole band (was 8 s below 15 Hz and 4 s from 15 to 40 Hz) (2026-11-17).
 
+#### Added: Allow averaging (adaptive τ)
+- **Why:** above ~4 s what remains is slow drift, which a longer τ does not remove.
+- **Allow averaging × N** (default 3) next to Precision: when the adaptive τ is already at 4 s and the fluctuation is still above Precision, the point takes another measurement with the same τ (no new settling, nothing discarded) instead of raising τ, up to N, and records the mean of all. Below 40 Hz (preset τ) every point takes N measurements. The extra measurements count in the `Refeito` column; the CSV header records the option. Headless: `--medias N` (2026-11-17).
+
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
 - Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).
