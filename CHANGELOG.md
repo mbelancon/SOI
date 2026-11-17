@@ -16,6 +16,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 
 #### Changed: project context files
 - `CLAUDE.md` (working rules) and `CONTEXTO.md` (current state, in Portuguese) replace `CONTEXT_SOI.md`.
+- Version rule: firmware and interface are versioned independently; the firmware number changes only when the firmware changes (same MAJOR = same USB protocol). README updated.
 
 ### Interface (`interface/soi_controller.py`)
 

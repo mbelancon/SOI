@@ -93,7 +93,7 @@ PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET o
 
 ## Versions
 
-Each published version has a `vX.Y.Z` tag and a page under [Releases](https://github.com/mbelancon/SOI/releases). What changed in each one is in [CHANGELOG.md](CHANGELOG.md). The number appears in the interface window title and in the firmware constant `FIRMWARE_VERSION`.
+Each published version has a `vX.Y.Z` tag and a page under [Releases](https://github.com/mbelancon/SOI/releases). What changed in each one is in [CHANGELOG.md](CHANGELOG.md). The interface number appears in the window title. The firmware has its own number (constant `FIRMWARE_VERSION`), which changes only when the firmware itself changes; both share the same MAJOR version while the USB protocol is the same.
 
 ## License
 

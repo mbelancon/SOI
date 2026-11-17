@@ -19,8 +19,9 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
   `# Celula = …`), em qualquer idioma da interface, para os arquivos antigos continuarem abrindo.
 
 ## Versão e CHANGELOG
-- Firmware e interface têm o mesmo número de versão (semver). `__version__` na interface e
-  `FIRMWARE_VERSION` em `firmware/src/main.c`. MAJOR = mudança no protocolo USB.
+- Firmware e interface têm versões independentes (semver): a do firmware (`FIRMWARE_VERSION` em
+  `firmware/src/main.c`) só muda quando o firmware é modificado; a da interface é `__version__`. MAJOR igual
+  nos dois = mesmo protocolo USB (MAJOR muda quando o protocolo muda) (regra do Marcos, 17/11).
 - Toda mudança atualiza o CHANGELOG.md (Keep a Changelog) junto com a versão, no mesmo commit.
 
 ## Aprovação e fluxo
