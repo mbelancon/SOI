@@ -5295,6 +5295,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_warn.setVisible(False)
         excl_row.addSpacing(12)
         excl_row.addWidget(self.lbl_dual_warn)
+        # Textos informativos que ficavam no quadro "Resultados" (Diagnóstico, Sinal x t, ajuste do PWM, pontos
+        # excluídos...): indicador "ℹ Resultados", com o texto no tooltip
+        self.lbl_dual_info = QtWidgets.QLabel('')
+        self.lbl_dual_info.setStyleSheet('color:#1f4e9c;font-weight:bold;')
+        self.lbl_dual_info.setVisible(False)
+        excl_row.addSpacing(12)
+        excl_row.addWidget(self.lbl_dual_info)
         # Ressonância da medida longe da calibração (ou só numa delas): aviso vermelho bem visível
         self.lbl_dual_res_shift = QtWidgets.QLabel('')
         self.lbl_dual_res_shift.setStyleSheet('color:white;background:#d00000;font-weight:bold;'
@@ -7417,11 +7424,19 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _dual_warn_texts(self, texts):
         """Avisos que ficavam no quadro "Resultados": indicador "⚠ N aviso(s)" na linha de opções do Modo Duplo,
         com o texto completo no tooltip (só as linhas com ⚠; as informativas não aparecem)."""
-        lines = []
+        lines, info = [], []
         for tx in texts:
             for part in re.split(r'<br\s*/?>', tx or ''):
+                t = self._plain(part).strip()
                 if '⚠' in part:
-                    lines.append(self._plain(part).strip())
+                    lines.append(t)
+                elif t:
+                    info.append(t)
+        li = getattr(self, 'lbl_dual_info', None)
+        if li is not None:
+            li.setVisible(bool(info))
+            li.setText('ℹ Resultados (passe o mouse)' if info else '')
+            li.setToolTip('\n\n'.join(info))
         lbl = self.lbl_dual_warn
         lbl.setVisible(bool(lines))
         lbl.setText(f'⚠ {len(lines)} aviso(s) da medida (passe o mouse)' if lines else '')

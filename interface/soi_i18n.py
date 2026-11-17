@@ -1048,6 +1048,8 @@ EN = {
         'yellow 15–25 dB (well detected, error ~10 to 25 %), red below (≳ 40 %).',
     'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.':
         'OPT: needs Lock-In Mode in the OPT101 tab. INMP: needs the INMP441 lock-in on.',
+    'ℹ Resultados (passe o mouse)':
+        'ℹ Results (hover to read)',
     'Ressonância deslocada: cheque a montagem da célula':
         'Resonance shifted: check the cell assembly',
     'a ressonância desta medida (':

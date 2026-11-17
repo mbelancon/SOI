@@ -14,6 +14,12 @@ The interface and the firmware share the same version number. It appears in `__v
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
 
+#### Added: calibration and examples documentation
+- `docs/07_Calibration.md` (two-sample calibration) and `docs/08_Measurement_Examples.md` (measurements of 2026-11-17: metals, Ni with a dark film, carbon black, SNR vs point error), with the raw CSVs and `make_figures.py` in `examples/2026-11-17/`. `docs/04_Interface.md` updated for 2.3.0 (τ / τ max, Allow averages, SNR readout, PWM buttons, warnings, manual zoom); the old single-reference calibration text was replaced by a summary.
+
+#### Fixed: informative results after removing the floating box
+- Diagnostics, the Signal vs t summary, the PWM fit, the applied calibration and the excluded points were left without a place when the floating Results box was removed; they now appear in a blue "ℹ Results" label (text in the tooltip) next to the warnings label.
+
 #### Changed: project context files
 - `CLAUDE.md` (working rules) and `CONTEXTO.md` (current state, in Portuguese) replace `CONTEXT_SOI.md`.
 - Version rule: firmware and interface are versioned independently; the firmware number changes only when the firmware changes (same MAJOR = same USB protocol). README updated.

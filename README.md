@@ -72,6 +72,8 @@ PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET o
 | [04_Interface.md](docs/04_Interface.md) | Installation, features and specifications of the interface |
 | [05_Components.md](docs/05_Components.md) | Why STM32, OPT101 and INMP441: characteristics and role of each |
 | [06_Performance_and_Applications.md](docs/06_Performance_and_Applications.md) | Speed and resolution of time-resolved optical measurements; thermal lens, thermal mirror and luminescence |
+| [07_Calibration.md](docs/07_Calibration.md) | Microphone + cell calibration with two reference samples: principle, pair choice, procedure, acceptance |
+| [08_Measurement_Examples.md](docs/08_Measurement_Examples.md) | Real measurements (metals, a surface film, SNR limits) with data in `examples/` |
 
 ## Repository layout
 
