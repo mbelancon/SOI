@@ -81,6 +81,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - Every sweep box (OPT101, INMP441 and Dual Mode: frequency, PWM, Signal vs t) has **Wait for warm-up** with a time field (default 300 s): the laser goes on at the measurement PWM (the highest PWM in a PWM sweep) and the sweep starts after the wait; the button shows the countdown and cancels. Headless: `--aquecer S`.
 - The time label shows one text: **Estimated time xx:xx (+warm-up yy:yy)**, with the warm-up counting down during the wait. Before, it alternated between the warm-up and the estimated time and moved part of the window; the label now sits at the end of the row (after the warm-up field) and wraps instead of widening the window (2026-11-17).
 
+#### Changed: adaptive τ capped at 4 s
+- The adaptive τ never goes above **4 s** (initial τ, increases and redos). The preset τ below 40 Hz is now 4 s in the whole band (was 8 s below 15 Hz and 4 s from 15 to 40 Hz) (2026-11-17).
+
 #### Added: one-click PWM buttons
 - **Why:** aligning the optics means switching the laser off, to 10 % or to 100 % many times.
 - Segmented buttons **0 / 10 / [PWM field] / 100** next to the PWM field: one click applies the value; the button of the current PWM turns blue (none lights with a typed intermediate value). They follow the field: disabled during sweeps and hidden in optical modulation (2026-11-17).

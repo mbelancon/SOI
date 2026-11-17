@@ -150,6 +150,7 @@ CAL_SWEEP_TAU = 2.0
 # muito da Precisão, o ponto é refeito com τ maior. Cada ponto: espera 7τ + 0,3 s e média por max(1 s, 3τ).
 ADAPT_TOL_DEF = 2.0       # precisão alvo da flutuação de S (%); a de Δφ é a mesma em radianos (2 % -> 1,15°)
 ADAPT_TAU0_DEF = 4.0      # τ inicial padrão (s) com o τ adaptativo
+ADAPT_TAU_CAP = 4.0       # τ máximo (s) no modo adaptativo, inclusive nas faixas abaixo de 40 Hz (Marcos, 17/11)
 ADAPT_Q_TARGET = 0.7      # o τ seguinte é escolhido para a flutuação ficar em 70 % da Precisão
 ADAPT_Q_REDO = 2.0        # flutuação acima de 2× a Precisão: refaz o ponto com τ maior
 ADAPT_MAX_REDO = 2
@@ -162,7 +163,7 @@ ADAPT_MAX_DRIFT_WAIT = 0  # médias extras (mesmo τ) enquanto S ou Δφ derivam
 # só acima de LOWF_FMAX, τ fixo por faixa abaixo (f < limite -> τ); acima, o adaptativo recomeça de LOWF_TAU_ABOVE
 WARMUP_DEF_S = 300.0      # "Aguardar warm-up" das varreduras: espera padrão com o laser ligado (s)
 LOWF_FMAX = 40.0
-LOWF_TAU_BANDS = ((15.0, 8.0), (LOWF_FMAX, 4.0))
+LOWF_TAU_BANDS = ((LOWF_FMAX, ADAPT_TAU_CAP),)   # antes 8 s < 15 Hz e 4 s < 40 Hz; limitado a 4 s em 17/11
 LOWF_TAU_ABOVE = 1.0
 LOWF_WARN_COLOR = '#d97000'
 
@@ -4895,8 +4896,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_dual_adapt40 = QtWidgets.QCheckBox(f'só f > {LOWF_FMAX:g} Hz')
         self.chk_dual_adapt40.setChecked(True)
         self.chk_dual_adapt40.setToolTip(
-            f'Ligado (padrão): o τ adaptativo só vale acima de {LOWF_FMAX:g} Hz. Abaixo, o τ é pré-definido por faixa\n'
-            f'(8 s abaixo de 15 Hz, 4 s de 15 a {LOWF_FMAX:g} Hz; espera 7τ e média por 3τ), e acima de {LOWF_FMAX:g} Hz o\n'
+            f'Ligado (padrão): o τ adaptativo só vale acima de {LOWF_FMAX:g} Hz. Abaixo, o τ é pré-definido\n'
+            f'({ADAPT_TAU_CAP:g} s; espera 7τ e média por 3τ), e acima de {LOWF_FMAX:g} Hz o\n'
             f'adaptativo recomeça de {LOWF_TAU_ABOVE:g} s. Motivo: abaixo de ~{LOWF_FMAX:g} Hz o ruído é acústico, do\n'
             'ambiente, lento; a flutuação medida no ponto subestima o erro e o τ adaptativo não converge.\n'
             'Desligado: τ adaptativo em todas as frequências.')
@@ -6278,7 +6279,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                'Nessa faixa o ruído acústico do ambiente (e o do próprio INMP441, especificado para f > 60 Hz) é alto:\n'
                'a medida exige uma amostra de alto SNR (ex.: inox). Com pouco sinal (ex.: alumínio), cada ponto pode ter\n'
                'incerteza de 5 a 10 %.\n\n'
-               + (f'τ pré-definido nessa faixa: 8 s abaixo de 15 Hz, 4 s de 15 a {LOWF_FMAX:g} Hz.\n\n' if fixed else '')
+               + (f'τ pré-definido nessa faixa: {ADAPT_TAU_CAP:g} s abaixo de {LOWF_FMAX:g} Hz.\n\n' if fixed else '')
                + 'Continuar?')
         print(f'Aviso: varredura com {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g}–{max(low):g} Hz): '
               'exige amostra de alto SNR.')
@@ -6314,7 +6315,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             fixed = self._lowf_fixed_tau(kind, value)
             if fixed is not None:
                 return adapt_times(fixed)
-            tau0 = self.dual_tau_w[kind].value()
+            tau0 = min(self.dual_tau_w[kind].value(), ADAPT_TAU_CAP)
             tmin = adapt_tau_min(value)
             if bound == 'est' and getattr(self, 'adapt_tau_cur', None):
                 tau = max(tmin, self.adapt_tau_cur)
@@ -6895,8 +6896,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_now.setText('')
         self.fluct_next = 0.0
         if self._dual_adaptive(kind):
-            self.adapt_tau_cur = self.dual_tau_w[kind].value()
-            self.adapt_tau_max = 2.0 * self.adapt_tau_cur
+            self.adapt_tau_cur = min(self.dual_tau_w[kind].value(), ADAPT_TAU_CAP)
+            self.adapt_tau_max = min(2.0 * self.adapt_tau_cur, ADAPT_TAU_CAP)
             if not refine:
                 self.dual_params['adapt'] = (self.sp_dual_adapt_tol.value(), self.adapt_tau_cur)
                 self.dual_params['adapt40'] = self.chk_dual_adapt40.isChecked()
