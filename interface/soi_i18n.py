@@ -1034,6 +1034,24 @@ EN = {
         ') differs from the calibration (',
     '): perto dela a correção não vale. A amostra tem altura diferente da referência? Use amostras da mesma altura ou ignore a região da ressonância.</span>':
         '): near it the correction does not hold. Does the sample have a different height from the reference? Use samples of the same height or ignore the resonance region.</span>',
+    'Ressonância deslocada: cheque a montagem da célula':
+        'Resonance shifted: check the cell assembly',
+    'a ressonância desta medida (':
+        'the resonance of this measurement (',
+    '% da calibração (':
+        '% from the calibration (',
+    ') difere ':
+        ') differs by ',
+    'há ressonância nesta medida (':
+        'there is a resonance in this measurement (',
+    ') e não na calibração':
+        ') but not in the calibration',
+    'a ressonância da calibração (':
+        'the calibration resonance (',
+    ') não aparece nesta medida':
+        ') does not appear in this measurement',
+    '. Perto da ressonância a correção não vale. A montagem mudou (amostra de outra altura, célula mal fechada ou vazando)? Refaça a montagem ou gere uma calibração nesta montagem; também dá para ignorar a região da ressonância.':
+        '. Near the resonance the correction does not hold. Did the assembly change (sample of another height, cell badly closed or leaking)? Redo the assembly or generate a calibration in this assembly; you can also ignore the resonance region.',
     '<br><span style="color:#d00000;">⚠ Calibração ainda não verificada experimentalmente: confira com uma segunda referência ("Verificar com esta medida", no painel Calibração).</span>':
         '<br><span style="color:#d00000;">⚠ Calibration not yet verified experimentally: check it with a second reference ("Verify with this measurement", in the Calibration panel).</span>',
     'Calibração: marque "Normalizar pelo OPT101" (a referência é comparada com o sinal normalizado).':

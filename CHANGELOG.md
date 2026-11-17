@@ -101,6 +101,12 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 #### Changed: calibration display options
 - The **Advanced** button next to **Generate calibration** is gone (the OPT101 sensor τ row only appears if a non-zero τ was saved). In its place: **Show calibration error bars** and **Uncalibrated region in red**, both off by default. With the second off, points outside the calibrated range appear hollow in the normal colour, without the reddish background. Both are saved and restored in the next session (2026-11-17).
 
+#### Added: "Resonance shifted" warning
+- With a calibration applied, the Dual Mode compares the cell resonance of the sweep with the calibration's (from the file, or from the peak of its sensitivity curve). If they differ by more than 5 % (or 1.5 sweep steps), or the resonance shows up in only one of them, a red "⚠ Resonance shifted: check the cell assembly" badge appears in the options row (reason in the tooltip) and a status message is flashed (2026-11-17).
+
+#### Changed: manual zoom in the Dual Mode plots is kept
+- If the user zooms or pans a Dual Mode plot, new points no longer reset the axes; the automatic range comes back with a double-click or a new measurement (2026-11-17).
+
 #### Changed: floating Results box removed
 - The movable "Results" box over the Dual Mode plots is gone. Its ⚠ warnings (wrong cell, unverified/legacy calibration, resonance mismatch) now appear as an orange "⚠ N measurement warning(s)" indicator next to "Show each sensor's signals", with the full text in the tooltip; purely informative lines were dropped (fit results stay in the Fit box) (2026-11-17).
 

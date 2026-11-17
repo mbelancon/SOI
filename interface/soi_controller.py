@@ -448,6 +448,8 @@ CAL_MATERIALS = {
 CAL_CELL_N = {'Camara': 1.0, 'OPC': 1.5}     # expoente esperado de cada célula
 CAL_PAIR_MIN_RATIO = 3.0                     # as duas amostras devem diferir pelo menos isso (α ou f_c)
 CAL_F0_TOL = 0.03                            # ressonâncias de A e B devem coincidir em ±3 %
+RES_SHIFT_TOL = 0.05     # f0 da medida x f0 da calibração: acima de 5 % (ou 1,5 passo da varredura), "ressonância deslocada"
+RES_SHIFT_MSG = 'Ressonância deslocada: cheque a montagem da célula'
 
 
 def cal_materials(cell):
@@ -1105,6 +1107,38 @@ def cell_resonance_f0(f, s, f_min=250.0):
     m = f >= f_min
     fr = find_resonance(f[m], s[m]) if m.sum() >= 6 else None
     return None if fr is None else fr[1]
+
+
+def resonance_shift(x, s_raw, cal):
+    """Compara a ressonância da célula na medida (x, S sem a correção) com a da calibração cal. A f0 da
+    calibração vem do arquivo ou, se faltar, do pico na própria curva de sensibilidade. Devolve None (ok ou
+    sem como comparar) ou (texto do motivo, f0 da medida ou None, f0 da calibração ou None)."""
+    x, s_raw = np.asarray(x, dtype=np.float64), np.asarray(s_raw, dtype=np.float64)
+    v = np.isfinite(s_raw) & (s_raw > 0) & (x >= 250.0)
+    if v.sum() < 6:
+        return None
+    cf = cal.get('f0')
+    cal_has = cal['f'][-1] > 250.0 and (cal['f'] >= 250.0).sum() >= 6
+    if cf is None and cal_has:
+        cf = cell_resonance_f0(cal['f'], cal['sens'])
+    xs = np.sort(x[v])
+    lo, hi = max(xs[0], cal['f'][0]), min(xs[-1], cal['f'][-1])
+    if hi <= lo * 1.2:
+        return None
+    fr = cell_resonance_f0(x[v], s_raw[v])
+    if fr is not None and cf is not None:
+        i = int(np.clip(np.searchsorted(xs, fr), 1, xs.size - 1))
+        step = xs[i] / xs[i - 1] - 1.0
+        tol = max(RES_SHIFT_TOL, 1.5 * step)
+        if abs(fr / cf - 1.0) > tol:
+            return (f'a ressonância desta medida ({fmt_freq(fr)}) difere {abs(fr / cf - 1.0) * 100:.0f} % da '
+                    f'calibração ({fmt_freq(cf)})', fr, cf)
+        return None
+    if fr is not None and cal_has and lo * 1.1 < fr < hi / 1.1:
+        return (f'há ressonância nesta medida ({fmt_freq(fr)}) e não na calibração', fr, None)
+    if cf is not None and lo * 1.1 < cf < hi / 1.1:
+        return (f'a ressonância da calibração ({fmt_freq(cf)}) não aparece nesta medida', None, cf)
+    return None
 
 
 def resonance_complex(p, f):
@@ -5257,6 +5291,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_warn.setVisible(False)
         excl_row.addSpacing(12)
         excl_row.addWidget(self.lbl_dual_warn)
+        # Ressonância da medida longe da calibração (ou só numa delas): aviso vermelho bem visível
+        self.lbl_dual_res_shift = QtWidgets.QLabel('')
+        self.lbl_dual_res_shift.setStyleSheet('color:white;background:#d00000;font-weight:bold;'
+                                              'padding:2px 8px;border-radius:3px;')
+        self.lbl_dual_res_shift.setVisible(False)
+        excl_row.addSpacing(12)
+        excl_row.addWidget(self.lbl_dual_res_shift)
         excl_row.addStretch(1)
         lay.addLayout(excl_row)
         lay.addWidget(self.dual_plots, 1)
@@ -5265,6 +5306,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         sl = QtWidgets.QHBoxLayout(self.dual_sensor_plots)
         sl.setContentsMargins(0, 0, 0, 0)
         self.pw_dual_c, self.pw_dual_d = pg.PlotWidget(), pg.PlotWidget()
+        # Zoom/arraste à mão num gráfico do Modo Duplo: a faixa fica como o usuário deixou até um duplo clique ou
+        # uma nova medida (sem isso, cada ponto novo refazia o ajuste automático)
+        self.dual_view_manual = False
+        for pw in (self.pw_dual_a, self.pw_dual_b, self.pw_dual_c, self.pw_dual_d):
+            pw.getPlotItem().vb.sigRangeChangedManually.connect(
+                lambda *_: setattr(self, 'dual_view_manual', True))
         for pw in (self.pw_dual_c, self.pw_dual_d):
             pw.showGrid(x=True, y=True, alpha=0.3)
             pw.addLegend(offset=(10, 10))
@@ -6602,6 +6649,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_kind = 'F'
         self.dual_values = []
         self.dual_refine = False
+        self.dual_view_manual = False
         self.dual_results = []
         self.dual_fstd = []
         self.dual_pinfo = []
@@ -6708,6 +6756,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_src = self.dual_kind = 'T'
         self.dual_values = []
         self.dual_refine = False
+        self.dual_view_manual = False
         self.dual_results = []
         self.dual_pinfo = []
         self.dual_excluded = set()
@@ -6953,6 +7002,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_values = values
         self.dual_idx = 0
         self.dual_refine = bool(refine)
+        self.dual_view_manual = False        # medida nova: volta o ajuste automático dos eixos
         if refine:          # pontos novos entram na varredura atual, que é mantida (com as exclusões)
             q = dict(self.dual_params)
             q['values'] = sorted(set(q.get('values', [r[0] for r in self.dual_results])) | set(values))
@@ -7366,6 +7416,18 @@ class LockInWindow(QtWidgets.QMainWindow):
         lbl.setText(f'⚠ {len(lines)} aviso(s) da medida (passe o mouse)' if lines else '')
         lbl.setToolTip('\n\n'.join(lines))
 
+    def _set_res_shift(self, why):
+        """Mostra/esconde o aviso "Ressonância deslocada" (why = motivo, ou None)."""
+        lbl = getattr(self, 'lbl_dual_res_shift', None)
+        if lbl is None:
+            return
+        was = lbl.isVisible()
+        lbl.setVisible(why is not None)
+        lbl.setText(f'⚠ {RES_SHIFT_MSG}' if why else '')
+        lbl.setToolTip(why or '')
+        if why and not was:
+            self.flash(f'⚠ {RES_SHIFT_MSG}', 6.0)
+
     def _update_model_nocal(self):
         """Aviso laranja no quadro Ajuste enquanto a calibração não está aplicada."""
         lbl = getattr(self, 'lbl_dual_model_nocal', None)
@@ -7457,6 +7519,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _dual_fit_view(self):
         """Duplo clique num gráfico do Modo Duplo: x na faixa da varredura e y nos pontos medidos."""
+        self.dual_view_manual = False
         if not getattr(self, 'dual_results', None):
             for pw in (self.pw_dual_a, self.pw_dual_b):
                 pw.getPlotItem().enableAutoRange()
@@ -7478,6 +7541,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _show_dual_results(self):
         if not getattr(self, 'dual_results', None):     # o seletor de calibração existe antes da aba
+            self._set_res_shift(None)
             if hasattr(self, 'rg_dual_out'):
                 self._dual_cal_regions(self._applied_cal() if getattr(self, 'dual_kind', 'F') == 'F' else None)
             return
@@ -7487,7 +7551,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.pw_dual_a.enableAutoRange()      # a faixa neutra desligou o ajuste automático
             self.pw_dual_b.enableAutoRange()
         x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
-        self._dual_set_xrange(x)
+        if not getattr(self, 'dual_view_manual', False):
+            self._dual_set_xrange(x)
         self._update_dual_sensor_plots(x, ro, ra, pa, po)
         self.dual_fit = None
         self.dual_std = None
@@ -7585,6 +7650,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             dphi[order] = np.degrees(np.unwrap(np.radians(wrap_deg(pa)[order])))
             dphi_e = np.asarray(pa_e, dtype=float)
         cal_txt = ''
+        res_shift = None
         cal_rel = cal_ph_e = None        # incerteza da calibração em cada ponto (relativa em S; graus em Δφ)
         out_cal = np.zeros(x.size, dtype=bool)
         if self.chk_mic_cal.isChecked() and not norm:
@@ -7637,17 +7703,17 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'a acústica muda e a correção não vale. Gere uma calibração nesta configuração.</span>')
                 # Ressonância da célula: muda com o volume livre (altura da amostra). Longe da f0 da calibração,
                 # a correção perto do pico não vale
-                if c.get('f0'):
-                    fr = cell_resonance_f0(x[ok & inside], s_raw[ok & inside])
-                    if fr is not None and abs(fr / c['f0'] - 1.0) > 0.03:
-                        cal_txt += (f'<br><span style="color:#d00000;">⚠ A ressonância desta medida ({fmt_freq(fr)}) '
-                                    f'difere da calibração ({fmt_freq(c["f0"])}): perto dela a correção não vale. A '
-                                    'amostra tem altura diferente da referência? Use amostras da mesma altura ou '
-                                    'ignore a região da ressonância.</span>')
+                sh = resonance_shift(x[ok & inside & keep], s_raw[ok & inside & keep], c)
+                if sh is not None:
+                    res_shift = (f'{sh[0]}. Perto da ressonância a correção não vale. A montagem mudou (amostra de '
+                                 'outra altura, célula mal fechada ou vazando)? Refaça a montagem ou gere uma '
+                                 'calibração nesta montagem; também dá para ignorar a região da ressonância.')
+                    cal_txt += (f'<br><span style="color:#d00000;">⚠ {RES_SHIFT_MSG}: {res_shift}</span>')
                 if c['verified'] is False:
                     cal_txt += ('<br><span style="color:#d00000;">⚠ Calibração ainda não verificada experimentalmente: '
                                 'confira com uma segunda referência ("Verificar com esta medida", no painel Calibração).</span>')
         self.lbl_dual_cal.setText(cal_txt)
+        self._set_res_shift(res_shift)
         self._dual_cal_regions(self.dual_cal)
         red = self.chk_dual_out_red.isChecked()
         self.c_dual_a_out.setSymbolPen(pg.mkPen(DUAL_OUT_CAL_COLOR if red else 'royalblue', width=1.5))
