@@ -187,6 +187,7 @@ def adapt_times(tau):
 
 CAL_SWEEP_PWM = 100.0
 DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verde translúcido)
+DUAL_OUT_CAL_COLOR = '#c0392b'    # pontos fora da faixa da calibração aplicada (fundo avermelhado no gráfico)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__)), 'Medidas')
@@ -5138,6 +5139,20 @@ class LockInWindow(QtWidgets.QMainWindow):
                                                 symbolBrush='#d00000', symbolPen=pg.mkPen('#d00000', width=2))
         self.c_dual_b = self.pw_dual_b.plot([], [], pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=6,
                                             symbolBrush='firebrick', symbolPen='firebrick')
+        # Fora da faixa da calibração aplicada: pontos vazados (corrigidos pelo valor da borda) e fundo avermelhado
+        self.c_dual_a_out = self.pw_dual_a.plot([], [], pen=None, symbol='o', symbolSize=7, symbolBrush=None,
+                                                symbolPen=pg.mkPen(DUAL_OUT_CAL_COLOR, width=1.5))
+        self.c_dual_b_out = self.pw_dual_b.plot([], [], pen=None, symbol='s', symbolSize=6, symbolBrush=None,
+                                                symbolPen=pg.mkPen(DUAL_OUT_CAL_COLOR, width=1.5))
+        self.rg_dual_out = []
+        for pw in (self.pw_dual_a, self.pw_dual_b):
+            for _ in range(2):
+                rg = pg.LinearRegionItem(values=(0, 1), movable=False, brush=pg.mkBrush(230, 60, 50, 38),
+                                         pen=pg.mkPen(None))
+                rg.setZValue(-10)
+                rg.setVisible(False)
+                pw.addItem(rg, ignoreBounds=True)
+                self.rg_dual_out.append((pw, rg))
         self.e_dual_b_cal = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen(DUAL_CAL_ERR_COLOR, width=4))
         self.pw_dual_b.addItem(self.e_dual_b_cal)
         self.e_dual_b = pg.ErrorBarItem(x=np.empty(0), y=np.empty(0), pen=pg.mkPen((120, 120, 120)))
@@ -6016,8 +6031,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.e_dual_b.setVisible(True)
         for e in (self.e_dual_a, self.e_dual_b, self.e_dual_a_cal, self.e_dual_b_cal):
             self._set_errbar(e, x=np.empty(0), y=np.empty(0))
-        for c in (self.c_dual_a, self.c_dual_a_fit, self.c_dual_a_bad, self.c_dual_b, self.c_dual_b_fit):
+        for c in (self.c_dual_a, self.c_dual_a_fit, self.c_dual_a_bad, self.c_dual_b, self.c_dual_b_fit,
+                  self.c_dual_a_out, self.c_dual_b_out):
             c.setData([], [])
+        self._dual_cal_regions(self._applied_cal() if kind == 'F' else None)
         for t in self.txt_dual_empty:
             t.setVisible(True)
         # Faixa neutra enquanto não há dados (em vez de -400 a 400 x 0,001)
@@ -7205,6 +7222,24 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.adapt_info = f' | último ponto: τ = {self._fmt_tau(tau)}, {fl}'
         return False
 
+    def _applied_cal(self):
+        """Calibração que a varredura em frequência vai aplicar (Usar marcado e sinal normalizado), ou None."""
+        if not (self.chk_mic_cal.isChecked() and self.chk_dual_norm.isChecked()):
+            return None
+        return load_mic_calibration(self.cmb_mic_cal.currentData())
+
+    def _dual_cal_regions(self, cal):
+        """Fundo avermelhado nos gráficos de S e Δφ fora da faixa da calibração aplicada (eixo x em log10)."""
+        for k, (pw, rg) in enumerate(self.rg_dual_out):
+            if cal is None:
+                rg.setVisible(False)
+                continue
+            lo, hi = np.log10(cal['f'][0]), np.log10(cal['f'][-1])
+            rg.setRegion((-3.0, lo) if k % 2 == 0 else (hi, 7.0))
+            rg.setToolTip(f'Fora da faixa calibrada ({cal["f"][0]:g}–{cal["f"][-1]:g} Hz): a correção usa o valor '
+                          'da borda e não foi medida aqui.')
+            rg.setVisible(True)
+
     def _dual_set_xrange(self, x):
         """Eixo x dos gráficos do Modo Duplo na faixa da varredura (planejada + medida), não a partir de 0/1 Hz:
         o ajuste automático fica só no eixo y."""
@@ -7240,6 +7275,8 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _show_dual_results(self):
         if not getattr(self, 'dual_results', None):     # o seletor de calibração existe antes da aba
+            if hasattr(self, 'rg_dual_out'):
+                self._dual_cal_regions(self._applied_cal() if getattr(self, 'dual_kind', 'F') == 'F' else None)
             return
         if self.txt_dual_empty[0].isVisible():
             for t in self.txt_dual_empty:
@@ -7346,6 +7383,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             dphi_e = np.asarray(pa_e, dtype=float)
         cal_txt = ''
         cal_rel = cal_ph_e = None        # incerteza da calibração em cada ponto (relativa em S; graus em Δφ)
+        out_cal = np.zeros(x.size, dtype=bool)
         if self.chk_mic_cal.isChecked() and not norm:
             cal_txt = ('<span style="color:#606060;">Calibração não aplicada: ela vale para o sinal normalizado '
                        '(marque "Normalizar pelo OPT101").</span>')
@@ -7364,10 +7402,12 @@ class LockInWindow(QtWidgets.QMainWindow):
                     cal_rel = np.where(inside, np.interp(lf, lc, c['sens_rel_e']), np.nan)
                 if c.get('phase_e') is not None:
                     cal_ph_e = np.where(inside, np.interp(lf, lc, c['phase_e']), np.nan)
+                out_cal = ok & ~inside
                 ok &= inside
                 cal_txt = (f'<b>Calibração INMP441:</b> {os.path.basename(c["path"])}'
-                           + (f' ({int((~inside).sum())} ponto(s) fora da faixa '
-                              f'{c["f"][0]:g}–{c["f"][-1]:g} Hz ocultados)' if (~inside).any() else ''))
+                           + (f' <span style="color:{DUAL_OUT_CAL_COLOR};">({int(out_cal.sum())} ponto(s) fora da '
+                              f'faixa calibrada {c["f"][0]:g}–{c["f"][-1]:g} Hz: fundo avermelhado, pontos vazados, '
+                              'corrigidos pelo valor da borda e fora dos ajustes)</span>' if out_cal.any() else ''))
                 if c.get('agree') is not None and c['agree'].any():
                     fa_lo, fa_hi = float(c['f'][c['agree']].min()), float(c['f'][c['agree']].max())
                     out = ok & ((x < fa_lo * 0.999) | (x > fa_hi * 1.001))
@@ -7403,6 +7443,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                     cal_txt += ('<br><span style="color:#d00000;">⚠ Calibração ainda não verificada experimentalmente: '
                                 'confira com uma segunda referência ("Verificar com esta medida", no painel Calibração).</span>')
         self.lbl_dual_cal.setText(cal_txt)
+        self._dual_cal_regions(self.dual_cal)
+        self.c_dual_a_out.setData(x[out_cal], s[out_cal])
+        self.c_dual_b_out.setData(x[out_cal], dphi[out_cal])
         snr_ok = ra / np.maximum(ra_e, 1e-30) >= 10.0 ** (self.audio_snr_alert / 20.0)
         vm = ok & keep & snr_ok
         self.dual_corr = (x[vm], s[vm], dphi[vm]) if self.dual_cal is not None else None

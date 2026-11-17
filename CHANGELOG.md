@@ -86,6 +86,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 (`binario
 - The mounting diagram (Chamber/OPC) moved from the calibration box to the **Frequency sweep** box, The fluctuation of S and Δφ of the point being measured (updated every second) and of the last point, with the τ in use, appears in a status bar at the top of the Dual Mode tab, like the sensor tabs (green within Precision, yellow up to 2×, red above). **Measure A/B** opens the Sweep panel.
 - Frequency sweep plots show **error bars** (±1 SD) on S and Δφ, as the matched PWM sweep already did.
 - The x axis of the Dual Mode plots follows the sweep range (planned + measured points; Signal vs t: 0 to the duration) instead of starting at ~1 Hz when the first points arrive; auto-range stays on the y axis (2026-11-17).
+- With a calibration applied, frequency sweep points outside the calibrated range are no longer hidden: the plots of S and Δφ get a **reddish background** outside that range (shown already before the sweep), and those points appear as hollow red markers, corrected with the value at the calibration edge and left out of the fits and of the verification. Sweeps outside the calibrated range stay allowed (2026-11-17).
 
 #### Added: Settings window
 - **⚙ Settings** button at the end of the excitation bar, in place of **Finish experiment** (which moved into the window). The window has the lock-in trigger (electronic or optical), the OPT101 supply and Finish experiment, each with a short explanation.
