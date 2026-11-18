@@ -178,6 +178,31 @@ LOWF_TAU_FIXED = 4.0       # τ fixo abaixo de LOWF_FMAX com o τ adaptativo des
 TAU_USEFUL_MAX = 4.0       # acima disso: aviso "τ > 4 s não melhora: use repetições" (não bloqueia)
 SWEEP_REPS_DEF = 3
 MEDIAN_EFF = 1.25          # incerteza da mediana = 1,25·DP/√N (eficiência da mediana)
+# Monitor de ruído pelas vizinhas (aprovado por Marcos em 18/11; limites da campanha de aquecimento de 18/11): a cada
+# 1 s, janela Hann de 2 s no INMP441 bruto, q = rms(R em f·0,93, R em f·1,07) / R em f (vizinhas afastadas de múltiplos
+# de 60 Hz). Um som do ambiente aparece nas vizinhas e no sinal ao mesmo tempo: o trecho com q > 2 × mediana de q
+# do próprio ponto é descartado (37 Hz: rms do desvio 27 -> 15 %; 113 Hz: 14 -> 7 %, descartando 7-15 %; >= 487 Hz
+# quase nada). Com mais de 30 % descartado, o ponto é refeito. |desvio| mediano ~ 0,3·q (q estima o erro do ponto).
+NB_REL = 0.07
+NB_K = 2.0
+NB_REDO_FRAC = 0.30
+NB_MAX_REDO = 2
+NB_WIN_S = 2.0
+
+
+def nb_ratio(x, f, fs):
+    """q = rms(R nas vizinhas f·(1 ± 7 %)) / R em f, numa janela Hann (DFT de um bin)."""
+    n = len(x)
+    t = np.arange(n) / fs
+    xw = (x - x.mean()) * np.hanning(n)
+
+    def amp(ff):
+        return abs(np.dot(xw, np.exp(-2j * np.pi * ff * t)))
+    lo = soi_serie.mains_suggest(f * (1.0 - NB_REL), soi_serie.MAINS_SWEEP_SHIFT_HZ)
+    hi = soi_serie.mains_suggest(f * (1.0 + NB_REL), soi_serie.MAINS_SWEEP_SHIFT_HZ)
+    return float(np.sqrt(0.5 * (amp(lo) ** 2 + amp(hi) ** 2)) / max(amp(f), 1e-30))
+
+
 # Perto da rede (|f - k·60| <= 3 Hz): funções em soi_serie (mains_near, mains_suggest, mains_msg, avoid_mains)
 
 
@@ -5038,7 +5063,16 @@ class LockInWindow(QtWidgets.QMainWindow):
             'em 113 Hz e ~3–4 min em 37 Hz (a deriva do aquecimento da célula passa a dominar). O tempo rende mais\n'
             'em repetições (mediana) do que em τ.')
         self.lbl_dual_taumax.setVisible(False)
-        adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
+        self.chk_dual_nb = QtWidgets.QCheckBox('Descartar ruído do ambiente')
+        self.chk_dual_nb.setChecked(True)
+        self.chk_dual_nb.setToolTip(
+            f'Monitor de ruído pelas vizinhas: a cada 1 s o SOI mede, no INMP441 bruto, q = R nas frequências vizinhas\n'
+            f'(f ± {100 * NB_REL:.0f} %) / R em f. Um som do ambiente (porta, voz, carro) aparece nas vizinhas junto com o\n'
+            f'sinal: o trecho da média com q > {NB_K:g} × a mediana de q do ponto é descartado e, com mais de\n'
+            f'{100 * NB_REDO_FRAC:.0f} % descartado, a média do ponto é refeita (até {NB_MAX_REDO}×). Campanha de 18/11: o desvio\n'
+            'cai de 27 para 15 % em 37 Hz e de 14 para 7 % em 113 Hz; acima de ~500 Hz quase nada é descartado.\n'
+            'O CSV ganha as colunas Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido (q ~ 3× o erro típico do ponto).')
+        adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
                      ('Precisão:', self.sp_dual_adapt_tol), ('', self.chk_dual_blocks), ('', self.sp_dual_blocks),
                      ('', self.lbl_dual_taumax))
         # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
@@ -7168,6 +7202,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.adapt_tau_cur = None
         self.adapt_taus = []                # τ usado em cada ponto gravado
         self.adapt_q_hist = []              # (q, τ) dos pontos gravados: o τ seguinte usa a mediana dos últimos 3
+        self.dual_nb = []                   # (q mediano, % descartado, refeitas) do monitor das vizinhas
         if not refine:
             self.dual_pinfo = []            # τ, tempo, refazimentos e flutuação de cada ponto (colunas do CSV)
             self.dual_params['t_start'] = datetime.now()
@@ -7226,6 +7261,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.adapt_redo = 0
         self.adapt_drift_wait = 0
         self.adapt_blocks, self.adapt_block_len = 1, None
+        self.nb_redo = 0
         self.point_t0 = now
         self.dual_opt = []
         with self.audio_lock:
@@ -7305,6 +7341,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         if adaptive and self._adapt_point(v, now):
             return                      # ponto refeito com τ maior
+        nb = self._nb_active()
+        if nb and not self._nb_filter(v, now):
+            return                      # média refeita: muito ruído do ambiente (vizinhas)
         self._show_live_fluct(v, head, elapsed, final=True)
         with self.audio_lock:
             aud = self.dual_aud
@@ -7347,6 +7386,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.dual_ref_cfg.append(cfg)
                 if len(getattr(self, 'dual_pinfo', [])) == len(self.dual_results) - 1:
                     self.dual_pinfo.append(pinfo)
+                if nb and len(getattr(self, 'dual_nb', [])) == len(self.dual_results) - 1:
+                    self.dual_nb.append(getattr(self, 'nb_point', (float('nan'), float('nan'), 0)))
             self._show_dual_results()
         else:
             self.flash(f'Modo Duplo: sem dados em {head} (OPT101 e INMP441 conectados?)')
@@ -7404,6 +7445,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                               s_med[i] * ro_med[i] * np.nan_to_num(u_s[i]) / 100.0,
                               pa_med[i], np.nan_to_num(u_p[i]), po_med[i], 0.0) for i in range(m)]
         self.dual_pinfo = []
+        self.dual_nb = []
         self.dual_excluded = set()
         self.dual_ref_cfg = self.dual_ref_cfg[:m] if len(self.dual_ref_cfg) >= m else []
         self.dual_params['values'] = [float(v) for v in x]
@@ -8411,6 +8453,12 @@ class LockInWindow(QtWidgets.QMainWindow):
                             'média; Deriva_* = 2ª metade - 1ª da última média (S, Δφ, R do OPT101, R do INMP441)\n')
                 if q.get('mod') == 'optica':
                     f.write('# Modulacao = optica (chopper; frequência e fase de referência detectadas no OPT101)\n')
+                nbcol = med is None and len(getattr(self, 'dual_nb', [])) == len(self.dual_results) > 0
+                if nbcol:
+                    f.write(f'# Ruido das vizinhas: Ruido_vizinhas_q = mediana de q = rms(R em f*(1±{NB_REL:g})) / R em f '
+                            f'(janela Hann de {NB_WIN_S:g} s, 1 por segundo; |erro| tipico ~0,3*q); Descartado_Pct = '
+                            f'parte da média descartada (q > {NB_K:g} x mediana de q do ponto); Refeito_ruido = médias '
+                            f'refeitas (mais de {100 * NB_REDO_FRAC:.0f} % descartado)\n')
                 if q.get('mains_moved'):
                     f.write('# Pontos deslocados da rede (Evitar múltiplos de 60 Hz): '
                             + ', '.join(f'{a:g} -> {b:g} Hz' for a, b in q['mains_moved']) + '\n')
@@ -8456,7 +8504,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                         'INMP441_Fase_DP,OPT101_Fase_Graus,OPT101_Fase_DP' + (',Frequencia_DP_Hz' if ext_cols else '')
                         + (',' + ','.join(DUAL_POINT_COLUMNS + DUAL_DRIFT_COLUMNS) if pcol else '')
                         + (',Cal_S_DP_Pct,Cal_Fase_DP_Graus' if ccol else '')
-                        + (',S,N_repeticoes,Incerteza_S_Pct,Incerteza_Fase_Graus' if med is not None else '') + '\n')
+                        + (',S,N_repeticoes,Incerteza_S_Pct,Incerteza_Fase_Graus' if med is not None else '')
+                        + (',Ruido_vizinhas_q,Descartado_Pct,Refeito_ruido' if nbcol else '') + '\n')
                 for row in (med['rows'] if med is not None else ()):
                     f.write(f'{row[0]:.3f},{row[1]:.6g},{row[2]:.4g},{row[3]:.6g},{row[4]:.4g},'
                             f'{row[5]:.3f},{row[6]:.3f},{row[7]:.3f},{row[8]:.3f},{row[9]:.6g},{row[10]:d},'
@@ -8467,7 +8516,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                             + (f',{self.dual_fstd[i]:.4g}' if ext_cols else '')
                             + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g}'.format(
                                 *(tuple(self.dual_pinfo[i]) + (float('nan'),) * 9)[:9]) if pcol else '')
-                            + (f',{100 * c_rel[i]:.3g},{c_ph[i]:.3g}' if ccol else '') + '\n')
+                            + (f',{100 * c_rel[i]:.3g},{c_ph[i]:.3g}' if ccol else '')
+                            + (',{:.3g},{:.3g},{:d}'.format(float(self.dual_nb[i][0]), float(self.dual_nb[i][1]),
+                                                              int(self.dual_nb[i][2])) if nbcol else '') + '\n')
             self._grab_dual_plots().save(os.path.join(self._save_dir(), stem + '.png'))
             self._session_add(csv_path, os.path.join(self._save_dir(), stem + '.png'))
             if self.dual_cal is not None:
@@ -11234,6 +11285,8 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_last_sequence = (sequence + len(samples)) & 0xFFFFFFFF
             if self.audio_rec is not None:
                 self.audio_rec.push(sequence, samples)
+            if self.audio_lockin_enabled and not self.ext_mode:
+                self._nb_feed(samples)
             if self.audio_fft_enabled:
                 self._store_audio_samples(samples)
             if self.audio_lockin_enabled:
@@ -11241,6 +11294,70 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_received_samples += len(samples)
 
     audio_rec = None          # AudioRecorder (SOI_GRAVAR_AUDIO)
+    nb_buf = np.empty(0, dtype=np.float32)
+    nb_cnt = 0
+    nb_q = deque(maxlen=600)  # (time.time(), f, q) do monitor de ruído pelas vizinhas, 1 por segundo
+
+    def _nb_feed(self, samples):
+        """Thread de áudio: guarda 2 s do INMP441 (média de 4 amostras, 12 kS/s) e calcula q a cada 1 s."""
+        n = (len(samples) // 4) * 4
+        if n <= 0:
+            return
+        fs = AUDIO_FS_REAL / 4.0
+        x = np.asarray(samples[:n], dtype=np.float64).reshape(-1, 4).mean(axis=1) / 8388608.0
+        size = int(NB_WIN_S * fs)
+        self.nb_buf = np.concatenate((self.nb_buf, x))[-size:]
+        self.nb_cnt += len(x)
+        if self.nb_cnt >= fs and len(self.nb_buf) >= size:
+            self.nb_cnt = 0
+            f = float(self.audio_freq)
+            if f > 0:
+                try:
+                    self.nb_q.append((time.time(), f, nb_ratio(self.nb_buf, f, fs)))
+                except Exception:
+                    pass
+
+    def _nb_active(self):
+        return (self.dual_kind == 'F' and self.dual_src in ('F', 'M') and not self.ext_mode
+                and self.chk_dual_nb.isChecked())
+
+    def _nb_filter(self, v, now):
+        """Fim da média de um ponto: tira os trechos com ruído do ambiente (q > 2 × mediana de q do ponto) e refaz a
+        média se mais de 30 % foi descartado. False = ponto refeito (a média recomeça)."""
+        fa = float(self.audio_freq)
+        t0 = getattr(self, 'point_t0', 0.0)
+        wall0 = time.time() - (now - t0)                  # point_t0 está em perf_counter; nb_q em time.time()
+        qs = [(t, q) for t, f, q in list(self.nb_q)
+              if abs(f - fa) <= 0.01 * max(fa, 1e-9) and t >= wall0 + NB_WIN_S and np.isfinite(q)]
+        with self.audio_lock:
+            aud = list(self.dual_aud)
+        if len(qs) < 3 or not aud or len(aud[0]) < 3:
+            self.nb_point = (float('nan'), float('nan'), getattr(self, 'nb_redo', 0))
+            return True
+        qv = np.array([q for _, q in qs])
+        med = float(np.median(qv))
+        bad_t = [t for t, q in qs if q > NB_K * med]
+        tau = float(self.sp_audio_tau.value())
+        # trecho do lock-in em tc (média ~τ para trás) x janela de q em tb (2 s para trás): sobrepõem se tb em (tc-τ-1, tc+1)
+        good = [c for c in aud if not any(c[2] - tau - 1.0 < tb < c[2] + 1.0 for tb in bad_t)]
+        frac = 1.0 - len(good) / len(aud)
+        if frac > NB_REDO_FRAC and getattr(self, 'nb_redo', 0) < NB_MAX_REDO:
+            self.nb_redo = getattr(self, 'nb_redo', 0) + 1
+            print(f'  {v:g} Hz: {100 * frac:.0f} % da média com ruído do ambiente (vizinhas): refazendo a média '
+                  f'({self.nb_redo}/{NB_MAX_REDO})', flush=True)
+            self.dual_state = 'MEASURING'
+            self.dual_timer = now
+            self.dual_opt = []
+            with self.audio_lock:
+                self.dual_aud = []
+            return False
+        if good and len(good) < len(aud):
+            with self.audio_lock:
+                self.dual_aud = good
+        q_kept = [q for t, q in qs if q <= NB_K * med]
+        self.nb_point = (float(np.median(q_kept)) if q_kept else med, 100.0 * frac if good else 0.0,
+                         getattr(self, 'nb_redo', 0))
+        return True
 
     def _start_audio_rec(self):
         """SOI_GRAVAR_AUDIO=<pasta>: grava o áudio bruto do INMP441 (análise offline do ruído acústico)."""
@@ -11300,7 +11417,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.audio_sweep_p.append(ph)
                 self.audio_sweep_count += r.size
             if getattr(self, 'dual_state', 'IDLE') == 'MEASURING':
-                self.dual_aud.append((r, ph))
+                self.dual_aud.append((r, ph, time.time()))
 
     def _update_audio_plots(self, now):
         wave_visible = self.plot_audio_wave.isVisible()
@@ -11717,7 +11834,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
                   'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40', 'chk_dual_blocks',
-                  'chk_dual_cal_err', 'chk_dual_out_red')
+                  'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_dual_p_deg', 'cmb_dual_p_target',
@@ -11922,6 +12039,8 @@ def _headless_args(argv):
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
     ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (padrão desde 18/11; espera 9τ, média 1τ; '
                     '4 s abaixo de 40 Hz)')
+    ap.add_argument('--sem-descarte', action='store_true',
+                    help='não descarta os trechos com ruído do ambiente (monitor das vizinhas f ± 7 %%)')
     ap.add_argument('--sem-evitar-rede', action='store_true',
                     help='não desloca os pontos da varredura perto de múltiplos de 60 Hz (±3 Hz)')
     ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (antes o padrão; --precisao também liga)')
@@ -12135,6 +12254,7 @@ def run_headless(argv):
     if a.repeticoes is not None:
         win.sp_dual_reps.setValue(max(1, a.repeticoes))
     win.chk_dual_avoid60.setChecked(not a.sem_evitar_rede)
+    win.chk_dual_nb.setChecked(not a.sem_descarte)
     _v, moved = soi_serie.avoid_mains(win._dual_planned('F', raw=True))
     if moved:
         print(('Aviso: pontos perto de múltiplos de 60 Hz: ' if a.sem_evitar_rede else
@@ -12196,6 +12316,8 @@ def run_headless(argv):
                     print(f'[{n}/{len(vals)}] {r[0]:g} Hz  S = {r[3] / max(r[1], 1e-30):.4g}  '
                           f'Δφ = {r[5] - r[7]:.2f}°  τ = {pi[0]:.3g} s  {pi[1]:.0f} s'
                           + (f'  (refeito {pi[2]:.0f}×)' if pi[2] else '')
+                          + (f'  q {win.dual_nb[-1][0]:.2g}, descartado {win.dual_nb[-1][1]:.0f} %'
+                             if len(getattr(win, 'dual_nb', [])) == n else '')
                           + f'  flutuação S {pi[3]:.2g} %, Δφ {pi[4]:.2g}°   [{win._fmt_time(time.time() - t0)}]', flush=True)
     except KeyboardInterrupt:
         print('Cancelado pelo usuário.')
