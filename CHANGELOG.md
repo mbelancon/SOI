@@ -10,6 +10,42 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-18
+
+Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.
+
+### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py`)
+
+#### Added: Measurement Series tab ("Medidas em Série")
+- **Why:** long campaigns (drift, noise, repeated sweeps) were run from .bat files with the headless mode, with
+  nothing to watch on screen. The new tab builds, saves and runs the same sequences inside the interface.
+- Step types: **Sweep f** (the Dual Mode frequency sweep: start/end f, log points, τ max + precision or fixed τ,
+  allow averages, PWM, warm-up), **Signal vs t** (frequency, PWM, τ, point every, duration, warm-up; the frequency
+  accepts a list such as `37;113;487`, one measurement per frequency, `{f}` in the name), **Pause** (PWM 0 for N
+  minutes, not recorded) and **Notice** (shows a text and waits for Continue, e.g. to change the sample).
+- Each step can be repeated N times (`_rep1`, `_rep2`...), the whole series N times (`_ciclo1`...), and the series
+  can wait for a start time (laser stopped meanwhile; the next time the clock shows it). Optional PWM 0 at the end
+  of each step and of the series.
+- Run controls: Start, Pause after this step, Continue, Skip step and Stop (the measurement in progress is ended
+  and saved with the points already measured). Status line with the remaining time of the step and of the series
+  and the expected end time; a plot of the measurement in progress; the other tabs and the top bar are locked
+  while the series runs. Closing the window during a series asks first and saves what was measured.
+- Each run gets its own folder `Medidas\Serie_<base name>_<date_time>\` with the CSV/PNG files (names: base name +
+  step name, same formats and columns as before), a copy of the series file (open it again to repeat the run)
+  and `resumo.csv` (one line per measurement: start, end, status, file).
+- Series file `*.serie.txt` (UTF-8 text, default folder `interface\Series`): one step per line with the same
+  options as the headless command line (`sinal-t --nome 2_f{f} --f 37;113;487 --duracao 20`, `varredura --fmin 20
+  --fmax 2440 --n 25 --tau 4 --precisao 2 --repetir 3`, `pausa --duracao 10`, `aviso "text"`), header keys
+  `nome_base`, `inicio`, `repetir`, `fim`; `#!` marks an unchecked step. Keys stay in Portuguese in both languages.
+- Headless: `soi_controller.py --serie file.serie.txt [--amostra name] [--simulado]` runs the same file without
+  a window (a Notice waits for Enter in the terminal).
+- Simulated mode works as usual (same sweep and Signal vs t code).
+
+#### Changed
+- Unattended runs: during a series the "below 40 Hz" confirmation and the calibration-conditions check of the
+  frequency sweep do not open dialogs (the warning goes to the log).
+- The Dual Mode PNG is drawn at screen size even when the Dual Mode tab is hidden.
+
 ## [2.3.0] - 2026-11-17
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.

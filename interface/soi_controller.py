@@ -14,7 +14,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.3.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.4.0'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -36,6 +36,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 import soi_i18n  # idioma da interface (português ou inglês, conforme o Windows ou SOI_LANG)
+import soi_serie  # Medidas em Série (fila de varreduras, Sinal x t, pausas e avisos)
 
 soi_i18n.install(QtWidgets, QtGui, pg)
 
@@ -198,6 +199,7 @@ PWM_PRESETS = (0.0, 10.0, 100.0)  # botões de um clique ao lado do campo do PWM
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__)), 'Medidas')
+SERIES_DIR = os.path.join(os.path.dirname(MEDIDAS_DIR), 'Series')   # arquivos *.serie.txt (Medidas em Série)
 MAX_POINTS = 200          # Pontos exibidos de R e Fase
 MAX_RX_BYTES = 4_000_000  # Proteção contra acúmulo de bytes se a GUI travar (10 s a 200 kS/s; múltiplo de 2)
 MAX_SCOPE_POINTS = 120_000  # pontos guardados no osciloscópio; acima disso a janela é reduzida por média
@@ -4868,6 +4870,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         audio_layout.addLayout(audio_plots)
         tabs.addTab(audio_panel, 'INMP441')
         self._build_dual_tab(tabs)
+        self.series_tab = soi_serie.SeriesTab(self, MEDIDAS_DIR, SERIES_DIR)
+        tabs.addTab(self.series_tab, 'Medidas em Série')
 
         # Barra de status da janela (visível em todas as abas): avisos, tarefa em andamento e conexão
         sb = self.statusBar()
@@ -6427,6 +6431,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                + 'Continuar?')
         print(f'Aviso: varredura com {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g}–{max(low):g} Hz): '
               'exige amostra de alto SNR.')
+        if getattr(self, 'series_active', False):     # medidas em série: sem janela de confirmação
+            return True
         ans = QtWidgets.QMessageBox.warning(
             self, f'Varredura abaixo de {LOWF_FMAX:g} Hz', msg,
             QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -7004,7 +7010,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         values = list(refine[0]) if refine else self._dual_planned(kind)
         if not values:
             return
-        if kind == 'F' and self.btn_dual_sweeps_panel.isChecked() and not self._check_cal_conditions():
+        if (kind == 'F' and self.btn_dual_sweeps_panel.isChecked() and not getattr(self, 'series_active', False)
+                and not self._check_cal_conditions()):
             return
         if not refine and not self._confirm_lowf(kind, values):
             return
@@ -8150,8 +8157,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                 stem = f"{base}_editado_{now_dt.strftime('%H%M%S')}"
             else:
                 stem += '_editado'
-        os.makedirs(MEDIDAS_DIR, exist_ok=True)
-        csv_path = os.path.join(MEDIDAS_DIR, stem + '.csv')
+        os.makedirs(self._save_dir(), exist_ok=True)
+        csv_path = os.path.join(self._save_dir(), stem + '.csv')
         tau = f"tau = {q['tau']:g} s (integração longa)" if q['tau'] else 'tau dos filtros dos lock-ins'
         if q.get('adapt'):
             taus = getattr(self, 'adapt_taus', [])
@@ -8228,8 +8235,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                             + (',{:.4g},{:.1f},{:.0f},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g},{:.3g}'.format(
                                 *(tuple(self.dual_pinfo[i]) + (float('nan'),) * 9)[:9]) if pcol else '')
                             + (f',{100 * c_rel[i]:.3g},{c_ph[i]:.3g}' if ccol else '') + '\n')
-            self.dual_plots.grab().save(os.path.join(MEDIDAS_DIR, stem + '.png'))
-            self._session_add(csv_path, os.path.join(MEDIDAS_DIR, stem + '.png'))
+            self._grab_dual_plots().save(os.path.join(self._save_dir(), stem + '.png'))
+            self._session_add(csv_path, os.path.join(self._save_dir(), stem + '.png'))
             if self.dual_cal is not None:
                 self._session_add(*self._calibration_files(self.dual_cal['path']))
             if resave:
@@ -9721,6 +9728,148 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         self._set_fit_params(list(popt))
         self._show_fit(list(popt), t, v)
+
+    # ------------------------------------------------------------ Medidas em Série (soi_serie.py)
+    version = __version__
+
+    def _save_dir(self):
+        """Pasta onde as medidas do Modo Duplo são gravadas: a da série em andamento ou Medidas."""
+        return getattr(self, 'save_dir_override', None) or MEDIDAS_DIR
+
+    def _grab_dual_plots(self):
+        """Imagem dos gráficos do Modo Duplo para o PNG. Com a aba escondida (ex.: durante uma série, na aba
+        Medidas em Série), mostra o Modo Duplo por um instante para os gráficos terem o tamanho da tela."""
+        w = self.dual_plots
+        if w.isVisible():
+            return w.grab()
+        cur = self.tabs.currentIndex()
+        idx = next((i for i in range(self.tabs.count()) if self.tabs.widget(i).isAncestorOf(w)), None)
+        if idx is None:
+            return w.grab()
+        self.tabs.setCurrentIndex(idx)
+        # só os eventos de layout (nada de processEvents: os timers da medida e da série rodariam no meio do salvamento)
+        for _ in range(3):
+            QtWidgets.QApplication.sendPostedEvents(None, QtCore.QEvent.Type.LayoutRequest)
+        img = w.grab()
+        self.tabs.setCurrentIndex(cur)
+        return img
+
+    def _series_sweep_estimate(self, p):
+        """(mínimo, máximo) em s de uma varredura em frequência de uma série, com os parâmetros da etapa
+        (as mesmas contas de _dual_times, sem mexer nos campos do quadro)."""
+        f0, f1 = sorted((float(p['fmin']), float(p['fmax'])))
+        vals = np.geomspace(f0, f1, max(2, int(p['n'])))
+        tau = float(p['tau'])
+        lo = hi = 0.0
+        for v in vals:
+            if p.get('tau_fixo'):
+                t = 9.0 * tau + 0.3 + max(0.5, tau)
+                lo, hi = lo + t, hi + t
+            elif not p.get('adapt_tudo') and lowf_band_tau(v) is not None:
+                st, me = adapt_times(tau)
+                t = st + me * max(1, int(p.get('medias', 1)))
+                lo, hi = lo + t, hi + t
+            else:
+                lo += sum(adapt_times(adapt_tau_min(v)))
+                hi += sum(adapt_times(max(adapt_tau_min(v), tau)))
+        w = float(p.get('aquecer', 0.0) or 0.0) + soi_serie.SeriesRunner.SETTLE_S
+        return lo + w, hi + w
+
+    def _series_widgets(self):
+        sp0, sp1, space, spn, _ = self.dual_fw['F']
+        return (self.cmb_mod, space, sp0, sp1, spn, self.chk_dual_adapt, self.chk_dual_adapt40, self.chk_dual_blocks,
+                self.sp_dual_blocks, self.dual_tau_w['F'], self.sp_dual_adapt_tol, self.sp_dt_f, self.sp_dt_pwm,
+                self.sp_dt_tau, self.sp_dt_dt, self.sp_dt_dur)
+
+    def _series_snapshot(self):
+        """Valores dos campos que a série muda (restaurados no fim), mais a frequência e o PWM."""
+        out = []
+        for w in self._series_widgets():
+            if isinstance(w, QtWidgets.QComboBox):
+                out.append(w.currentIndex())
+            elif isinstance(w, QtWidgets.QAbstractButton):
+                out.append(w.isChecked())
+            else:
+                out.append(w.value())
+        return out, self.sp_freq.value(), self.sp_power.value()
+
+    def _series_restore(self, snap):
+        vals, f, pwm = snap
+        for w, v in zip(self._series_widgets(), vals):
+            if isinstance(w, QtWidgets.QComboBox):
+                w.setCurrentIndex(v)
+            elif isinstance(w, QtWidgets.QAbstractButton):
+                w.setChecked(v)
+            else:
+                w.setValue(v)
+        self._apply_adapt_ui()
+        self._set_spin(self.sp_freq, f)
+        self.apply_frequency(f)
+        self.sp_power.setValue(pwm)
+        self.on_power(self.sp_power.value())
+
+    def _series_apply(self, tipo, p):
+        """Põe os parâmetros de uma etapa da série nos quadros do Modo Duplo (como o modo sem janela)."""
+        self.cmb_mod.setCurrentIndex(0)               # modulação eletrônica (o STM32 fixa/varre a frequência)
+        if tipo == 'sinal-t':
+            self.sp_dt_f.setValue(p['f'])
+            self.sp_dt_pwm.setValue(p['pwm'])
+            self.sp_dt_tau.setValue(p['tau'])
+            self.sp_dt_dt.setValue(p['dt'])
+            self.sp_dt_dur.setValue(p['duracao'])
+            return
+        sp0, sp1, space, spn, _ = self.dual_fw['F']
+        space.setCurrentIndex(0)                       # pontos em escala log
+        sp0.setValue(p['fmin'])
+        sp1.setValue(p['fmax'])
+        spn.setValue(p['n'])
+        self.chk_dual_adapt.setChecked(not p['tau_fixo'])
+        self.chk_dual_adapt40.setChecked(not p.get('adapt_tudo', False))
+        self.chk_dual_blocks.setChecked(int(p.get('medias', 1)) > 1)
+        if int(p.get('medias', 1)) > 1:
+            self.sp_dual_blocks.setValue(int(p['medias']))
+        self._apply_adapt_ui()
+        self.dual_tau_w['F'].setValue(p['tau'])
+        if not p['tau_fixo']:
+            self.sp_dual_adapt_tol.setValue(p['precisao'])
+
+    def _series_stop_sweep(self):
+        """Encerra a varredura em frequência em andamento e salva os pontos já medidos (Parar/Pular da série)."""
+        if not self.dual_active:
+            return
+        if self.dual_state in ('SETTLING', 'MEASURING'):
+            self.flash('Ponto em andamento descartado.')
+        self._end_dual_sweep()
+        if self.dual_results:
+            self.dual_params['values'] = [r[0] for r in self.dual_results]
+            self._show_dual_results()
+            self._export_dual()
+
+    def _series_lock(self, on):
+        """Durante uma série: as outras abas e a barra de cima ficam bloqueadas (a placa está em uso). Pode ser
+        chamada de novo a cada etapa (as medidas reabilitam campos quando terminam)."""
+        ws = []
+        for i in range(self.tabs.count()):
+            page = self.tabs.widget(i)
+            if page is not self.series_tab:
+                for cls in (QtWidgets.QAbstractButton, QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox,
+                            QtWidgets.QLineEdit):
+                    ws += page.findChildren(cls)
+        for name in ('sp_freq', 'sp_power', 'ed_sample', 'cmb_mic_cal', 'chk_mic_cal', 'cmb_cell', 'chk_sim',
+                     'btn_settings', 'cmb_mod'):
+            w = getattr(self, name, None)
+            if w is not None:
+                ws.append(w)
+        ws += [b for b in getattr(self, 'pwm_quick_btns', [])]
+        for w in ws:
+            was = w.property('_series_was')
+            if on:
+                if was is None:
+                    w.setProperty('_series_was', w.isEnabled())
+                w.setEnabled(False)
+            elif was is not None:
+                w.setEnabled(bool(was))
+                w.setProperty('_series_was', None)
 
     def _sample_name(self):
         '''Nome da amostra pronto para nome de arquivo ('' se vazio).'''
@@ -11381,6 +11530,15 @@ class LockInWindow(QtWidgets.QMainWindow):
                        '(a tela ainda pode apagar; não feche a tampa do notebook).', 6.0)
 
     def closeEvent(self, event):
+        if getattr(self, 'series_tab', None) is not None and self.series_tab.runner.active:
+            ans = QtWidgets.QMessageBox.question(
+                self, 'Medidas em Série', 'Uma medida em série está em andamento. Parar a série (salvando o que já '
+                'foi medido) e fechar?', QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No)
+            if ans != QtWidgets.QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.series_tab.on_close()
         try:
             # Durante uma varredura os campos guardam o ponto atual, não a escolha do usuário
             if not self.sweep_active and not self.dual_active:
@@ -11458,6 +11616,8 @@ def _headless_args(argv):
     ap.add_argument('--dt', type=float, default=5.0, help='Sinal x t: um ponto a cada dt segundos (padrão 5)')
     ap.add_argument('--duracao', type=float, default=10.0, help='Sinal x t: duração em minutos (padrão 10)')
     ap.add_argument('--desligar', action='store_true', help='no fim, PWM 0 (laser parado; para esfriar entre medidas)')
+    ap.add_argument('--serie', default=None, metavar='ARQUIVO',
+                    help='roda uma série (*.serie.txt, a mesma da aba Medidas em Série); --amostra troca o nome base')
     return ap.parse_args(argv)
 
 
@@ -11507,6 +11667,37 @@ def _headless_time(win, a, pump):
     return 0 if csv else 7
 
 
+def _headless_serie(win, a, serie, pump):
+    """Medidas em série sem janela (--serie): o mesmo SeriesRunner da aba, dirigido pelo laço de eventos."""
+    runner = win.series_tab.runner
+    runner.log = lambda t: print(t, flush=True)
+
+    def aviso(text):
+        print(f'\n*** AVISO: {text}', flush=True)
+        if sys.stdin is not None and sys.stdin.isatty():
+            input('    Tecle Enter para continuar... ')
+        else:
+            print('    (sem terminal: seguindo sem esperar)', flush=True)
+    runner.on_aviso = aviso
+    jobs = soi_serie.expand(serie)
+    lo, hi, av = runner.total_estimate(jobs)
+    print(f'Série {a.serie}: {len(jobs)} medidas, tempo estimado {soi_serie.fmt_dur(hi)}'
+          + (f' (+ {av} aviso(s))' if av else '') + ('; SIMULADO' if a.simulado else ''), flush=True)
+    if not runner.start(serie, a.serie):
+        print('ERRO: a série não começou (veja as mensagens acima).')
+        win.close()
+        return 6
+    try:
+        while runner.active:
+            pump(0.5)
+    except KeyboardInterrupt:
+        print('Interrompido: parando a série (salva o que já foi medido).')
+        runner.stop()
+    st = list(runner.status.values())
+    win.close()
+    return 0 if st and all(x == 'concluída' for x in st) else 7
+
+
 def run_headless(argv):
     """Varredura em frequência do Modo Duplo sem janela: a mesma LockInWindow, fora da tela (Qt offscreen),
     dirigida pelos argumentos. Devolve o código de saída (0 = CSV salvo)."""
@@ -11516,6 +11707,16 @@ def run_headless(argv):
         except Exception:
             pass
     a = _headless_args(argv)
+    serie = None
+    if a.serie:
+        try:
+            serie = soi_serie.load(a.serie)
+        except (OSError, ValueError) as e:
+            print(f'ERRO: série {a.serie}: {e}')
+            return 8
+        if a.amostra is not None:
+            serie['nome_base'] = a.amostra
+        a.pwm = 0.0                                # laser parado até a primeira etapa
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
     os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.*=false')
     if a.simulado:
@@ -11617,6 +11818,8 @@ def run_headless(argv):
         print(f'Warm-up: laser em PWM {win.sp_power.value():g} % por {a.aquecer:g} s...', flush=True)
         pump(a.aquecer)
         print('Warm-up concluído.', flush=True)
+    if serie is not None:
+        return _headless_serie(win, a, serie, pump)
     if a.sinal_t:
         return _headless_time(win, a, pump)
     win.btn_dual_sweeps_panel.setChecked(False)    # sem o aviso de calibração (janela modal)
@@ -11749,7 +11952,7 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()      # executável (PyInstaller): o processo leitor da serial
     setup_log()
-    if any(k in sys.argv[1:] for k in ('--varredura', '--sinal-t', '-h', '--help')):
+    if any(k in sys.argv[1:] for k in ('--varredura', '--sinal-t', '--serie', '-h', '--help')):
         sys.exit(run_headless(sys.argv[1:]))
     if sys.platform == 'win32':
         # Sem isto, rodando pelo python.exe, a barra de tarefas mostra o ícone do Python.
