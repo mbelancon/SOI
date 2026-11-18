@@ -28,11 +28,13 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
   figuras), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
 
 ## Versões
-- `main`: 2.3.0 (PR #5, 17/11), firmware 2.0.0. v1.0.0 publicada em 2026-10-27; ainda sem release da 2.3.0.
+- `main`: 2.3.0 (PR #5, 17/11), firmware 2.0.0. v1.0.0 publicada em 2026-10-27; v2.3.0 publicada em 17/11 (Releases, exe + zip).
 - Versões de firmware e interface são independentes (ver CLAUDE.md).
 
 ## Próximo PR (só quando o Marcos pedir)
-Nada pendente: tudo o que estava aprovado entrou no PR #5.
+Na branch da thread "Criar aba Medidas em Série": aba Medidas em Série e descarte automático por frequências
+vizinhas (lock-in em f·0,93 e f·1,07; descarta o segundo com q > 2× a mediana; refaz o ponto se > 30 %; colunas
+Ruido_vizinhas_q, Descartado_Pct, Refeito_ruido).
 
 ## Campanha de deriva (16–17/11, alumínio) — descobertas
 Dados + relatório: `interface\Medidas\Campanha_deriva_20261116\Campanha_deriva_20261116.zip`
@@ -46,6 +48,18 @@ Dados + relatório: `interface\Medidas\Campanha_deriva_20261116\Campanha_deriva_
   do ponto (subestima no grave, superestima no agudo). Proposta de regra com blocos e incerteza u: no relatório,
   ainda não implementada.
 - 300 Hz (harmônico de 60 Hz) tem fundo no OPT101: evitar múltiplos de 60 Hz em frequência fixa.
+
+## Campanhas de ruído e aquecimento (18/11) — descobertas
+Relatório: Claude Doc "SOI noise and drift study (Nov 2026)". Peças de Al 30×20×18 mm e Al pequena.
+- Deriva de S ao ligar o laser é maior em baixa f e na peça menor (que aquece ~2× mais rápido). O efeito direto
+  da temperatura do gás (1/T0) explica só ~0,3–0,5 %. Hipóteses: vazamento da célula deslocando o corte de baixa f
+  (testar pela deriva da fase e com o furo vedado) e contato/bordas da peça.
+- OPT101: queda rápida de ~4 % ao ligar é potência real do laser. Oscilação lenta de ~1 % (período ~36 min) em
+  aberto: ar-condicionado (liga 8h–18h) ou speckle da luz espalhada no espelho que alimenta o OPT101 (solução:
+  lamínula como divisor de feixe + difusor; diagnóstico com webcam).
+- Termopar: o salto ao ligar o laser é interferência do PWM pelo contato com o Al (teflon reduz).
+- Noite 18→19/11 (até ~9h40, ar-condicionado desligado): fundo com PWM 0, varreduras crescente + 12 frequências
+  embaralhadas e 90 min a 487 Hz desde frio.
 
 ## INMP441 em baixa frequência
 - Datasheet: especificado para f > 60 Hz. Mede abaixo, mas com mais ruído próprio, somado ao ruído da sala.
@@ -77,7 +91,12 @@ Dados + relatório: `interface\Medidas\Campanha_deriva_20261116\Campanha_deriva_
 ## Pendências / ideias
 - LEMBRETE: medida de 24 h do ruído acústico (fundo com PWM 0, Sinal x t em ~10, 30 e 100 Hz) para ver a
   variação com o horário (aulas, rodovia).
-- Segundo INMP441 (referência de ruído ambiente) — será feito em breve.
+- Segundo INMP441 de referência fora da célula (L/R no mesmo I2S): subtração no PC com H calibrado ou LMS;
+  calibrar com chirp numa caixa de som em várias posições. Verificar banda USB para 2 canais a 48 kHz.
+- Isolar a mesa: isopor ou espuma sob o board onde se monta a PAS (massa + amortecedor).
+- Sensor NTC na parede da célula lido pelo ADC1 (canal injetado no PA1, sem perder amostras) — proposta,
+  aguarda aprovação (muda firmware e interface).
+- Célula diferencial (tipo Miklós) para cancelar ruído ambiente — ideia futura.
 - Regra do τ com blocos e incerteza u (proposta no relatório da campanha), se aprovada.
 - Subtração do fundo do ventilador no modo óptico (feixe bloqueado); firmware opcional com entrada TTL no bit 14.
 - Itens ⚠ em docs/01 e docs/02: driver do laser, alimentação do OPT101, descrição da célula.
