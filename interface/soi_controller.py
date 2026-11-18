@@ -2548,6 +2548,8 @@ class AverageAccumulator:
         self.fs = fs
         self.pulses = 8
         self.pre = 0
+        self.keep = False         # guarda os ciclos individuais da média (Medidas em Série: transientes individuais)
+        self.last_cycles = []
         self.reset()
 
     def reset(self):
@@ -2561,6 +2563,7 @@ class AverageAccumulator:
         self.spc = 0
         self.values = np.empty(0)
         self.time = np.empty(0)
+        self.kept = []
 
     @property
     def cycles(self):
@@ -2577,6 +2580,8 @@ class AverageAccumulator:
         return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
     def _accumulate(self, cyc):
+        if self.keep:
+            self.kept.append(np.array(cyc, dtype=np.float32))
         if self.count == 0:
             self.sum = cyc.astype(np.float64)
             self.spc = len(cyc)
@@ -2587,6 +2592,9 @@ class AverageAccumulator:
         if self.count >= self.pulses:
             self.values = self.sum / self.count
             self.time = (np.arange(self.spc) - self.pre) / self.fs
+            if self.keep:
+                self.last_cycles = [c[:self.spc] for c in self.kept]
+            self.kept = []
             self.sum, self.count, self.spc = None, 0, 0
             return True
         return False
@@ -9737,9 +9745,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         return getattr(self, 'save_dir_override', None) or MEDIDAS_DIR
 
     def _grab_dual_plots(self):
-        """Imagem dos gráficos do Modo Duplo para o PNG. Com a aba escondida (ex.: durante uma série, na aba
-        Medidas em Série), mostra o Modo Duplo por um instante para os gráficos terem o tamanho da tela."""
-        w = self.dual_plots
+        return self._grab_hidden(self.dual_plots)
+
+    def _grab_hidden(self, w):
+        """Imagem de um widget para o PNG. Com a aba dele escondida (ex.: durante uma série, na aba Medidas em
+        Série), mostra a aba por um instante para o widget ter o tamanho da tela."""
         if w.isVisible():
             return w.grab()
         cur = self.tabs.currentIndex()
@@ -11205,6 +11215,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self._autoscale_raw()
                 if self.average_mode and self.avg.push(adc, ref):
                     self.avg_dirty = True
+                    self.avg_ready_n = getattr(self, 'avg_ready_n', 0) + 1   # médias prontas (Medidas em Série)
                 self.peak_hist.append((now, float(np.max(adc))))
                 while now - self.peak_hist[0][0] > 1.0:
                     self.peak_hist.popleft()

@@ -24,21 +24,27 @@ As chaves e os nomes ficam em português em qualquer idioma da interface (como o
 
 import csv
 import os
+import numpy as np
 import shlex
 import time
 from datetime import datetime, timedelta
 
 SERIE_EXT = '.serie.txt'
 SERIE_HEADER = '# SOI - medidas em série (versão 1)'
-TIPOS = ('varredura', 'sinal-t', 'pausa', 'aviso')
-TIPO_NOME = {'varredura': 'Varredura f', 'sinal-t': 'Sinal x t', 'pausa': 'Pausa', 'aviso': 'Aviso'}
+TIPOS = ('varredura', 'sinal-t', 'pausa', 'aviso', 'transiente')
+TIPO_NOME = {'varredura': 'Varredura f', 'sinal-t': 'Sinal x t', 'pausa': 'Pausa', 'aviso': 'Aviso',
+             'transiente': 'Transiente'}
+LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista (uma medida por combinação)
 
 DEFAULTS = {
     'varredura': {'nome': 'varredura', 'fmin': 20.0, 'fmax': 2440.0, 'n': 25, 'tau': 4.0, 'tau_fixo': False,
                   'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 0.0,
                   'desligar': False, 'repetir': 1},
-    'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': 100.0, 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,
+    'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': [100.0], 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,
                 'aquecer': 0.0, 'desligar': False, 'repetir': 1},
+    'transiente': {'nome': 'transiente_f{f}_pwm{pwm}', 'f': [17.0], 'pwm': [100.0], 'pulsos': 64, 'intervalo': 60.0,
+                   'duracao': 10.0, 'individuais': False, 'ajuste': 0, 'aquecer': 0.0, 'desligar': False,
+                   'repetir': 1},
     'pausa': {'nome': 'pausa', 'duracao': 10.0, 'repetir': 1},
     'aviso': {'nome': '', 'texto': 'Clique em Continuar para seguir.'},
 }
@@ -49,12 +55,16 @@ OPCOES = {
     '--medias': ('medias', int), '--adapt-tudo': ('adapt_tudo', None), '--pwm': ('pwm', float),
     '--aquecer': ('aquecer', float), '--desligar': ('desligar', None), '--repetir': ('repetir', int),
     '--f': ('f', 'flist'), '--dt': ('dt', float), '--duracao': ('duracao', float), '--texto': ('texto', str),
+    '--pulsos': ('pulsos', int), '--intervalo': ('intervalo', float), '--individuais': ('individuais', None),
+    '--ajuste': ('ajuste', int),
 }
 ORDEM = {   # ordem das opções ao salvar
     'varredura': ('nome', 'fmin', 'fmax', 'n', 'tau', 'tau_fixo', 'precisao', 'medias', 'adapt_tudo', 'pwm',
                   'aquecer', 'repetir', 'desligar'),
     'sinal-t': ('nome', 'f', 'pwm', 'tau', 'dt', 'duracao', 'aquecer', 'repetir', 'desligar'),
     'pausa': ('nome', 'duracao', 'repetir'),
+    'transiente': ('nome', 'f', 'pwm', 'pulsos', 'intervalo', 'duracao', 'individuais', 'ajuste', 'aquecer', 'repetir',
+                   'desligar'),
 }
 FIM_OPCOES = ('laser_parado', 'manter')
 
@@ -70,18 +80,22 @@ def new_serie():
     return {'nome_base': '', 'inicio': '', 'repetir': 1, 'fim': 'laser_parado', 'etapas': []}
 
 
-def parse_flist(text):
+def parse_flist(text, lo=0.1, hi=20000.0, what='frequência'):
     vals = []
     for p in str(text).replace(',', ';').split(';'):
         p = p.strip()
         if p:
             v = float(p)
-            if not 0.1 <= v <= 20000:
-                raise ValueError(f'frequência fora da faixa: {p}')
+            if not lo <= v <= hi:
+                raise ValueError(f'{what} fora da faixa: {p}')
             vals.append(v)
     if not vals:
-        raise ValueError('lista de frequências vazia')
+        raise ValueError(f'lista de {what} vazia')
     return vals
+
+
+def parse_pwmlist(text):
+    return parse_flist(text, 0.0, 100.0, 'PWM')
 
 
 def fmt_flist(vals):
@@ -134,10 +148,18 @@ def _parse_step(line):
         if i + 1 >= len(rest):
             raise ValueError(f'falta o valor de {opt}')
         val = rest[i + 1]
-        st[key] = parse_flist(val) if kind == 'flist' else kind(val)
+        if key == 'pwm' and tipo in LISTAS:
+            st[key] = parse_pwmlist(val)
+        else:
+            st[key] = parse_flist(val) if kind == 'flist' else kind(val)
         i += 2
     if st.get('repetir', 1) < 1:
         raise ValueError('--repetir precisa ser 1 ou mais')
+    if tipo == 'transiente':
+        if st['pulsos'] < 1:
+            raise ValueError('--pulsos precisa ser 1 ou mais')
+        if st['ajuste'] not in (0, 1, 2):
+            raise ValueError('--ajuste: 0 (sem), 1 ou 2 exponenciais')
     return st
 
 
@@ -204,8 +226,10 @@ def step_line(st):
                 continue
             elif k == 'aquecer' and not v:
                 continue
-            elif k == 'f':
+            elif k in ('f', 'pwm') and isinstance(v, list):
                 parts += [opt, fmt_flist(v)]
+            elif k == 'ajuste' and not v:
+                continue
             elif k == 'nome':
                 parts += [opt, _q(v)]
             else:
@@ -251,17 +275,21 @@ def expand(serie):
             if not st.get('ativa', True):
                 continue
             reps = max(1, int(st.get('repetir', 1))) if st['tipo'] != 'aviso' else 1
-            freqs = st['f'] if st['tipo'] == 'sinal-t' else [None]
+            lst = st['tipo'] in LISTAS
+            freqs = st['f'] if lst else [None]
+            pwms = st['pwm'] if lst else [None]
+            combos = [(f, q) for f in freqs for q in pwms]
             for r in range(1, reps + 1):
-                for f in freqs:
+                for f, q in combos:
                     p = dict(st)
                     nome = str(st.get('nome', '') or '')
                     if f is not None:
-                        p['f'] = f
-                        if '{f}' in nome:
-                            nome = nome.replace('{f}', f'{f:g}')
-                        elif len(freqs) > 1:
-                            nome = f'{nome}_f{f:g}' if nome else f'f{f:g}'
+                        p['f'], p['pwm'] = f, q
+                        for key, val, n in (('f', f, len(freqs)), ('pwm', q, len(pwms))):
+                            if '{' + key + '}' in nome:
+                                nome = nome.replace('{' + key + '}', f'{val:g}')
+                            elif n > 1:
+                                nome = f'{nome}_{key}{val:g}' if nome else f'{key}{val:g}'
                     if reps > 1:
                         nome += f'_rep{r}'
                     if cycles > 1:
@@ -318,7 +346,7 @@ class SeriesRunner(QtCore.QObject):
         if t == 'pausa':
             d = 60.0 * p['duracao']
             return d, d
-        if t == 'sinal-t':
+        if t in ('sinal-t', 'transiente'):
             d = 60.0 * p['duracao'] + p.get('aquecer', 0.0)
             return d, d
         return w._series_sweep_estimate(p)
@@ -474,10 +502,11 @@ class SeriesRunner(QtCore.QObject):
                 self.resume()
                 return
         else:
-            w._series_apply(j['tipo'], p)
+            if j['tipo'] != 'transiente':
+                w._series_apply(j['tipo'], p)
             self.warm_s = p.get('aquecer', 0.0) or 0.0
             if self.warm_s > 0:
-                self._laser(p['pwm'], p['f'] if j['tipo'] == 'sinal-t' else None)
+                self._laser(p['pwm'], p['f'] if j['tipo'] in LISTAS else None)
                 self.until = time.time() + self.warm_s
                 self.state = 'warm'
                 self.log(f'  warm-up: PWM {p["pwm"]:g} % por {self.warm_s:g} s')
@@ -493,6 +522,15 @@ class SeriesRunner(QtCore.QObject):
         j, w = self.job(), self.win
         w.ed_sample.setText(f'{self.base}_{j["nome"]}' if self.base and j['nome'] else (self.base or j['nome']))
         w.dual_last_csv = None
+        if j['tipo'] == 'transiente':
+            self.tjob = TransientJob(w, j['p'], self.folder, self.log)
+            if not self.tjob.start():
+                self._job_end('falhou')
+                self._after_job()
+                return
+            self.state = 'run'
+            self.t_meas = time.time()
+            return
         if j['tipo'] == 'varredura':
             w.toggle_dual_sweep('F')
         else:
@@ -507,6 +545,10 @@ class SeriesRunner(QtCore.QObject):
 
     def _stop_measure(self):
         w = self.win
+        tj = getattr(self, 'tjob', None)
+        if tj is not None and not tj.done:
+            tj.finish()
+            return
         if not w.dual_active:
             return
         if w.dual_src == 'T':
@@ -518,8 +560,13 @@ class SeriesRunner(QtCore.QObject):
         j, w = self.job(), self.win
         if j is None:
             return
-        csv_path = getattr(w, 'dual_last_csv', None) if j['tipo'] in ('varredura', 'sinal-t') else None
-        if j['tipo'] in ('varredura', 'sinal-t') and estado == 'concluída' and not csv_path:
+        if j['tipo'] == 'transiente':
+            tj = getattr(self, 'tjob', None)
+            csv_path = tj.csv if tj is not None else None
+            self.tjob = None
+        else:
+            csv_path = getattr(w, 'dual_last_csv', None) if j['tipo'] in ('varredura', 'sinal-t') else None
+        if j['tipo'] in ('varredura', 'sinal-t', 'transiente') and estado == 'concluída' and not csv_path:
             estado = 'falhou'
         self.status[self.idx] = estado
         self.files[self.idx] = csv_path or ''
@@ -533,7 +580,7 @@ class SeriesRunner(QtCore.QObject):
                                          estado, os.path.basename(csv_path) if csv_path else ''])
         except OSError as e:
             self.log(f'  resumo.csv não gravado: {e}')
-        if j['tipo'] in ('varredura', 'sinal-t') and j['p'].get('desligar'):
+        if j['tipo'] in ('varredura', 'sinal-t', 'transiente') and j['p'].get('desligar'):
             self._laser_off()
         self.log(f'  {estado}' + (f': {csv_path}' if csv_path else ''))
         self.state = 'between'
@@ -573,6 +620,11 @@ class SeriesRunner(QtCore.QObject):
                     self._begin_measure()
             else:
                 self._begin_measure()
+        elif self.state == 'run' and getattr(self, 'tjob', None) is not None:
+            self.tjob.tick()
+            if self.tjob.done:
+                self._job_end('concluída')
+                self._after_job()
         elif self.state == 'run' and not w.dual_active:
             self._job_end('concluída')
             self._after_job()
@@ -613,7 +665,7 @@ class SeriesRunner(QtCore.QObject):
                 cur += (e[1] - self.warm_s) if j['tipo'] == 'varredura' else 60.0 * j['p']['duracao']
         elif self.state == 'run':
             j = self.job()
-            if j['tipo'] == 'sinal-t':
+            if j['tipo'] in LISTAS:
                 cur = max(0.0, 60.0 * j['p']['duracao'] - (now - self.t_meas))
             else:
                 cur = max(0.0, getattr(w, 'dual_rest', 0.0) or 0.0)
@@ -625,6 +677,208 @@ class SeriesRunner(QtCore.QObject):
             return pre, rest + pre, datetime.now() + timedelta(seconds=rest + pre)
         total = rest + (cur or 0.0)
         return cur, total, (datetime.now() + timedelta(seconds=total)) if self.state != 'paused' else None
+
+
+class TransientJob:
+    """Etapa Transiente: OPT101 no modo Valor Médio, uma média de N pulsos a cada 'intervalo' segundos por
+    'duracao' minutos (intervalo 0 = uma média atrás da outra). Grava, na pasta da série:
+      <stem>.csv          Tempo_s + uma coluna por média (M001, M002...), cabeçalho com o horário de cada uma;
+      <stem>_medias.csv   uma linha por média: horário, t, pulsos, mín, máx, amplitude e o ajuste (se pedido);
+      <stem>.png          a última média (gráfico da aba OPT101);
+      <stem>_individuais/M001.csv ...  (opcional) os N transientes de cada média, um por coluna."""
+
+    def __init__(self, win, p, folder, log=print):
+        self.w, self.p, self.folder, self.log = win, p, folder, log
+        self.done = False
+        self.csv = None
+        self.avgs = []           # (datetime, t_s, values)
+        self.tax = None
+        self.rows = []
+
+    def start(self):
+        w, p = self.w, self.p
+        if w.dual_active or getattr(w, 'sweep_active', False):
+            self.log('  ERRO: há outra medida em andamento.')
+            return False
+        self.was_avg = w.average_mode
+        w._set_spin(w.sp_freq, p['f'])
+        w.apply_frequency(p['f'])
+        w.sp_power.setValue(p['pwm'])
+        w.on_power(w.sp_power.value())
+        self.pulses0 = w.sp_pulses.value()
+        w.sp_pulses.setValue(int(p['pulsos']))
+        w.avg.pulses = int(p['pulsos'])
+        if not w.average_mode:
+            w.toggle_display_mode()             # Valor Médio (pré-trigger padrão para a frequência)
+        else:
+            w.set_pretrigger(w.default_pretrigger())
+        if getattr(w, 'paused', False):
+            w.sw_pause.setChecked(False)
+        w.avg.keep = bool(p.get('individuais'))
+        now = datetime.now()
+        name = w._sample_name()
+        self.stem = safe_name(f"{name + '_' if name else ''}Transientes_f{p['f']:g}Hz_pwm{p['pwm']:g}_"
+                              f"{now.strftime('%Y%m%d_%H%M%S')}")
+        self.t0 = time.time()
+        self.t_end = self.t0 + 60.0 * float(p['duracao'])
+        self.next_start = self.t0
+        self.k = 0
+        self.waiting = False      # True: média em andamento
+        self.ind_dir = os.path.join(self.folder, self.stem + '_individuais') if p.get('individuais') else None
+        if self.ind_dir:
+            os.makedirs(self.ind_dir, exist_ok=True)
+        n = self.count()
+        self.log(f'  Transiente: {p["f"]:g} Hz, PWM {p["pwm"]:g} %, {p["pulsos"]} pulsos por média, '
+                 f'{n} média(s) em {p["duracao"]:g} min' + (f' (a cada {p["intervalo"]:g} s)' if p['intervalo'] else ''))
+        return True
+
+    def count(self):
+        iv = float(self.p['intervalo'])
+        dur = 60.0 * float(self.p['duracao'])
+        return int(np.ceil(dur / iv)) if iv > 0 else None
+
+    def _begin_avg(self):
+        w = self.w
+        w.reset_average()
+        w.avg.keep = bool(self.p.get('individuais'))
+        self.ready0 = getattr(w, 'avg_ready_n', 0)
+        self.t_avg = time.time()
+        self.dt_avg = datetime.now()
+        self.waiting = True
+
+    def tick(self):
+        if self.done:
+            return
+        w, now = self.w, time.time()
+        if self.waiting:
+            if getattr(w, 'avg_ready_n', 0) > self.ready0 and len(w.avg.values):
+                self._capture()
+                self.waiting = False
+                iv = float(self.p['intervalo'])
+                self.next_start = (self.t0 + self.k * iv) if iv > 0 else now
+                if self.next_start < now:            # a média demorou mais que o intervalo: começa já
+                    self.next_start = now
+            elif now - self.t_avg > max(120.0, 3.0 * self.p['pulsos'] / max(self.p['f'], 0.1) + 30.0):
+                self.log('  aviso: a média não fechou (sem pulsos do laser?); recomeçando.')
+                self._begin_avg()
+            return
+        if now >= self.t_end:
+            self.finish()
+        elif now >= self.next_start:
+            self._begin_avg()
+
+    def _capture(self):
+        w = self.w
+        vals = np.array(w.avg.values, dtype=np.float64)
+        tax = np.array(w.avg.time, dtype=np.float64)
+        if self.tax is None or len(tax) < len(self.tax):
+            self.tax = tax
+        self.k += 1
+        t_rel = self.t_avg - self.t0
+        self.avgs.append((self.dt_avg, t_rel, vals))
+        row = [self.k, self.dt_avg.strftime('%Y-%m-%d %H:%M:%S'), f'{t_rel:.1f}', self.p['pulsos'],
+               f'{vals.min():.4f}', f'{vals.max():.4f}', f'{vals.max() - vals.min():.4f}']
+        if self.p.get('ajuste'):
+            row += self._fit(tax, vals)
+        self.rows.append(row)
+        if self.ind_dir and w.avg.last_cycles:
+            cyc = w.avg.last_cycles
+            n = min(len(c) for c in cyc)
+            try:
+                with open(os.path.join(self.ind_dir, f'M{self.k:03d}.csv'), 'w', encoding='utf-8', newline='') as fh:
+                    fh.write(f'# Transientes individuais da media {self.k} - {self.dt_avg:%Y-%m-%d %H:%M:%S}, '
+                             f'Freq={self.p["f"]:g} Hz, PWM={self.p["pwm"]:g} %\n')
+                    fh.write('Tempo_s,' + ','.join(f'P{i + 1:03d}' for i in range(len(cyc))) + '\n')
+                    for r in range(n):
+                        fh.write(f'{tax[r]:.6f},' + ','.join(f'{c[r]:.2f}' for c in cyc) + '\n')
+            except OSError as e:
+                self.log(f'  transientes individuais não gravados: {e}')
+        self._write()          # grava a cada média: nada se perde se a série parar
+        self.log(f'  média {self.k}' + (f'/{self.count()}' if self.count() else '') +
+                 f': amplitude {vals.max() - vals.min():.1f}' + (f', τ = {row[9]} s' if self.p.get('ajuste') else ''))
+
+    def _fit(self, tax, vals):
+        """Ajuste exponencial no laser ligado (t de 0 a meio período): y_inf + A1·e^(−t/τ1) [+ A2·e^(−t/τ2)]."""
+        from scipy.optimize import curve_fit
+        half = 0.5 / max(float(self.p['f']), 0.1)
+        m = (tax >= 0) & (tax <= half)
+        t, y = tax[m], vals[m]
+        two = int(self.p.get('ajuste')) == 2
+        try:
+            if len(t) < 8:
+                raise RuntimeError('poucos pontos')
+            yi = float(np.mean(y[-max(2, len(y) // 10):]))
+            a = float(y[0] - yi)
+            thr = yi + a / np.e
+            cross = np.flatnonzero((y - thr) * np.sign(a) <= 0)
+            tau = float(t[cross[0]]) if cross.size and t[cross[0]] > 0 else half / 4
+            if two:
+                f = lambda tt, y0, a1, t1, a2, t2: y0 + a1 * np.exp(-tt / t1) + a2 * np.exp(-tt / t2)
+                p0 = (yi, a / 2, tau / 3, a / 2, tau * 3)
+                bounds = ((-np.inf, -np.inf, 1e-6, -np.inf, 1e-6), (np.inf, np.inf, 100.0, np.inf, 100.0))
+            else:
+                f = lambda tt, y0, a1, t1: y0 + a1 * np.exp(-tt / t1)
+                p0 = (yi, a, tau)
+                bounds = ((-np.inf, -np.inf, 1e-6), (np.inf, np.inf, 100.0))
+            popt, _ = curve_fit(f, t, y, p0=p0, bounds=bounds, maxfev=20000)
+            res = y - f(t, *popt)
+            ss = float(np.sum((y - y.mean()) ** 2))
+            r2 = 1.0 - float(np.sum(res ** 2)) / ss if ss > 0 else float('nan')
+            out = [f'{popt[0]:.6g}', f'{popt[1]:.6g}', f'{popt[2]:.6g}']
+            out += [f'{popt[3]:.6g}', f'{popt[4]:.6g}'] if two else ['', '']
+            return out + [f'{r2:.5f}']
+        except Exception as e:
+            self.log(f'  ajuste não convergiu: {e}')
+            return ['', '', '', '', '', '']
+
+    def _write(self):
+        if not self.avgs:
+            return
+        p = self.p
+        n = min(len(self.tax), min(len(v) for _, _, v in self.avgs))
+        self.csv = os.path.join(self.folder, self.stem + '.csv')
+        hdr = (f'# Transientes do OPT101 (forma de onda media do ADC) - Medidas em Serie\n'
+               f'# Freq={p["f"]:g} Hz, PWM={p["pwm"]:g} %, Pulsos={p["pulsos"]}, Intervalo={p["intervalo"]:g} s, '
+               f'Duracao={p["duracao"]:g} min, Pre={self.w.average_pretrigger_sec:.5f} s\n'
+               f'# Inicio das medias: ' + '; '.join(f'M{i + 1:03d}={d:%H:%M:%S} (t={t:.1f} s)'
+                                                    for i, (d, t, _) in enumerate(self.avgs)) + '\n')
+        try:
+            with open(self.csv, 'w', encoding='utf-8', newline='') as fh:
+                fh.write(hdr)
+                fh.write('Tempo_s,' + ','.join(f'M{i + 1:03d}' for i in range(len(self.avgs))) + '\n')
+                for r in range(n):
+                    fh.write(f'{self.tax[r]:.6f},' + ','.join(f'{v[r]:.4f}' for _, _, v in self.avgs) + '\n')
+            cols = ['Media', 'Inicio', 't_s', 'Pulsos', 'ADC_Min', 'ADC_Max', 'Amplitude']
+            if p.get('ajuste'):
+                cols += ['Fit_y_inf', 'Fit_A1', 'Fit_tau1_s', 'Fit_A2', 'Fit_tau2_s', 'Fit_R2']
+            with open(os.path.join(self.folder, self.stem + '_medias.csv'), 'w', encoding='utf-8', newline='') as fh:
+                wr = csv.writer(fh)
+                wr.writerow(cols)
+                wr.writerows(self.rows)
+        except OSError as e:
+            self.log(f'  ERRO ao gravar os transientes: {e}')
+
+    def finish(self):
+        """Encerra (fim da duração, Pular ou Parar): grava o que já foi medido e volta ao Modo Lock-In."""
+        if self.done:
+            return
+        w = self.w
+        self.done = True
+        self._write()
+        if self.avgs:
+            try:
+                w._grab_hidden(w.plot1).save(os.path.join(self.folder, self.stem + '.png'))
+            except Exception as e:
+                self.log(f'  PNG não gravado: {e}')
+        w.avg.keep = False
+        w.avg.kept = []
+        w.avg.last_cycles = []
+        if w.average_mode and not self.was_avg:
+            w.toggle_display_mode()
+        w.sp_pulses.setValue(self.pulses0)
+        if self.csv:
+            w._session_add(self.csv)
+            w.flash(f'Transientes salvos: {self.csv} ({len(self.avgs)} médias)', 6.0)
 
 
 # --------------------------------------------------------------------------- aba da interface
@@ -761,7 +1015,8 @@ class SeriesTab(QtWidgets.QWidget):
         lv.addWidget(self.tbl, 1)
         add = QtWidgets.QHBoxLayout()
         for txt, tipo in (('+ Varredura f', 'varredura'), ('+ Sinal x t', 'sinal-t'),
-                          ('+ Pausa (laser parado)', 'pausa'), ('+ Aviso (espera o operador)', 'aviso')):
+                          ('+ Transiente (OPT101)', 'transiente'), ('+ Pausa (laser parado)', 'pausa'),
+                          ('+ Aviso (espera o operador)', 'aviso')):
             b = QtWidgets.QPushButton(txt)
             b.clicked.connect(lambda _=False, t=tipo: self.add_step(t))
             add.addWidget(b)
@@ -785,7 +1040,7 @@ class SeriesTab(QtWidgets.QWidget):
         lv.addWidget(self.lbl_total)
         self.edit_widgets = [self.btn_open, self.btn_new, self.ed_base, self.chk_start, self.ed_start,
                              self.sp_cycles, self.chk_end_off, self.btn_dup, self.btn_up, self.btn_down, self.btn_del]
-        self.edit_widgets += [add.itemAt(i).widget() for i in range(4)]
+        self.edit_widgets += [add.itemAt(i).widget() for i in range(5)]
         split.addWidget(left)
 
         right = QtWidgets.QWidget()
@@ -930,8 +1185,8 @@ class SeriesTab(QtWidgets.QWidget):
                           'frequência. Use {f} no nome para a frequência entrar no nome do arquivo.')
         g.addWidget(QtWidgets.QLabel('Frequências:'), 1, 0)
         g.addWidget(f['f'], 1, 1, 1, 3)
-        f['pwm'] = self._dsp(0.0, 100.0, 100.0, 1, ' %', 5.0)
-        g.addWidget(QtWidgets.QLabel('PWM:'), 1, 4)
+        f['pwm'] = self._pwm_edit()
+        g.addWidget(QtWidgets.QLabel('PWM (%):'), 1, 4)
         g.addWidget(f['pwm'], 1, 5)
         f['tau'] = self._dsp(0.05, 30.0, 1.0, 2, ' s', 0.5)
         f['dt'] = self._dsp(0.5, 600.0, 5.0, 1, ' s')
@@ -984,16 +1239,73 @@ class SeriesTab(QtWidgets.QWidget):
         self.forms['aviso'] = f
         self.stack.addWidget(w)
 
+        # transiente (OPT101, Valor Médio)
+        w, g = grid()
+        f = {}
+        name_rep(g, f)
+        f['f'] = QtWidgets.QLineEdit()
+        f['f'].setToolTip('Uma frequência ou uma lista separada por ";": uma medida por frequência ({f} no nome).')
+        g.addWidget(QtWidgets.QLabel('Frequências:'), 1, 0)
+        g.addWidget(f['f'], 1, 1, 1, 3)
+        f['pwm'] = self._pwm_edit()
+        g.addWidget(QtWidgets.QLabel('PWM (%):'), 1, 4)
+        g.addWidget(f['pwm'], 1, 5)
+        f['pulsos'] = QtWidgets.QSpinBox()
+        f['pulsos'].setRange(1, 1000)
+        f['pulsos'].setToolTip('Pulsos somados em cada média (como "Pulsos" no modo Valor Médio da aba OPT101).')
+        f['intervalo'] = self._dsp(0.0, 86400.0, 60.0, 0, ' s', 10.0, 90)
+        f['intervalo'].setToolTip('Uma média começa a cada intervalo (ex.: 64 pulsos a cada 60 s).\n'
+                                  '0 = uma média atrás da outra. Se a média demorar mais que o intervalo, a próxima\n'
+                                  'começa logo depois dela.')
+        f['duracao'] = self._dsp(0.1, 1440.0, 10.0, 1, ' min')
+        f['duracao'].setToolTip('Tempo total do acompanhamento.')
+        g.addWidget(QtWidgets.QLabel('Pulsos (média):'), 2, 0)
+        g.addWidget(f['pulsos'], 2, 1)
+        g.addWidget(QtWidgets.QLabel('Uma média a cada:'), 2, 2)
+        g.addWidget(f['intervalo'], 2, 3)
+        g.addWidget(QtWidgets.QLabel('Duração:'), 2, 4)
+        g.addWidget(f['duracao'], 2, 5)
+        f['ajuste'] = QtWidgets.QComboBox()
+        f['ajuste'].addItems(['sem ajuste', '1 exponencial', '2 exponenciais'])
+        f['ajuste'].setToolTip('Ajuste exponencial de cada média no laser ligado (t de 0 a meio período);\n'
+                               'τ, amplitude e R² vão para o arquivo _medias.csv.')
+        f['individuais'] = QtWidgets.QCheckBox('Guardar os transientes individuais')
+        f['individuais'].setToolTip('Grava também os N pulsos de cada média (pasta <arquivo>_individuais, um CSV por média).')
+        g.addWidget(QtWidgets.QLabel('Ajuste:'), 3, 0)
+        g.addWidget(f['ajuste'], 3, 1)
+        g.addWidget(f['individuais'], 3, 2, 1, 4)
+        f['aquecer'] = self._dsp(0.0, 7200.0, 0.0, 0, ' s', 60.0, 80)
+        f['aquecer'].setToolTip('Antes do acompanhamento, laser ligado (na frequência e no PWM) por este tempo, sem gravar.')
+        g.addWidget(QtWidgets.QLabel('Warm-up:'), 4, 0)
+        g.addWidget(f['aquecer'], 4, 1)
+        f['desligar'] = QtWidgets.QCheckBox('Laser parado (PWM 0) ao terminar a etapa')
+        g.addWidget(f['desligar'], 4, 2, 1, 4)
+        f['lbl_n'] = QtWidgets.QLabel('')
+        f['lbl_n'].setStyleSheet('color:#666;font-weight:normal;')
+        g.addWidget(f['lbl_n'], 5, 0, 1, 6)
+        g.setRowStretch(6, 1)
+        self.forms['transiente'] = f
+        self.stack.addWidget(w)
+
         for tipo, f in self.forms.items():
             for key, wd in f.items():
-                if key == 'lbl_tau':
+                if key in ('lbl_tau', 'lbl_n'):
                     continue
                 if isinstance(wd, QtWidgets.QLineEdit):
                     wd.editingFinished.connect(lambda t=tipo: self._form_to_step(t))
                 elif isinstance(wd, QtWidgets.QCheckBox):
                     wd.toggled.connect(lambda _=False, t=tipo: self._form_to_step(t))
+                elif isinstance(wd, QtWidgets.QComboBox):
+                    wd.currentIndexChanged.connect(lambda _=0, t=tipo: self._form_to_step(t))
                 else:
                     wd.valueChanged.connect(lambda _=0, t=tipo: self._form_to_step(t))
+
+    def _pwm_edit(self):
+        e = QtWidgets.QLineEdit()
+        e.setFixedWidth(110)
+        e.setToolTip('Um PWM ou uma lista separada por ";" (ex.: 25; 50; 100): uma medida por potência.\n'
+                     'Use {pwm} no nome para o PWM entrar no nome do arquivo.')
+        return e
 
     # ---- série <-> tela
     def _set_serie(self, serie, path):
@@ -1062,7 +1374,16 @@ class SeriesTab(QtWidgets.QWidget):
             n = len(st['f']) * reps
             one = fmt_dur(60 * st['duracao'] + st.get('aquecer', 0))
             dur = f'{n} × {one}' if n > 1 else one
-            pwm = f"{st['pwm']:g}"
+            pwm = '; '.join(f'{v:g}' for v in st['pwm'])
+        elif t == 'transiente':
+            freq = '; '.join(f'{v:g}' for v in st['f'])
+            pwm = '; '.join(f'{v:g}' for v in st['pwm'])
+            iv = st['intervalo']
+            tau = f"{st['pulsos']} pulsos" + (f" · fit {st['ajuste']} exp" if st.get('ajuste') else '')
+            pts = (f'a cada {iv:g} s' if iv > 0 else _tr('contínuo')) + (' + ind.' if st.get('individuais') else '')
+            n = len(st['f']) * len(st['pwm']) * reps
+            one = fmt_dur(60 * st['duracao'] + st.get('aquecer', 0))
+            dur = f'{n} × {one}' if n > 1 else one
         elif t == 'pausa':
             freq, tau, pts, pwm = '', '', '', '0'
             one = fmt_dur(60 * st['duracao'])
@@ -1186,15 +1507,19 @@ class SeriesTab(QtWidgets.QWidget):
         f = self.forms[t]
         self._loading = True
         for key, wd in f.items():
-            if key == 'lbl_tau':
+            if key in ('lbl_tau', 'lbl_n'):
                 continue
             v = st.get(key, DEFAULTS[t].get(key))
             if isinstance(wd, QtWidgets.QLineEdit):
-                wd.setText(fmt_flist(v).replace(';', '; ') if key == 'f' else str(v))
+                wd.setText(fmt_flist(v).replace(';', '; ') if key in ('f', 'pwm') else str(v))
+            elif isinstance(wd, QtWidgets.QComboBox):
+                wd.setCurrentIndex(int(v))
             elif isinstance(wd, QtWidgets.QCheckBox):
                 wd.setChecked(bool(v))
             else:
                 wd.setValue(v)
+        if t == 'transiente':
+            self._upd_n(st)
         if t == 'varredura':
             on = st['tau_fixo']
             for k in ('precisao', 'medias', 'adapt_tudo'):
@@ -1212,24 +1537,41 @@ class SeriesTab(QtWidgets.QWidget):
         if st['tipo'] != tipo:
             return
         for key, wd in self.forms[tipo].items():
-            if key == 'lbl_tau':
+            if key in ('lbl_tau', 'lbl_n'):
                 continue
             if isinstance(wd, QtWidgets.QLineEdit):
-                if key == 'f':
+                if key in ('f', 'pwm'):
                     try:
-                        st['f'] = parse_flist(wd.text())
+                        st[key] = parse_flist(wd.text()) if key == 'f' else parse_pwmlist(wd.text())
                         wd.setStyleSheet('')
                     except ValueError:
                         wd.setStyleSheet('background:#ffd6d6;')
-                        self.win.flash('Frequências: números separados por ";" (ex.: 37; 113; 487).')
+                        self.win.flash('Frequências: números separados por ";" (ex.: 37; 113; 487).' if key == 'f'
+                                       else 'PWM: números de 0 a 100 separados por ";" (ex.: 25; 50; 100).')
                 else:
                     st[key] = wd.text().strip()
+            elif isinstance(wd, QtWidgets.QComboBox):
+                st[key] = wd.currentIndex()
             elif isinstance(wd, QtWidgets.QCheckBox):
                 st[key] = wd.isChecked()
             else:
                 st[key] = wd.value()
+        if tipo == 'transiente':
+            self._upd_n(st)
         self._mark_dirty()
         self._refresh_table()
+
+    def _upd_n(self, st):
+        iv, dur = st['intervalo'], 60.0 * st['duracao']
+        per = st['pulsos'] / max(min(st['f']), 0.1)
+        if iv > 0:
+            txt = (f'{int(np.ceil(dur / iv))} médias de {st["pulsos"]} pulsos por medida '
+                   f'(cada média leva ~{per:.3g} s no laser de {min(st["f"]):g} Hz)')
+            if per > iv:
+                txt += ' — a média é mais longa que o intervalo: as médias ficam seguidas'
+        else:
+            txt = f'Médias seguidas por {st["duracao"]:g} min (~{int(dur / max(per, 1e-3))} médias de ~{per:.3g} s)'
+        self.forms['transiente']['lbl_n'].setText(txt)
 
     def _on_item_changed(self, it):
         if self._loading or it.column() != 0:
@@ -1409,6 +1751,11 @@ class SeriesTab(QtWidgets.QWidget):
             what = f"Varredura {p['fmin']:g}–{p['fmax']:g} Hz"
         elif j['tipo'] == 'sinal-t':
             what = f"Sinal x t {p['f']:g} Hz, PWM {p['pwm']:g} %"
+        elif j['tipo'] == 'transiente':
+            tj = getattr(r, 'tjob', None)
+            nn = tj.count() if tj else None
+            what = (f"Transiente {p['f']:g} Hz, PWM {p['pwm']:g} %, {p['pulsos']} pulsos"
+                    + (f" · {_tr('média')} {tj.k + (1 if tj.waiting else 0)}" + (f'/{nn}' if nn else '') if tj else ''))
         elif j['tipo'] == 'pausa':
             what = f"Pausa (laser parado) {p['duracao']:g} min"
         else:
@@ -1441,8 +1788,24 @@ class SeriesTab(QtWidgets.QWidget):
 
     def _update_plot(self):
         r, w = self.runner, self.win
+        tj = getattr(r, 'tjob', None)
+        if r.active and r.state == 'run' and tj is not None:
+            if tj.avgs and getattr(self, '_plot_k', None) != (id(tj), tj.k):
+                self._plot_k = (id(tj), tj.k)
+                v = tj.avgs[-1][2]
+                n = min(len(v), len(tj.tax))
+                self.plot.setLogMode(x=False, y=False)
+                self.curve.setSymbol(None)
+                self.curve.setPen(pg.mkPen('royalblue', width=2))
+                self.curve.setData(tj.tax[:n] * 1000.0, v[:n])
+                self.plot.setLabel('bottom', 'Tempo (ms)')
+                self.plot.setLabel('left', 'ADC médio')
+                self.plot.setTitle(f'{_tr("Medida em andamento")}: {r.job()["nome"]} · {_tr("média")} {tj.k}')
+            return
         if not (r.active and r.state == 'run' and w.dual_active):
             return
+        self.curve.setPen(None)
+        self.curve.setSymbol('o')
         res = list(getattr(w, 'dual_results', []) or [])
         if not res:
             self.curve.setData([], [])

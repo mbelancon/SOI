@@ -37,6 +37,15 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   options as the headless command line (`sinal-t --nome 2_f{f} --f 37;113;487 --duracao 20`, `varredura --fmin 20
   --fmax 2440 --n 25 --tau 4 --precisao 2 --repetir 3`, `pausa --duracao 10`, `aviso "text"`), header keys
   `nome_base`, `inicio`, `repetir`, `fim`; `#!` marks an unchecked step. Keys stay in Portuguese in both languages.
+- **Transient (OPT101)** step: the OPT101 Mean Value mode run unattended. One average of N pulses every
+  interval (e.g. 64 pulses every 60 s or every 10 s; 0 = back to back) for a total duration. Saves `<stem>.csv`
+  (time + one column per average, start time of each in the header), `<stem>_medias.csv` (one line per average:
+  time, min, max, amplitude and, optionally, a 1- or 2-exponential fit of the laser-on half period: τ, A, R²), a PNG
+  and, optionally, the individual transients (`<stem>_individuais/M001.csv`...: the N pulses of each average). The
+  tab goes back to Lock-In mode at the end. Options `--pulsos`, `--intervalo`, `--duracao`, `--ajuste 0|1|2`,
+  `--individuais`.
+- PWM list (power scan) in Signal vs t and Transient: `--pwm 25;50;100`, one measurement per power (`{pwm}` in the
+  name), combined with the frequency list and with Repeat.
 - Headless: `soi_controller.py --serie file.serie.txt [--amostra name] [--simulado]` runs the same file without
   a window (a Notice waits for Enter in the terminal).
 - Simulated mode works as usual (same sweep and Signal vs t code).
