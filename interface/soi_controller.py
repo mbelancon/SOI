@@ -11414,6 +11414,8 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _fit_to_screen(self):
         '''Limita tamanho e posição à área útil da tela: a geometria salva pode ter vindo de outro monitor
         ou de outra escala do Windows, e uma janela maior que a tela gera aviso do Qt (setGeometry).'''
+        if self.isMaximized() or self.isFullScreen():
+            return                                      # resize() numa janela maximizada corta o lado direito
         scr = self.screen() or QtWidgets.QApplication.primaryScreen()
         if scr is None:
             return
@@ -11967,6 +11969,13 @@ def main():
         app.setWindowIcon(icon)           # janela principal, diálogos e barra de tarefas
     win = LockInWindow()
     win.show()
+    if win.isMaximized():
+        # Aberta maximizada (geometria salva), o Windows às vezes desenha o conteúdo maior que a tela e corta o lado
+        # direito; restaurar e maximizar de novo (o que o usuário fazia à mão) acerta o tamanho.
+        def _remax():
+            win.showNormal()
+            win.showMaximized()
+        QtCore.QTimer.singleShot(0, _remax)
     # Aviso único se o Arduino não estiver ligado na abertura (não bloqueia a GUI).
     QtCore.QTimer.singleShot(2500, win.warn_not_found)
     sys.exit(app.exec())

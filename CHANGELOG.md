@@ -46,6 +46,11 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   frequency sweep do not open dialogs (the warning goes to the log).
 - The Dual Mode PNG is drawn at screen size even when the Dual Mode tab is hidden.
 
+#### Fixed
+- Window opened maximized (saved geometry) with the right side cut off until it was restored and maximized again:
+  the screen-fit resize is no longer applied to a maximized window, and a maximized window is re-maximized once
+  right after opening.
+
 ## [2.3.0] - 2026-11-17
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
