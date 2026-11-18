@@ -4017,6 +4017,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.awake_timer.start(2000)
         self.timer.start(GUI_INTERVAL_MS)
 
+        self._start_audio_rec()
         self.opt_thread = StepThread(self._optical_step)
         self.audio_thread = StepThread(self._audio_step)
         self.opt_thread.start()
@@ -11231,11 +11232,27 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self.audio_valid_samples = 0
                     self.audio_write_index = 0
             self.audio_last_sequence = (sequence + len(samples)) & 0xFFFFFFFF
+            if self.audio_rec is not None:
+                self.audio_rec.push(sequence, samples)
             if self.audio_fft_enabled:
                 self._store_audio_samples(samples)
             if self.audio_lockin_enabled:
                 self._audio_lockin(sequence, samples)
             self.audio_received_samples += len(samples)
+
+    audio_rec = None          # AudioRecorder (SOI_GRAVAR_AUDIO)
+
+    def _start_audio_rec(self):
+        """SOI_GRAVAR_AUDIO=<pasta>: grava o áudio bruto do INMP441 (análise offline do ruído acústico)."""
+        folder = os.environ.get('SOI_GRAVAR_AUDIO', '').strip()
+        self._rec_sample = ''
+        self.audio_rec = None
+        if not folder:
+            return
+        self.ed_sample.textChanged.connect(lambda t: setattr(self, '_rec_sample', t))
+        self._rec_sample = self.ed_sample.text()
+        self.audio_rec = AudioRecorder(folder, lambda: self._rec_sample)
+        print(f'SOI_GRAVAR_AUDIO: áudio bruto do INMP441 será gravado em {folder}', flush=True)
 
     def _audio_reset_lockin(self):
         '''Reinicia o lock-in do INMP441 e o histórico plotado (chamar com audio_lock).'''
@@ -11853,6 +11870,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         keep_system_awake(False)
         self.opt_thread.stop()
         self.audio_thread.stop()
+        if self.audio_rec is not None:
+            self.audio_rec.close()
         self.link.stop()
         for w in self.result_windows:
             w.close()
@@ -12186,6 +12205,74 @@ def run_headless(argv):
     _headless_off(win, a, pump)
     win.close()
     return 0 if csv else 7
+
+
+class AudioRecorder:
+    """Gravação opcional do áudio bruto do INMP441 (variável de ambiente SOI_GRAVAR_AUDIO=<pasta>), para análise
+    offline do ruído acústico. Um arquivo por execução: <pasta>/audio_<amostra ou soi>_<AAAAMMDD_HHMMSS>.bin.
+    Cada bloco: uint32 sequence (nº I2S da 1ª amostra), uint32 n_out, float64 t_pc (time.time() na chegada) e
+    n_out float32 = média de cada 4 amostras / 8388608 (12 kS/s; o resto do bloco, se não for múltiplo de 4, é
+    descartado). Little-endian. A thread de áudio só enfileira; uma thread própria grava (flush a cada ~1 s)."""
+    HEADER = '<IId'
+
+    def __init__(self, folder, name_fn):
+        self.folder, self.name_fn = folder, name_fn
+        self.q = deque()
+        self.fh = None
+        self.path = None
+        self.bytes = 0
+        self.stop_ev = threading.Event()
+        self.th = threading.Thread(target=self._run, name='AudioRecorder', daemon=True)
+        self.th.start()
+
+    def push(self, sequence, samples):
+        n = (len(samples) // 4) * 4
+        if n <= 0:
+            return
+        x = (np.asarray(samples[:n], dtype=np.float64).reshape(-1, 4).mean(axis=1) / 8388608.0).astype('<f4')
+        self.q.append((sequence & 0xFFFFFFFF, time.time(), x))
+
+    def _open(self):
+        os.makedirs(self.folder, exist_ok=True)
+        name = re.sub(r'[^\w.-]+', '_', (self.name_fn() or '').strip()) or 'soi'
+        self.path = os.path.join(self.folder, f"audio_{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin")
+        self.fh = open(self.path, 'ab')
+        print(f'Gravando o áudio bruto do INMP441 (12 kS/s, float32): {self.path}', flush=True)
+
+    def _drain(self):
+        import struct
+        if not self.q:
+            return
+        if self.fh is None:
+            self._open()
+        while self.q:
+            seq, t, x = self.q.popleft()
+            self.fh.write(struct.pack(self.HEADER, seq, len(x), t))
+            self.fh.write(x.tobytes())
+            self.bytes += 16 + 4 * len(x)
+        self.fh.flush()
+
+    def _run(self):
+        while not self.stop_ev.wait(1.0):
+            try:
+                self._drain()
+            except Exception as e:
+                print(f'Gravação do áudio interrompida: {e}', flush=True)
+                self.q.clear()
+                return
+
+    def close(self):
+        if self.stop_ev.is_set():
+            return
+        self.stop_ev.set()
+        self.th.join(timeout=3.0)
+        try:
+            self._drain()
+        except Exception as e:
+            print(f'Gravação do áudio: {e}', flush=True)
+        if self.fh is not None:
+            self.fh.close()
+            print(f'Áudio bruto gravado: {self.path} ({self.bytes / 1e6:.1f} MB)', flush=True)
 
 
 LOG_DIR = os.path.join(os.path.dirname(MEDIDAS_DIR), 'logs')

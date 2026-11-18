@@ -77,6 +77,14 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   steps and lists) show an orange warning with a **Shift** button (k·60 ± 5 Hz); sweeps move such points to k·60 ± 4 Hz
   by default (*Avoid multiples of 60 Hz*), listed in the CSV header. Headless `--sem-evitar-rede`.
 
+#### Added: optional raw INMP441 audio recording
+- **Why:** offline analysis of the room's acoustic noise (neighbouring frequencies, broadband energy) to define a rule
+  for discarding noisy points. Off by default; turned on with the environment variable `SOI_GRAVAR_AUDIO=<folder>`
+  (GUI or headless). One file per run, `audio_<sample or soi>_<YYYYMMDD_HHMMSS>.bin`: per block a little-endian header
+  `uint32 sequence` (I2S index of the first sample), `uint32 n_out`, `float64 t_pc` (time.time() on arrival), then
+  `n_out` float32 = mean of every 4 samples / 8388608 (12 kS/s, ~170 MB/h). Written by its own thread (flush every
+  ~1 s); the file name goes to the log.
+
 #### Changed: sweep defaults from the 2026-11-18 noise campaign
 - Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),
   3 repetitions + median, 600 s warm-up (was 300 s), start at 40 Hz, avoid multiples of 60 Hz. Above τ = 4 s an orange
