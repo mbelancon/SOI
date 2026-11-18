@@ -26,6 +26,10 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - Each step can be repeated N times (`_rep1`, `_rep2`...), the whole series N times (`_ciclo1`...), and the series
   can wait for a start time (laser stopped meanwhile; the next time the clock shows it). Optional PWM 0 at the end
   of each step and of the series.
+- Measurements are added with a single **"＋ Configure new measurement..."** button that opens a configuration window:
+  choose the sensor (Dual Mode, OPT101, INMP441, Pause/notice), what to vary (frequency, time, PWM) and the
+  parameters (time, repetitions, averages). Double-click a row (or Edit...) to change it; the panel on the right
+  shows the selected measurement. Options not available yet are listed as "coming soon".
 - Run controls: Start, Pause after this step, Continue, Skip step and Stop (the measurement in progress is ended
   and saved with the points already measured). Status line with the remaining time of the step and of the series
   and the expected end time; a plot of the measurement in progress; the other tabs and the top bar are locked

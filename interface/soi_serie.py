@@ -890,7 +890,7 @@ def _tr(s):
         return s
 
 
-COLS = ('', '#', 'Tipo', 'Nome da etapa', 'Frequência (Hz)', 'PWM %', 'τ / Precisão', 'Pontos / Δt',
+COLS = ('', '#', 'Tipo', 'Nome da etapa', 'Frequência (Hz)', 'PWM %', 'τ / Médias', 'Pontos / Intervalo',
         'Repetir', 'Duração', 'Estado')
 
 
@@ -1014,12 +1014,16 @@ class SeriesTab(QtWidgets.QWidget):
         self.tbl.itemChanged.connect(self._on_item_changed)
         lv.addWidget(self.tbl, 1)
         add = QtWidgets.QHBoxLayout()
-        for txt, tipo in (('+ Varredura f', 'varredura'), ('+ Sinal x t', 'sinal-t'),
-                          ('+ Transiente (OPT101)', 'transiente'), ('+ Pausa (laser parado)', 'pausa'),
-                          ('+ Aviso (espera o operador)', 'aviso')):
-            b = QtWidgets.QPushButton(txt)
-            b.clicked.connect(lambda _=False, t=tipo: self.add_step(t))
-            add.addWidget(b)
+        self.btn_add = QtWidgets.QPushButton('＋ Configurar nova medida...')
+        self.btn_add.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;}')
+        self.btn_add.setToolTip('Abre a janela de configuração: sensor, o que variar, tempo, repetições e médias.\n'
+                                'A medida entra depois da linha selecionada.')
+        self.btn_add.clicked.connect(lambda: self.open_step_dialog(None))
+        self.btn_edit = QtWidgets.QPushButton('Editar...')
+        self.btn_edit.setToolTip('Abre a medida selecionada na janela de configuração (ou dê um duplo clique na linha).')
+        self.btn_edit.clicked.connect(lambda: self.open_step_dialog(self._sel()))
+        add.addWidget(self.btn_add)
+        add.addWidget(self.btn_edit)
         add.addSpacing(10)
         self.btn_dup = QtWidgets.QPushButton('Duplicar')
         self.btn_up = QtWidgets.QPushButton('▲')
@@ -1040,20 +1044,23 @@ class SeriesTab(QtWidgets.QWidget):
         lv.addWidget(self.lbl_total)
         self.edit_widgets = [self.btn_open, self.btn_new, self.ed_base, self.chk_start, self.ed_start,
                              self.sp_cycles, self.chk_end_off, self.btn_dup, self.btn_up, self.btn_down, self.btn_del]
-        self.edit_widgets += [add.itemAt(i).widget() for i in range(5)]
+        self.edit_widgets += [self.btn_add, self.btn_edit]
+        self.tbl.cellDoubleClicked.connect(lambda r, c: c != 0 and not self.runner.active and self.open_step_dialog(r))
         split.addWidget(left)
 
         right = QtWidgets.QWidget()
         rv = QtWidgets.QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
-        self.box = QtWidgets.QGroupBox('Etapa')
+        self.box = QtWidgets.QGroupBox('Medida selecionada')
         self.box.setStyleSheet('QGroupBox{font-weight:bold;}')
         bl = QtWidgets.QVBoxLayout(self.box)
-        self.stack = QtWidgets.QStackedWidget()
-        bl.addWidget(self.stack)
-        self.forms = {}
-        self._build_forms()
+        self.lbl_sel = QtWidgets.QLabel('')
+        self.lbl_sel.setWordWrap(True)
+        self.lbl_sel.setStyleSheet('font-weight:normal;')
+        self.lbl_sel.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        bl.addWidget(self.lbl_sel)
         rv.addWidget(self.box)
+        self._build_dialog()
         self.plot = pg.PlotWidget()
         self.plot.setBackground('w')
         self.plot.showGrid(x=True, y=True, alpha=0.25)
@@ -1106,6 +1113,146 @@ class SeriesTab(QtWidgets.QWidget):
         sp.setFixedWidth(width)
         sp.setKeyboardTracking(False)
         return sp
+
+    # sensor -> (rótulo do que varia, tipo da etapa; None = ainda não disponível)
+    MENU = (
+        ('Modo Duplo (OPT101 + INMP441)', (('Frequência: varredura em f', 'varredura'),
+                                           ('Tempo: Sinal x t (acompanhamento do sinal)', 'sinal-t'),
+                                           ('PWM: varredura em potência (em breve)', None))),
+        ('OPT101', (('Tempo: transientes (médias de pulsos)', 'transiente'),
+                    ('Frequência: varredura (em breve)', None), ('PWM: varredura (em breve)', None))),
+        ('INMP441', (('Frequência: varredura (em breve)', None), ('PWM: varredura (em breve)', None))),
+        ('Pausa / aviso', (('Pausa com o laser parado', 'pausa'), ('Aviso: espera o operador', 'aviso'))),
+    )
+    DESCR = {
+        'varredura': 'Varredura em frequência do Modo Duplo: S = R_INMP441 / R_OPT101 e Δφ em cada frequência.',
+        'sinal-t': 'Acompanha S e Δφ no tempo com frequência e PWM fixos. Listas de frequências e de PWM: '
+                   'uma medida por combinação.',
+        'transiente': 'Modo Valor Médio do OPT101: uma média de N pulsos a cada intervalo, durante o tempo total. '
+                      'Listas de frequências e de PWM: uma medida por combinação.',
+        'pausa': 'Laser parado (PWM 0) pelo tempo escolhido, sem gravar.',
+        'aviso': 'A série para, mostra o texto e espera o clique em Continuar.',
+    }
+
+    def _build_dialog(self):
+        d = QtWidgets.QDialog(self)
+        d.setWindowTitle('Configurar medida')
+        d.setMinimumWidth(640)
+        v = QtWidgets.QVBoxLayout(d)
+        top = QtWidgets.QGridLayout()
+        self.cmb_sensor = QtWidgets.QComboBox()
+        self.cmb_kind = QtWidgets.QComboBox()
+        for name, _items in self.MENU:
+            self.cmb_sensor.addItem(name)
+        lb1, lb2 = QtWidgets.QLabel('Sensor:'), QtWidgets.QLabel('Variar:')
+        for lb in (lb1, lb2):
+            lb.setStyleSheet('font-weight:bold;')
+        top.addWidget(lb1, 0, 0)
+        top.addWidget(self.cmb_sensor, 0, 1)
+        top.addWidget(lb2, 1, 0)
+        top.addWidget(self.cmb_kind, 1, 1)
+        top.setColumnStretch(1, 1)
+        v.addLayout(top)
+        self.lbl_descr = QtWidgets.QLabel('')
+        self.lbl_descr.setWordWrap(True)
+        self.lbl_descr.setStyleSheet('color:#555;')
+        v.addWidget(self.lbl_descr)
+        box = QtWidgets.QGroupBox('Parâmetros')
+        box.setStyleSheet('QGroupBox{font-weight:bold;}')
+        bl = QtWidgets.QVBoxLayout(box)
+        self.stack = QtWidgets.QStackedWidget()
+        bl.addWidget(self.stack)
+        v.addWidget(box, 1)
+        self.forms = {}
+        self._build_forms()
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                        | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        v.addWidget(bb)
+        self.dlg = d
+        self._edit = None
+        self.cmb_sensor.currentIndexChanged.connect(self._on_sensor)
+        self.cmb_kind.currentIndexChanged.connect(self._on_kind)
+
+    def _fill_kinds(self, si, tipo=None):
+        self._loading, was = True, self._loading
+        self.cmb_kind.clear()
+        model = self.cmb_kind.model()
+        first = None
+        for k, (label, t) in enumerate(self.MENU[si][1]):
+            self.cmb_kind.addItem(label, t)
+            if t is None:
+                model.item(k).setEnabled(False)
+            elif first is None:
+                first = k
+        k = next((k for k, (_l, t) in enumerate(self.MENU[si][1]) if t is not None and t == tipo), first)
+        if k is not None:
+            self.cmb_kind.setCurrentIndex(k)
+        self._loading = was
+
+    def _on_sensor(self, si):
+        if self._loading:
+            return
+        self._fill_kinds(si)
+        self._on_kind()
+
+    def _on_kind(self, *_):
+        if self._loading:
+            return
+        t = self.cmb_kind.currentData()
+        if t is None:
+            return
+        if self._edit is None or self._edit['tipo'] != t:
+            self._edit = self._new_for(t)
+        self._show_edit()
+
+    def _new_for(self, tipo):
+        st = new_step(tipo)
+        if tipo == 'varredura':
+            sp0, sp1, _sp, spn, _ = self.win.dual_fw['F']
+            st.update(fmin=min(sp0.value(), sp1.value()), fmax=max(sp0.value(), sp1.value()), n=int(spn.value()))
+        return st
+
+    def _show_edit(self):
+        t = self._edit['tipo']
+        self.lbl_descr.setText(_tr(self.DESCR[t]))
+        self.stack.setCurrentIndex(TIPOS.index(t))
+        self._fill_form(self._edit)
+
+    def open_step_dialog(self, index):
+        # janela de configuração de uma medida: nova (index None) ou a da linha index
+        if self.runner.active:
+            return
+        if index is not None and not 0 <= index < len(self.serie['etapas']):
+            return
+        st = self.serie['etapas'][index] if index is not None else self._new_for('varredura')
+        self._edit = {k: (list(v) if isinstance(v, list) else v) for k, v in st.items()}
+        si = next(i for i, (_n, items) in enumerate(self.MENU) if any(t == st['tipo'] for _l, t in items))
+        self._loading = True
+        self.cmb_sensor.setCurrentIndex(si)
+        self._loading = False
+        self._fill_kinds(si, st['tipo'])
+        self._show_edit()
+        self.dlg.setWindowTitle(_tr('Configurar nova medida') if index is None
+                                else f'{_tr("Editar medida")} {index + 1}')
+        if self.dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            self._edit = None
+            return
+        self._form_to_step(self._edit['tipo'])          # o que estiver no campo em edição
+        new = self._edit
+        self._edit = None
+        if index is None:
+            i = self._sel()
+            index = len(self.serie['etapas']) if i is None else i + 1
+            self.serie['etapas'].insert(index, new)
+        else:
+            new['ativa'] = self.serie['etapas'][index].get('ativa', True)
+            self.serie['etapas'][index] = new
+        self._mark_dirty()
+        self._refresh_table()
+        self.tbl.selectRow(index)
+        self._on_select()
 
     def _build_forms(self):
         def grid():
@@ -1496,14 +1643,20 @@ class SeriesTab(QtWidgets.QWidget):
             return
         i = self._sel()
         if i is None or i >= len(self.serie['etapas']):
-            self.box.setTitle(_tr('Etapa'))
-            self.stack.setEnabled(False)
+            self.box.setTitle(_tr('Medida selecionada'))
+            self.lbl_sel.setText(_tr('Clique numa linha para ver os detalhes; duplo clique ou "Editar..." para mudar.'))
             return
         st = self.serie['etapas'][i]
+        tx = self._row_texts(st)
+        self.box.setTitle(f'{_tr("Medida")} {i + 1}: {tx[0]}')
+        cols = [_tr(c) for c in COLS[3:-1]]
+        rows = ''.join(f'<tr><td style="color:#666;padding-right:10px">{c}</td><td>{v}</td></tr>'
+                       for c, v in zip(cols, tx[1:]) if v)
+        self.lbl_sel.setText(f'<table>{rows}</table><p style="color:#888;font-family:Consolas,monospace">'
+                             f'{step_line(st)}</p>')
+
+    def _fill_form(self, st):
         t = st['tipo']
-        self.box.setTitle(f'{_tr("Etapa")} {i + 1}: {_tr(TIPO_NOME[t])}')
-        self.stack.setCurrentIndex(TIPOS.index(t))
-        self.stack.setEnabled(not self.runner.active)
         f = self.forms[t]
         self._loading = True
         for key, wd in f.items():
@@ -1512,6 +1665,7 @@ class SeriesTab(QtWidgets.QWidget):
             v = st.get(key, DEFAULTS[t].get(key))
             if isinstance(wd, QtWidgets.QLineEdit):
                 wd.setText(fmt_flist(v).replace(';', '; ') if key in ('f', 'pwm') else str(v))
+                wd.setStyleSheet('')
             elif isinstance(wd, QtWidgets.QComboBox):
                 wd.setCurrentIndex(int(v))
             elif isinstance(wd, QtWidgets.QCheckBox):
@@ -1528,13 +1682,11 @@ class SeriesTab(QtWidgets.QWidget):
         self._loading = False
 
     def _form_to_step(self, tipo):
+        # campos da janela de configuração -> medida em edição (gravada na série só com OK)
         if self._loading:
             return
-        i = self._sel()
-        if i is None:
-            return
-        st = self.serie['etapas'][i]
-        if st['tipo'] != tipo:
+        st = self._edit
+        if st is None or st['tipo'] != tipo:
             return
         for key, wd in self.forms[tipo].items():
             if key in ('lbl_tau', 'lbl_n'):
@@ -1558,8 +1710,6 @@ class SeriesTab(QtWidgets.QWidget):
                 st[key] = wd.value()
         if tipo == 'transiente':
             self._upd_n(st)
-        self._mark_dirty()
-        self._refresh_table()
 
     def _upd_n(self, st):
         iv, dur = st['intervalo'], 60.0 * st['duracao']
@@ -1712,7 +1862,6 @@ class SeriesTab(QtWidgets.QWidget):
         for wd in self.edit_widgets:
             wd.setEnabled(not on)
         self.tbl.setEnabled(True)
-        self.stack.setEnabled(not on and self._sel() is not None)
         self.btn_start.setEnabled(not on)
         for b in (self.btn_pause, self.btn_skip, self.btn_stop):
             b.setEnabled(on)
