@@ -40,9 +40,10 @@ SIMPLES = ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm')   
 LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista (uma medida por combinação)
 
 DEFAULTS = {
-    'varredura': {'nome': 'varredura', 'fmin': 20.0, 'fmax': 2440.0, 'n': 25, 'tau': 4.0, 'tau_fixo': False,
-                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 0.0,
-                  'desligar': False, 'repetir': 1},
+    # padrão da campanha de ruído de 18/11: τ fixo 1 s (4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
+    'varredura': {'nome': 'varredura', 'fmin': 40.0, 'fmax': 2440.0, 'n': 25, 'tau': 1.0, 'tau_fixo': True,
+                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 600.0,
+                  'repeticoes': 3, 'desligar': False, 'repetir': 1},
     'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': [100.0], 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,
                 'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'transiente': {'nome': 'transiente_f{f}_pwm{pwm}', 'f': [17.0], 'pwm': [100.0], 'pulsos': 64, 'intervalo': 60.0,
@@ -69,11 +70,11 @@ OPCOES = {
     '--aquecer': ('aquecer', float), '--desligar': ('desligar', None), '--repetir': ('repetir', int),
     '--f': ('f', 'flist'), '--dt': ('dt', float), '--duracao': ('duracao', float), '--texto': ('texto', str),
     '--pulsos': ('pulsos', int), '--intervalo': ('intervalo', float), '--individuais': ('individuais', None),
-    '--ajuste': ('ajuste', int), '--inicio': ('inicio', float), '--fim': ('fim', float), '--passo': ('passo', float),
+    '--ajuste': ('ajuste', int), '--repeticoes': ('repeticoes', int), '--inicio': ('inicio', float), '--fim': ('fim', float), '--passo': ('passo', float),
 }
 ORDEM = {   # ordem das opções ao salvar
     'varredura': ('nome', 'fmin', 'fmax', 'n', 'tau', 'tau_fixo', 'precisao', 'medias', 'adapt_tudo', 'pwm',
-                  'aquecer', 'repetir', 'desligar'),
+                  'aquecer', 'repeticoes', 'repetir', 'desligar'),
     'sinal-t': ('nome', 'f', 'pwm', 'tau', 'dt', 'duracao', 'aquecer', 'repetir', 'desligar'),
     'pausa': ('nome', 'duracao', 'repetir'),
     'transiente': ('nome', 'f', 'pwm', 'pulsos', 'intervalo', 'duracao', 'individuais', 'ajuste', 'aquecer', 'repetir',
@@ -85,6 +86,57 @@ ORDEM = {   # ordem das opções ao salvar
     'duplo-pwm': ('nome', 'inicio', 'fim', 'passo', 'f', 'tau', 'aquecer', 'repetir', 'desligar'),
 }
 FIM_OPCOES = ('laser_parado', 'manter')
+
+
+MAINS_NEAR_HZ = 3.0        # |f - k·60| <= 3 Hz (k >= 1): "perto da rede" (fundo de 60 Hz e harmônicos)
+MAINS_FIX_SHIFT_HZ = 5.0   # sugestão para um campo de frequência fixa: k·60 ± 5 Hz
+MAINS_SWEEP_SHIFT_HZ = 4.0  # pontos de varredura deslocados para k·60 ± 4 Hz
+
+
+def mains_near(f):
+    """Múltiplo de 60 Hz a até 3 Hz de f (ou None)."""
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return None
+    k = int(round(f / 60.0))
+    return 60.0 * k if k >= 1 and abs(f - 60.0 * k) <= MAINS_NEAR_HZ + 1e-9 else None
+
+
+def mains_suggest(f, shift=MAINS_FIX_SHIFT_HZ):
+    """f deslocada para fora da faixa da rede, do lado em que está (exatamente k·60 -> +shift)."""
+    m = mains_near(f)
+    if m is None:
+        return float(f)
+    return round(m + (shift if f >= m else -shift), 3)
+
+
+def mains_msg(f):
+    m = mains_near(f)
+    if m is None:
+        return ''
+    return f'⚠ {f:g} Hz está perto de {m:g} Hz (rede): use {mains_suggest(f):g} Hz'
+
+
+def avoid_mains(values, shift=MAINS_SWEEP_SHIFT_HZ):
+    """(valores, [(antigo, novo)]): pontos de varredura perto da rede vão para k·60 ± shift."""
+    out, moved = [], []
+    for f in values:
+        g = mains_suggest(f, shift)
+        if g != f:
+            moved.append((f, g))
+        if g not in out:
+            out.append(g)
+    return out, moved
+
+
+def step_mains(st):
+    """Frequências fixas da etapa perto da rede."""
+    v = st.get('f')
+    if st['tipo'] in ('varredura', 'pausa', 'aviso') or v is None or st['tipo'] in ('opt101-f', 'inmp441-f'):
+        return []
+    vals = v if isinstance(v, list) else [v]
+    return [f for f in vals if mains_near(f) is not None]
 
 
 def new_step(tipo, **kw):
@@ -147,6 +199,8 @@ def _parse_step(line):
     if tipo not in TIPOS:
         raise ValueError(f'tipo de etapa desconhecido: "{toks[0]}" (use {", ".join(TIPOS)})')
     st = new_step(tipo)
+    if tipo == 'varredura':
+        st.update(tau_fixo=False, repeticoes=1, aquecer=0.0)
     rest = toks[1:]
     if tipo == 'aviso' and rest and not rest[0].startswith('--'):
         st['texto'] = ' '.join(rest)
@@ -242,7 +296,7 @@ def step_line(st):
             if isinstance(v, bool):
                 if v:
                     parts.append(opt)
-            elif k == 'repetir' and int(v) == 1:
+            elif k in ('repetir', 'repeticoes') and int(v) == 1:
                 continue
             elif k in ('medias',) and int(v) <= 1:
                 continue
@@ -610,6 +664,8 @@ class SeriesRunner(QtCore.QObject):
             w._series_stop_sweep()
             return
         if not w.dual_active:
+            if getattr(w, 'dual_rep', None):
+                w._series_stop_sweep()        # entre duas repetições: mediana das que já terminaram
             return
         if w.dual_src == 'T':
             w.toggle_dual_time()          # encerra e salva o que já foi medido
@@ -690,7 +746,7 @@ class SeriesRunner(QtCore.QObject):
             if self.tjob.done:
                 self._job_end('concluída')
                 self._after_job()
-        elif self.state == 'run' and not (w.dual_active or getattr(w, 'sweep_active', False)):
+        elif self.state == 'run' and not (w.dual_busy() or getattr(w, 'sweep_active', False)):
             self._job_end('concluída')
             self._after_job()
         self.changed.emit()
@@ -1241,6 +1297,20 @@ class SeriesTab(QtWidgets.QWidget):
         bl = QtWidgets.QVBoxLayout(box)
         self.stack = QtWidgets.QStackedWidget()
         bl.addWidget(self.stack)
+        # aviso de frequência perto de múltiplo de 60 Hz, com "Deslocar"
+        self.w_mains = QtWidgets.QWidget()
+        hm = QtWidgets.QHBoxLayout(self.w_mains)
+        hm.setContentsMargins(0, 0, 0, 0)
+        self.lbl_mains = QtWidgets.QLabel('')
+        self.lbl_mains.setWordWrap(True)
+        self.lbl_mains.setStyleSheet('color:#d97000;font-weight:bold;')
+        self.btn_mains = QtWidgets.QPushButton('Deslocar')
+        self.btn_mains.setToolTip('Troca as frequências perto da rede pelas sugeridas (k·60 ± 5 Hz).')
+        self.btn_mains.clicked.connect(self._shift_mains)
+        hm.addWidget(self.lbl_mains, 1)
+        hm.addWidget(self.btn_mains)
+        self.w_mains.setVisible(False)
+        bl.addWidget(self.w_mains)
         v.addWidget(box, 1)
         self.forms = {}
         self._build_forms()
@@ -1397,13 +1467,26 @@ class SeriesTab(QtWidgets.QWidget):
         g.addWidget(f['medias'], 3, 5)
         f['adapt_tudo'] = QtWidgets.QCheckBox('τ adaptativo também abaixo de 40 Hz')
         f['desligar'] = QtWidgets.QCheckBox('Laser parado (PWM 0) ao terminar a etapa')
-        g.addWidget(f['adapt_tudo'], 4, 0, 1, 3)
-        g.addWidget(f['desligar'], 4, 3, 1, 3)
+        f['repeticoes'] = QtWidgets.QSpinBox()
+        f['repeticoes'].setRange(1, 20)
+        f['repeticoes'].setSuffix(' ×')
+        f['repeticoes'].setToolTip('Repetições da varredura combinadas pela mediana ponto a ponto (CSV _mediana com a '
+                                   'incerteza u).\n1 = uma varredura só. Diferente de "Repetir", que faz medidas '
+                                   'separadas.')
+        g.addWidget(QtWidgets.QLabel('Repetições (mediana):'), 4, 0)
+        g.addWidget(f['repeticoes'], 4, 1)
+        g.addWidget(f['adapt_tudo'], 5, 0, 1, 3)
+        g.addWidget(f['desligar'], 5, 3, 1, 3)
+        f['tau_note'] = QtWidgets.QLabel('τ fixo: 4 s abaixo de 40 Hz (espera 7τ, média 3τ). τ > 4 s não melhora: '
+                                         'use repetições.')
+        f['tau_note'].setStyleSheet('color:#777;')
+        f['tau_note'].setWordWrap(True)
+        g.addWidget(f['tau_note'], 6, 0, 1, 6)
         f['tau_fixo'].toggled.connect(lambda on, ff=f: (ff['precisao'].setEnabled(not on),
                                                         ff['medias'].setEnabled(not on),
                                                         ff['adapt_tudo'].setEnabled(not on),
                                                         ff['lbl_tau'].setText('τ:' if on else 'τ max:')))
-        g.setRowStretch(5, 1)
+        g.setRowStretch(7, 1)
         self.forms['varredura'] = f
         self.stack.addWidget(w)
 
@@ -1567,7 +1650,7 @@ class SeriesTab(QtWidgets.QWidget):
 
         for tipo, f in self.forms.items():
             for key, wd in f.items():
-                if key in ('lbl_tau', 'lbl_n'):
+                if key in ('lbl_tau', 'lbl_n', 'tau_note'):
                     continue
                 if isinstance(wd, QtWidgets.QLineEdit):
                     wd.editingFinished.connect(lambda t=tipo: self._form_to_step(t))
@@ -1634,12 +1717,20 @@ class SeriesTab(QtWidgets.QWidget):
             self.lbl_start_day.setText('')
 
     def _row_texts(self, st):
+        tx = self._row_texts0(st)
+        if step_mains(st):
+            tx = [tx[0], tx[1], tx[2] + ' ⚠'] + list(tx[3:])
+        return tx
+
+    def _row_texts0(self, st):
         t = st['tipo']
         dur = ''
         reps = max(1, int(st.get('repetir', 1))) if t != 'aviso' else 1
         if t == 'varredura':
             freq = f"{st['fmin']:g} – {st['fmax']:g}"
             tau = f"τ fixo {st['tau']:g} s" if st['tau_fixo'] else f"τ max {st['tau']:g} s · {st['precisao']:g} %"
+            if int(st.get('repeticoes', 1)) > 1:
+                tau += f" · {int(st['repeticoes'])}× med"
             pts = f"{st['n']} pts"
             lo, hi = self.win._series_sweep_estimate(st)
             one = fmt_dur(hi) if abs(hi - lo) < 30 else f'{fmt_dur(lo)}–{fmt_dur(hi)}'
@@ -1802,11 +1893,12 @@ class SeriesTab(QtWidgets.QWidget):
         cols = [_tr(c) for c in COLS[3:-1]]
         rows = ''.join(f'<tr><td style="color:#666;padding-right:10px">{c}</td><td>{v}</td></tr>'
                        for c, v in zip(cols, tx[1:]) if v)
+        warn = ''.join(f'<p style="color:#d97000;font-weight:bold">{_tr(mains_msg(f))}</p>' for f in step_mains(st))
         n_done = self._show_done(i)
         extra = (f'<p style="color:#2e7d32">📈 {n_done} {_tr("medida(s) concluída(s) no gráfico")}</p>'
                  if n_done else '')
         self.lbl_sel.setText(f'<table>{rows}</table><p style="color:#888;font-family:Consolas,monospace">'
-                             f'{step_line(st)}</p>{extra}')
+                             f'{step_line(st)}</p>{warn}{extra}')
 
     # ---- medidas concluídas no gráfico
     def _done_files(self, i):
@@ -1931,7 +2023,7 @@ class SeriesTab(QtWidgets.QWidget):
         f = self.forms[t]
         self._loading = True
         for key, wd in f.items():
-            if key in ('lbl_tau', 'lbl_n'):
+            if key in ('lbl_tau', 'lbl_n', 'tau_note'):
                 continue
             v = st.get(key, DEFAULTS[t].get(key))
             if isinstance(wd, QtWidgets.QLineEdit):
@@ -1951,6 +2043,7 @@ class SeriesTab(QtWidgets.QWidget):
                 f[k].setEnabled(not on)
             f['lbl_tau'].setText('τ:' if on else 'τ max:')
         self._loading = False
+        self._upd_mains()
 
     def _form_to_step(self, tipo):
         # campos da janela de configuração -> medida em edição (gravada na série só com OK)
@@ -1960,7 +2053,7 @@ class SeriesTab(QtWidgets.QWidget):
         if st is None or st['tipo'] != tipo:
             return
         for key, wd in self.forms[tipo].items():
-            if key in ('lbl_tau', 'lbl_n'):
+            if key in ('lbl_tau', 'lbl_n', 'tau_note'):
                 continue
             if isinstance(wd, QtWidgets.QLineEdit):
                 if key in ('f', 'pwm'):
@@ -1981,6 +2074,22 @@ class SeriesTab(QtWidgets.QWidget):
                 st[key] = wd.value()
         if tipo == 'transiente':
             self._upd_n(st)
+        self._upd_mains()
+
+    def _upd_mains(self):
+        st = getattr(self, '_edit', None)
+        near = step_mains(st) if st else []
+        self.lbl_mains.setText('<br>'.join(_tr(mains_msg(f)) for f in near))
+        self.w_mains.setVisible(bool(near))
+
+    def _shift_mains(self):
+        st = self._edit
+        if not st or not step_mains(st):
+            return
+        v = st['f']
+        st['f'] = [mains_suggest(f) for f in v] if isinstance(v, list) else mains_suggest(v)
+        self._fill_form(st)
+        self._upd_mains()
 
     def _upd_n(self, st):
         iv, dur = st['intervalo'], 60.0 * st['duracao']

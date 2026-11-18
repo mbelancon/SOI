@@ -66,6 +66,24 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   a window (a Notice waits for Enter in the terminal).
 - Simulated mode works as usual (same sweep and Signal vs t code).
 
+#### Added: sweep repetitions with median (noise campaign, 2026-11-18)
+- **Why:** between 40 and 200 Hz the sweep errors are isolated points off by 8–15 % (room sounds lasting a few
+  seconds), at different frequencies in each sweep; a longer τ does not remove them, the median of separate sweeps does.
+- Dual Mode frequency sweeps: **Repetitions** field (default 3). Each repetition saves its CSV (`_rep1`, `_rep2`…);
+  at the end a `_mediana` CSV with the point-by-point median and the new columns `S`, `N_repeticoes`,
+  `Incerteza_S_Pct` (100·1.25·SD/√N/median) and `Incerteza_Fase_Graus`. The plot shows the repetitions in grey and the
+  median with error bars of u. Headless `--repeticoes N`; series step option `--repeticoes N`.
+- Mains harmonics: fixed-frequency fields within ±3 Hz of a multiple of 60 Hz (excitation bar, Signal vs t, series
+  steps and lists) show an orange warning with a **Shift** button (k·60 ± 5 Hz); sweeps move such points to k·60 ± 4 Hz
+  by default (*Avoid multiples of 60 Hz*), listed in the CSV header. Headless `--sem-evitar-rede`.
+
+#### Changed: sweep defaults from the 2026-11-18 noise campaign
+- Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),
+  3 repetitions + median, 600 s warm-up (was 300 s), start at 40 Hz, avoid multiples of 60 Hz. Above τ = 4 s an orange
+  "τ > 4 s does not help: use repetitions" appears (largest useful τ, from the Allan deviation). Saved preferences are
+  switched to the new defaults once. Headless: adaptive τ only with `--adaptativo` or `--precisao`; series files
+  written before keep their meaning (a `varredura` line without `--tau-fixo` is still adaptive, one sweep).
+
 #### Changed
 - Unattended runs: during a series the "below 40 Hz" confirmation and the calibration-conditions check of the
   frequency sweep do not open dialogs (the warning goes to the log).
