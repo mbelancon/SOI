@@ -12107,6 +12107,8 @@ def run_headless(argv):
     win.on_power(win.sp_power.value())
     if a.amostra is not None:
         win.ed_sample.setText(a.amostra)
+        if win.audio_rec is not None:
+            win.audio_rec.retitle()
     if a.celula:
         win.cmb_cell.setCurrentIndex(max(0, win.cmb_cell.findData(a.celula)))
     if a.cal:
@@ -12220,6 +12222,8 @@ class AudioRecorder:
         self.q = deque()
         self.fh = None
         self.path = None
+        self.stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.want_retitle = False
         self.bytes = 0
         self.stop_ev = threading.Event()
         self.th = threading.Thread(target=self._run, name='AudioRecorder', daemon=True)
@@ -12232,15 +12236,38 @@ class AudioRecorder:
         x = (np.asarray(samples[:n], dtype=np.float64).reshape(-1, 4).mean(axis=1) / 8388608.0).astype('<f4')
         self.q.append((sequence & 0xFFFFFFFF, time.time(), x))
 
+    def _name(self):
+        name = re.sub(r'[^\w.-]+', '_', (self.name_fn() or '').strip()) or 'soi'
+        return os.path.join(self.folder, f'audio_{name}_{self.stamp}.bin')
+
+    def retitle(self):
+        """A amostra mudou (ex.: --amostra do modo sem janela, depois de o arquivo já ter sido aberto): renomeia."""
+        self.want_retitle = True
+
     def _open(self):
         os.makedirs(self.folder, exist_ok=True)
-        name = re.sub(r'[^\w.-]+', '_', (self.name_fn() or '').strip()) or 'soi'
-        self.path = os.path.join(self.folder, f"audio_{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin")
+        self.path = self._name()
         self.fh = open(self.path, 'ab')
         print(f'Gravando o áudio bruto do INMP441 (12 kS/s, float32): {self.path}', flush=True)
 
+    def _do_retitle(self):
+        self.want_retitle = False
+        new = self._name()
+        if self.fh is None or new == self.path:
+            return
+        self.fh.close()                         # no Windows um arquivo aberto não pode ser renomeado
+        try:
+            os.replace(self.path, new)
+            print(f'Áudio bruto: arquivo renomeado para {new}', flush=True)
+            self.path = new
+        except OSError as e:
+            print(f'Áudio bruto: não foi possível renomear ({e}); continua em {self.path}', flush=True)
+        self.fh = open(self.path, 'ab')
+
     def _drain(self):
         import struct
+        if self.want_retitle:
+            self._do_retitle()
         if not self.q:
             return
         if self.fh is None:

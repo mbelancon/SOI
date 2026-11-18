@@ -83,7 +83,8 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   (GUI or headless). One file per run, `audio_<sample or soi>_<YYYYMMDD_HHMMSS>.bin`: per block a little-endian header
   `uint32 sequence` (I2S index of the first sample), `uint32 n_out`, `float64 t_pc` (time.time() on arrival), then
   `n_out` float32 = mean of every 4 samples / 8388608 (12 kS/s, ~170 MB/h). Written by its own thread (flush every
-  ~1 s); the file name goes to the log.
+  ~1 s); the file name goes to the log. Headless `--amostra` renames the file if it was already open with the
+  sample name saved in the interface.
 
 #### Changed: sweep defaults from the 2026-11-18 noise campaign
 - Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),
