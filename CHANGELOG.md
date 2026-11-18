@@ -29,7 +29,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - Measurements are added with a single **"＋ Configure new measurement..."** button that opens a configuration window:
   choose the sensor (Dual Mode, OPT101, INMP441, Pause/notice), what to vary (frequency, time, PWM) and the
   parameters (time, repetitions, averages). Double-click a row (or Edit...) to change it; the panel on the right
-  shows the selected measurement. Options not available yet are listed as "coming soon".
+  shows the selected measurement.
 - Run controls: Start, Pause after this step, Continue, Skip step and Stop (the measurement in progress is ended
   and saved with the points already measured). Status line with the remaining time of the step and of the series
   and the expected end time; a plot of the measurement in progress; the other tabs and the top bar are locked
@@ -50,6 +50,12 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   `--individuais`.
 - PWM list (power scan) in Signal vs t and Transient: `--pwm 25;50;100`, one measurement per power (`{pwm}` in the
   name), combined with the frequency list and with Repeat.
+- Sweeps of the other tabs as steps: **OPT101 × f**, **OPT101 × PWM**, **INMP441 × f**, **INMP441 × PWM** (the
+  lock-in sweeps of the OPT101 and INMP441 tabs, linear start/end/step, with the filters set in that tab) and
+  **Dual Mode × PWM** (the "Signal vs PWM" panel: S and Δφ at each PWM, fixed frequency, τ > 0 = long
+  integration). Options `--inicio`, `--fim`, `--passo` (plus `--pwm` or `--f`, `--tau`, `--aquecer`). Same files
+  and columns as the sweeps started from the tabs, saved in the series folder; the result window is not opened
+  during a series.
 - Headless: `soi_controller.py --serie file.serie.txt [--amostra name] [--simulado]` runs the same file without
   a window (a Notice waits for Enter in the terminal).
 - Simulated mode works as usual (same sweep and Signal vs t code).

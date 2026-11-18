@@ -31,9 +31,12 @@ from datetime import datetime, timedelta
 
 SERIE_EXT = '.serie.txt'
 SERIE_HEADER = '# SOI - medidas em série (versão 1)'
-TIPOS = ('varredura', 'sinal-t', 'pausa', 'aviso', 'transiente')
+TIPOS = ('varredura', 'sinal-t', 'pausa', 'aviso', 'transiente', 'opt101-f', 'opt101-pwm', 'inmp441-f',
+         'inmp441-pwm', 'duplo-pwm')
 TIPO_NOME = {'varredura': 'Varredura f', 'sinal-t': 'Sinal x t', 'pausa': 'Pausa', 'aviso': 'Aviso',
-             'transiente': 'Transiente'}
+             'transiente': 'Transiente', 'opt101-f': 'OPT101 × f', 'opt101-pwm': 'OPT101 × PWM',
+             'inmp441-f': 'INMP441 × f', 'inmp441-pwm': 'INMP441 × PWM', 'duplo-pwm': 'Modo Duplo × PWM'}
+SIMPLES = ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm')   # varreduras lineares (início, fim, passo) dos quadros das abas
 LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista (uma medida por combinação)
 
 DEFAULTS = {
@@ -46,6 +49,16 @@ DEFAULTS = {
                    'duracao': 10.0, 'individuais': False, 'ajuste': 0, 'aquecer': 0.0, 'desligar': False,
                    'repetir': 1},
     'pausa': {'nome': 'pausa', 'duracao': 10.0, 'repetir': 1},
+    'opt101-f': {'nome': 'opt101_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
+                 'desligar': False, 'repetir': 1},
+    'opt101-pwm': {'nome': 'opt101_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+                   'desligar': False, 'repetir': 1},
+    'inmp441-f': {'nome': 'inmp441_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
+                  'desligar': False, 'repetir': 1},
+    'inmp441-pwm': {'nome': 'inmp441_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+                    'desligar': False, 'repetir': 1},
+    'duplo-pwm': {'nome': 'duplo_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'tau': 1.0,
+                  'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'aviso': {'nome': '', 'texto': 'Clique em Continuar para seguir.'},
 }
 # opção da linha -> (chave, tipo); tipo None = flag sem valor
@@ -56,7 +69,7 @@ OPCOES = {
     '--aquecer': ('aquecer', float), '--desligar': ('desligar', None), '--repetir': ('repetir', int),
     '--f': ('f', 'flist'), '--dt': ('dt', float), '--duracao': ('duracao', float), '--texto': ('texto', str),
     '--pulsos': ('pulsos', int), '--intervalo': ('intervalo', float), '--individuais': ('individuais', None),
-    '--ajuste': ('ajuste', int),
+    '--ajuste': ('ajuste', int), '--inicio': ('inicio', float), '--fim': ('fim', float), '--passo': ('passo', float),
 }
 ORDEM = {   # ordem das opções ao salvar
     'varredura': ('nome', 'fmin', 'fmax', 'n', 'tau', 'tau_fixo', 'precisao', 'medias', 'adapt_tudo', 'pwm',
@@ -65,6 +78,11 @@ ORDEM = {   # ordem das opções ao salvar
     'pausa': ('nome', 'duracao', 'repetir'),
     'transiente': ('nome', 'f', 'pwm', 'pulsos', 'intervalo', 'duracao', 'individuais', 'ajuste', 'aquecer', 'repetir',
                    'desligar'),
+    'opt101-f': ('nome', 'inicio', 'fim', 'passo', 'pwm', 'aquecer', 'repetir', 'desligar'),
+    'opt101-pwm': ('nome', 'inicio', 'fim', 'passo', 'f', 'aquecer', 'repetir', 'desligar'),
+    'inmp441-f': ('nome', 'inicio', 'fim', 'passo', 'pwm', 'aquecer', 'repetir', 'desligar'),
+    'inmp441-pwm': ('nome', 'inicio', 'fim', 'passo', 'f', 'aquecer', 'repetir', 'desligar'),
+    'duplo-pwm': ('nome', 'inicio', 'fim', 'passo', 'f', 'tau', 'aquecer', 'repetir', 'desligar'),
 }
 FIM_OPCOES = ('laser_parado', 'manter')
 
@@ -150,11 +168,15 @@ def _parse_step(line):
         val = rest[i + 1]
         if key == 'pwm' and tipo in LISTAS:
             st[key] = parse_pwmlist(val)
+        elif key == 'f' and tipo not in LISTAS:
+            st[key] = float(val)
         else:
             st[key] = parse_flist(val) if kind == 'flist' else kind(val)
         i += 2
     if st.get('repetir', 1) < 1:
         raise ValueError('--repetir precisa ser 1 ou mais')
+    if tipo in SIMPLES and st['passo'] <= 0:
+        raise ValueError('--passo precisa ser maior que 0')
     if tipo == 'transiente':
         if st['pulsos'] < 1:
             raise ValueError('--pulsos precisa ser 1 ou mais')
@@ -349,6 +371,9 @@ class SeriesRunner(QtCore.QObject):
         if t in ('sinal-t', 'transiente'):
             d = 60.0 * p['duracao'] + p.get('aquecer', 0.0)
             return d, d
+        if t in SIMPLES:
+            d = w._series_simple_estimate(t, p) + p.get('aquecer', 0.0) + self.SETTLE_S
+            return d, d
         return w._series_sweep_estimate(p)
 
     def total_estimate(self, jobs=None):
@@ -506,12 +531,16 @@ class SeriesRunner(QtCore.QObject):
                 w._series_apply(j['tipo'], p)
             self.warm_s = p.get('aquecer', 0.0) or 0.0
             if self.warm_s > 0:
-                self._laser(p['pwm'], p['f'] if j['tipo'] in LISTAS else None)
+                if j['tipo'] in SIMPLES and not j['tipo'].endswith('-f'):
+                    self._laser(max(p['inicio'], p['fim']), p['f'])      # varredura em PWM: aquece no maior PWM
+                else:
+                    self._laser(p['pwm'], p['f'] if j['tipo'] in LISTAS else None)
                 self.until = time.time() + self.warm_s
                 self.state = 'warm'
                 self.log(f'  warm-up: PWM {p["pwm"]:g} % por {self.warm_s:g} s')
-            elif j['tipo'] == 'varredura':
-                self._laser(p['pwm'])
+            elif j['tipo'] == 'varredura' or j['tipo'] in SIMPLES:
+                if j['tipo'] == 'varredura':
+                    self._laser(p['pwm'])
                 self.until = time.time() + self.SETTLE_S
                 self.state = 'settle'
             else:
@@ -531,11 +560,16 @@ class SeriesRunner(QtCore.QObject):
             self.state = 'run'
             self.t_meas = time.time()
             return
-        if j['tipo'] == 'varredura':
+        w.sweep_last_csv = None
+        if j['tipo'] in SIMPLES and j['tipo'] != 'duplo-pwm':
+            w.toggle_sweep('F' if j['tipo'].endswith('-f') else 'P', 'OPT' if j['tipo'].startswith('opt') else 'AUDIO')
+        elif j['tipo'] == 'duplo-pwm':
+            w.toggle_dual_sweep('P')
+        elif j['tipo'] == 'varredura':
             w.toggle_dual_sweep('F')
         else:
             w.toggle_dual_time()
-        if not w.dual_active:
+        if not (w.dual_active or getattr(w, 'sweep_active', False)):
             self.log('  ERRO: a medida não começou (veja as mensagens acima).')
             self._job_end('falhou')
             self._after_job()
@@ -548,6 +582,9 @@ class SeriesRunner(QtCore.QObject):
         tj = getattr(self, 'tjob', None)
         if tj is not None and not tj.done:
             tj.finish()
+            return
+        if getattr(w, 'sweep_active', False):
+            w._series_stop_sweep()
             return
         if not w.dual_active:
             return
@@ -564,9 +601,12 @@ class SeriesRunner(QtCore.QObject):
             tj = getattr(self, 'tjob', None)
             csv_path = tj.csv if tj is not None else None
             self.tjob = None
+        elif j['tipo'] in SIMPLES and j['tipo'] != 'duplo-pwm':
+            csv_path = getattr(w, 'sweep_last_csv', None)
+            w.sweep_last_csv = None
         else:
-            csv_path = getattr(w, 'dual_last_csv', None) if j['tipo'] in ('varredura', 'sinal-t') else None
-        if j['tipo'] in ('varredura', 'sinal-t', 'transiente') and estado == 'concluída' and not csv_path:
+            csv_path = getattr(w, 'dual_last_csv', None) if j['tipo'] in ('varredura', 'sinal-t', 'duplo-pwm') else None
+        if j['tipo'] not in ('pausa', 'aviso') and estado == 'concluída' and not csv_path:
             estado = 'falhou'
         self.status[self.idx] = estado
         self.files[self.idx] = csv_path or ''
@@ -580,7 +620,7 @@ class SeriesRunner(QtCore.QObject):
                                          estado, os.path.basename(csv_path) if csv_path else ''])
         except OSError as e:
             self.log(f'  resumo.csv não gravado: {e}')
-        if j['tipo'] in ('varredura', 'sinal-t', 'transiente') and j['p'].get('desligar'):
+        if j['tipo'] not in ('pausa', 'aviso') and j['p'].get('desligar'):
             self._laser_off()
         self.log(f'  {estado}' + (f': {csv_path}' if csv_path else ''))
         self.state = 'between'
@@ -604,6 +644,8 @@ class SeriesRunner(QtCore.QObject):
         if not self.active:
             return
         now, w = time.time(), self.win
+        if getattr(w, '_exporting', False):        # a medida ainda está gravando o CSV/PNG
+            return
         if self.state == 'wait_start':
             if datetime.now() >= self.wait_until:
                 self.log('Série: horário de início, começando.')
@@ -613,7 +655,7 @@ class SeriesRunner(QtCore.QObject):
                 self._job_end('concluída')
                 self._after_job()
             elif self.state == 'warm':
-                if self.job()['tipo'] == 'varredura':
+                if self.job()['tipo'] == 'varredura' or self.job()['tipo'] in SIMPLES:
                     self.until = now + self.SETTLE_S
                     self.state = 'settle'
                 else:
@@ -625,7 +667,7 @@ class SeriesRunner(QtCore.QObject):
             if self.tjob.done:
                 self._job_end('concluída')
                 self._after_job()
-        elif self.state == 'run' and not w.dual_active:
+        elif self.state == 'run' and not (w.dual_active or getattr(w, 'sweep_active', False)):
             self._job_end('concluída')
             self._after_job()
         self.changed.emit()
@@ -662,11 +704,14 @@ class SeriesRunner(QtCore.QObject):
             j = self.job()
             if self.state == 'warm':
                 e = self.estimate(j)
-                cur += (e[1] - self.warm_s) if j['tipo'] == 'varredura' else 60.0 * j['p']['duracao']
+                cur += (e[1] - self.warm_s) if (j['tipo'] == 'varredura' or j['tipo'] in SIMPLES) \
+                    else 60.0 * j['p']['duracao']
         elif self.state == 'run':
             j = self.job()
             if j['tipo'] in LISTAS:
                 cur = max(0.0, 60.0 * j['p']['duracao'] - (now - self.t_meas))
+            elif getattr(w, 'sweep_active', False):
+                cur = max(0.0, w._sweep_remaining(time.perf_counter()))
             else:
                 cur = max(0.0, getattr(w, 'dual_rest', 0.0) or 0.0)
         rest = sum((self.estimate(self.jobs[i]) or (0, 0))[1] for i in range(self.idx + 1, len(self.jobs)))
@@ -1007,7 +1052,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.tbl.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.tbl.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tbl.setAlternatingRowColors(False)
-        for i, wd in enumerate((24, 28, 80, 150, 105, 50, 130, 70, 55, 125)):
+        for i, wd in enumerate((24, 28, 125, 140, 105, 75, 110, 120, 55, 85)):
             self.tbl.setColumnWidth(i, wd)
         self.tbl.horizontalHeader().setStretchLastSection(True)
         self.tbl.itemSelectionChanged.connect(self._on_select)
@@ -1118,10 +1163,12 @@ class SeriesTab(QtWidgets.QWidget):
     MENU = (
         ('Modo Duplo (OPT101 + INMP441)', (('Frequência: varredura em f', 'varredura'),
                                            ('Tempo: Sinal x t (acompanhamento do sinal)', 'sinal-t'),
-                                           ('PWM: varredura em potência (em breve)', None))),
+                                           ('PWM: varredura em potência', 'duplo-pwm'))),
         ('OPT101', (('Tempo: transientes (médias de pulsos)', 'transiente'),
-                    ('Frequência: varredura (em breve)', None), ('PWM: varredura (em breve)', None))),
-        ('INMP441', (('Frequência: varredura (em breve)', None), ('PWM: varredura (em breve)', None))),
+                    ('Frequência: varredura em f (lock-in)', 'opt101-f'),
+                    ('PWM: varredura em potência (lock-in)', 'opt101-pwm'))),
+        ('INMP441', (('Frequência: varredura em f (lock-in)', 'inmp441-f'),
+                     ('PWM: varredura em potência (lock-in)', 'inmp441-pwm'))),
         ('Pausa / aviso', (('Pausa com o laser parado', 'pausa'), ('Aviso: espera o operador', 'aviso'))),
     )
     DESCR = {
@@ -1131,6 +1178,11 @@ class SeriesTab(QtWidgets.QWidget):
         'transiente': 'Modo Valor Médio do OPT101: uma média de N pulsos a cada intervalo, durante o tempo total. '
                       'Listas de frequências e de PWM: uma medida por combinação.',
         'pausa': 'Laser parado (PWM 0) pelo tempo escolhido, sem gravar.',
+        'opt101-f': 'Varredura em frequência da aba OPT101 (lock-in do OPT101), passo linear, PWM fixo.',
+        'opt101-pwm': 'Varredura em PWM da aba OPT101 (lock-in do OPT101), frequência fixa.',
+        'inmp441-f': 'Varredura em frequência da aba INMP441 (lock-in do microfone), passo linear, PWM fixo.',
+        'inmp441-pwm': 'Varredura em PWM da aba INMP441 (lock-in do microfone), frequência fixa.',
+        'duplo-pwm': 'Varredura em PWM do Modo Duplo (S e Δφ em cada PWM), frequência fixa. τ > 0 = integração longa.',
         'aviso': 'A série para, mostra o texto e espera o clique em Continuar.',
     }
 
@@ -1209,6 +1261,11 @@ class SeriesTab(QtWidgets.QWidget):
 
     def _new_for(self, tipo):
         st = new_step(tipo)
+        if tipo in SIMPLES:
+            a, b, d = self.win._series_sweep_fields(tipo)
+            st.update(inicio=a.value(), fim=b.value(), passo=d.value())
+            if tipo.endswith('-pwm'):
+                st['f'] = round(self.win.sp_freq.value(), 3)
         if tipo == 'varredura':
             sp0, sp1, _sp, spn, _ = self.win.dual_fw['F']
             st.update(fmin=min(sp0.value(), sp1.value()), fmax=max(sp0.value(), sp1.value()), n=int(spn.value()))
@@ -1434,6 +1491,53 @@ class SeriesTab(QtWidgets.QWidget):
         self.forms['transiente'] = f
         self.stack.addWidget(w)
 
+        # varreduras lineares das abas (opt101-f, opt101-pwm, inmp441-f, inmp441-pwm, duplo-pwm)
+        for tipo in SIMPLES:
+            w, g = grid()
+            f = {}
+            name_rep(g, f)
+            in_f = tipo.endswith('-f')
+            unit, hi = (' Hz', 5000.0) if in_f else (' %', 100.0)
+            f['inicio'] = self._dsp(0.0 if not in_f else 0.1, hi, 10.0, 2 if in_f else 1, unit)
+            f['fim'] = self._dsp(0.0 if not in_f else 0.1, hi, 100.0, 2 if in_f else 1, unit)
+            f['passo'] = self._dsp(0.01, hi, 10.0, 2 if in_f else 1, unit)
+            g.addWidget(QtWidgets.QLabel('Início:'), 1, 0)
+            g.addWidget(f['inicio'], 1, 1)
+            g.addWidget(QtWidgets.QLabel('Fim:'), 1, 2)
+            g.addWidget(f['fim'], 1, 3)
+            g.addWidget(QtWidgets.QLabel('Passo:'), 1, 4)
+            g.addWidget(f['passo'], 1, 5)
+            if in_f:
+                f['pwm'] = self._dsp(0.0, 100.0, 100.0, 1, ' %', 5.0)
+                g.addWidget(QtWidgets.QLabel('PWM:'), 2, 0)
+                g.addWidget(f['pwm'], 2, 1)
+            else:
+                f['f'] = self._dsp(0.5, 5000.0, 17.0, 2, ' Hz')
+                g.addWidget(QtWidgets.QLabel('Frequência:'), 2, 0)
+                g.addWidget(f['f'], 2, 1)
+            if tipo == 'duplo-pwm':
+                f['tau'] = self._dsp(0.0, 30.0, 1.0, 2, ' s', 0.5)
+                f['tau'].setToolTip('τ da integração longa em cada PWM (espera 9τ, média 1τ).\n'
+                                    '0 = média no tempo com os filtros atuais dos lock-ins.')
+                g.addWidget(QtWidgets.QLabel('τ:'), 2, 2)
+                g.addWidget(f['tau'], 2, 3)
+            f['aquecer'] = self._dsp(0.0, 7200.0, 0.0, 0, ' s', 60.0, 80)
+            f['aquecer'].setToolTip('Antes da varredura, laser ligado por este tempo, sem gravar'
+                                    + ('.' if in_f else ' (no maior PWM da varredura).'))
+            g.addWidget(QtWidgets.QLabel('Warm-up:'), 3, 0)
+            g.addWidget(f['aquecer'], 3, 1)
+            f['desligar'] = QtWidgets.QCheckBox('Laser parado (PWM 0) ao terminar a etapa')
+            g.addWidget(f['desligar'], 3, 2, 1, 4)
+            note = QtWidgets.QLabel('Passo linear, como no quadro de varredura da aba. Os filtros (τ) são os que '
+                                    'estiverem nos lock-ins da aba.' if tipo != 'duplo-pwm' else
+                                    'Passo linear, como no quadro "Sinal x PWM" do Modo Duplo.')
+            note.setWordWrap(True)
+            note.setStyleSheet('color:#666;font-weight:normal;')
+            g.addWidget(note, 4, 0, 1, 6)
+            g.setRowStretch(5, 1)
+            self.forms[tipo] = f
+            self.stack.addWidget(w)
+
         for tipo, f in self.forms.items():
             for key, wd in f.items():
                 if key in ('lbl_tau', 'lbl_n'):
@@ -1531,6 +1635,19 @@ class SeriesTab(QtWidgets.QWidget):
             n = len(st['f']) * len(st['pwm']) * reps
             one = fmt_dur(60 * st['duracao'] + st.get('aquecer', 0))
             dur = f'{n} × {one}' if n > 1 else one
+        elif t in SIMPLES:
+            in_f = t.endswith('-f')
+            vals = np.arange(min(st['inicio'], st['fim']), max(st['inicio'], st['fim']) + st['passo'] * 0.5,
+                             max(st['passo'], 1e-6))
+            if in_f:
+                freq, pwm = f"{st['inicio']:g} – {st['fim']:g}", f"{st['pwm']:g}"
+            else:
+                freq, pwm = f"{st['f']:g}", f"{st['inicio']:g} – {st['fim']:g}"
+            tau = (f"τ {st['tau']:g} s" if st.get('tau', 0) > 0 else _tr('τ dos filtros')) if t == 'duplo-pwm' \
+                else _tr('τ dos filtros')
+            pts = f"{len(vals)} pts · {st['passo']:g}{' Hz' if in_f else ' %'}"
+            one = fmt_dur(self.win._series_simple_estimate(t, st) + st.get('aquecer', 0))
+            dur = (f'{reps} × ' if reps > 1 else '') + '~' + one
         elif t == 'pausa':
             freq, tau, pts, pwm = '', '', '', '0'
             one = fmt_dur(60 * st['duracao'])

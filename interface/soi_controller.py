@@ -9787,7 +9787,10 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _series_widgets(self):
         sp0, sp1, space, spn, _ = self.dual_fw['F']
-        return (self.cmb_mod, space, sp0, sp1, spn, self.chk_dual_adapt, self.chk_dual_adapt40, self.chk_dual_blocks,
+        return (self.sp_f0, self.sp_f1, self.sp_df, self.sp_p0, self.sp_p1, self.sp_dp, self.sp_aud_f0,
+                self.sp_aud_f1, self.sp_aud_df, self.sp_aud_p0, self.sp_aud_p1, self.sp_aud_dp, self.sp_dual_p0,
+                self.sp_dual_p1, self.sp_dual_dp, self.dual_mode_w['P'], self.dual_tau_w['P'],
+                self.cmb_mod, space, sp0, sp1, spn, self.chk_dual_adapt, self.chk_dual_adapt40, self.chk_dual_blocks,
                 self.sp_dual_blocks, self.dual_tau_w['F'], self.sp_dual_adapt_tol, self.sp_dt_f, self.sp_dt_pwm,
                 self.sp_dt_tau, self.sp_dt_dt, self.sp_dt_dur)
 
@@ -9818,9 +9821,44 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.sp_power.setValue(pwm)
         self.on_power(self.sp_power.value())
 
+    def _series_sweep_fields(self, tipo):
+        """(início, fim, passo) do quadro de varredura de uma etapa opt101-*/inmp441-*/duplo-pwm."""
+        return {'opt101-f': (self.sp_f0, self.sp_f1, self.sp_df), 'opt101-pwm': (self.sp_p0, self.sp_p1, self.sp_dp),
+                'inmp441-f': (self.sp_aud_f0, self.sp_aud_f1, self.sp_aud_df),
+                'inmp441-pwm': (self.sp_aud_p0, self.sp_aud_p1, self.sp_aud_dp),
+                'duplo-pwm': (self.sp_dual_p0, self.sp_dual_p1, self.sp_dual_dp)}[tipo]
+
+    def _series_simple_estimate(self, tipo, p):
+        """Tempo (s) de uma varredura de uma etapa opt101-*/inmp441-*/duplo-pwm (as contas dos quadros)."""
+        vals = self._planned_range(min(p['inicio'], p['fim']), max(p['inicio'], p['fim']), max(p['passo'], 1e-6))
+        if tipo == 'duplo-pwm':
+            if p.get('tau', 0) > 0:
+                t = 9.0 * p['tau'] + 0.3 + max(0.5, p['tau'])
+            else:
+                t = sum(self._times_for_cutoff(self.cutoff_lp))
+            return len(vals) * t
+        kind = 'F' if tipo.endswith('-f') else 'P'
+        return sum(self._point_time(kind, v) for v in vals)
+
     def _series_apply(self, tipo, p):
-        """Põe os parâmetros de uma etapa da série nos quadros do Modo Duplo (como o modo sem janela)."""
+        """Põe os parâmetros de uma etapa da série nos quadros das abas (como o modo sem janela)."""
         self.cmb_mod.setCurrentIndex(0)               # modulação eletrônica (o STM32 fixa/varre a frequência)
+        if tipo in ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm'):
+            a, b, d = self._series_sweep_fields(tipo)
+            a.setValue(p['inicio'])
+            b.setValue(p['fim'])
+            d.setValue(p['passo'])
+            if tipo.endswith('-f'):
+                self.sp_power.setValue(p['pwm'])
+                self.on_power(self.sp_power.value())
+            else:
+                self._set_spin(self.sp_freq, p['f'])
+                self.apply_frequency(p['f'])
+            if tipo == 'duplo-pwm':
+                self.dual_mode_w['P'].setCurrentIndex(1 if p.get('tau', 0) > 0 else 0)
+                if p.get('tau', 0) > 0:
+                    self.dual_tau_w['P'].setValue(p['tau'])
+            return
         if tipo == 'sinal-t':
             self.sp_dt_f.setValue(p['f'])
             self.sp_dt_pwm.setValue(p['pwm'])
@@ -9844,7 +9882,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.sp_dual_adapt_tol.setValue(p['precisao'])
 
     def _series_stop_sweep(self):
-        """Encerra a varredura em frequência em andamento e salva os pontos já medidos (Parar/Pular da série)."""
+        """Encerra a varredura em andamento e salva os pontos já medidos (Parar/Pular da série)."""
+        if getattr(self, 'sweep_active', False):          # varreduras das abas OPT101/INMP441
+            self.finish_and_export_sweep()
+            return
         if not self.dual_active:
             return
         if self.dual_state in ('SETTLING', 'MEASURING'):
@@ -10283,6 +10324,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self.finish_and_export_sweep()
 
     def finish_and_export_sweep(self):
+        self._exporting = True          # Medidas em Série esperam o fim do salvamento (há processEvents abaixo)
+        try:
+            self._finish_and_export_sweep()
+        finally:
+            self._exporting = False
+
+    def _finish_and_export_sweep(self):
         self._end_sweep_ui()
         if not self.sweep_results: return
 
@@ -10308,9 +10356,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             params = f"P_Start={f0} %, P_Stop={f1} %, P_Step={df} %, Freq={fm} Hz"
             col, fmt = "PWM_Pct", "{:.2f}"
             
-        os.makedirs(MEDIDAS_DIR, exist_ok=True)
-        filename = os.path.join(MEDIDAS_DIR, stem + ".csv")
-        png_filename = os.path.join(MEDIDAS_DIR, stem + ".png")
+        os.makedirs(self._save_dir(), exist_ok=True)
+        filename = os.path.join(self._save_dir(), stem + ".csv")
+        png_filename = os.path.join(self._save_dir(), stem + ".png")
 
         try:
             with open(filename, 'w', newline='', encoding='utf-8') as f:
@@ -10319,6 +10367,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 for row in self.sweep_results:
                     f.write(f"{fmt.format(row[0])},{row[1]:.5f},{row[2]:.5f},{row[3]:.3f},{row[4]:.3f},{row[5]:.2f}\n")
             self._session_add(filename)
+            self.sweep_last_csv = filename
             print(f"Varredura concluída! Dados em: {filename}")
         except Exception as e:
             print(f"Erro ao salvar arquivo CSV: {e}")
@@ -10458,6 +10507,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             self._session_add(png_filename)
         except Exception as e:
             print(f"Erro ao salvar imagem PNG: {e}")
+        if getattr(self, 'series_active', False):     # medidas em série: sem acumular janelas na madrugada
+            win.close()
+            return
         self.result_windows.append(win)
 
     # ------------------------------------------------------------ Laço GUI
