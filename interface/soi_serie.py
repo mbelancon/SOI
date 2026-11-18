@@ -337,6 +337,29 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets    # noqa: E402
 import pyqtgraph as pg                               # noqa: E402
 
 
+def read_data_csv(path):
+    """Lê um CSV de medida do SOI (linhas '#' = cabeçalho): {coluna: np.array}."""
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        lines = [ln for ln in fh if ln.strip() and not ln.startswith('#')]
+    rows = list(csv.reader(lines))
+    if not rows:
+        return {}
+    head, data = rows[0], rows[1:]
+    cols = {}
+    for c, name in enumerate(head):
+        vals = []
+        for r in data:
+            try:
+                vals.append(float(r[c]))
+            except (ValueError, IndexError):
+                vals.append(np.nan)
+        cols[name.strip()] = np.array(vals, dtype=float)
+    return cols
+
+
+VIEW_COLORS = ('dodgerblue', 'coral', 'mediumseagreen', 'goldenrod', 'orchid', 'slategray', 'firebrick', 'teal')
+
+
 class SeriesRunner(QtCore.QObject):
     """Roda uma série na LockInWindow (a mesma usada pela interface e pelo modo sem janela), etapa a etapa,
     com as mesmas funções dos quadros do Modo Duplo. Dirigida por um QTimer: não bloqueia a interface."""
@@ -1112,6 +1135,10 @@ class SeriesTab(QtWidgets.QWidget):
         self.plot.setTitle('Medida em andamento')
         self.curve = self.plot.plot([], [], pen=None, symbol='o', symbolSize=6, symbolBrush='royalblue',
                                     symbolPen=None)
+        self.legend = self.plot.addLegend(offset=(-10, 10))
+        self.legend.setVisible(False)
+        self._extra = []          # curvas das medidas concluídas
+        self._view_row = None     # etapa concluída mostrada no gráfico (None = medida em andamento)
         rv.addWidget(self.plot, 1)
         split.addWidget(right)
         split.setStretchFactor(0, 62)
@@ -1708,6 +1735,12 @@ class SeriesTab(QtWidgets.QWidget):
         if r.jobs and r.serie is self.serie:
             for k, j in enumerate(r.jobs):
                 per_step.setdefault(j['etapa'], []).append(r.status.get(k, 'na fila'))
+        elif not self.dirty:      # série aberta da pasta de uma execução: estados do resumo.csv
+            for row in self._resumo_rows()[1]:
+                try:
+                    per_step.setdefault(int(row.get('Etapa', 0)) - 1, []).append(row.get('Estado', ''))
+                except ValueError:
+                    pass
         cur_step = r.job()['etapa'] if (r.active and r.job()) else None
         self._loading, was = True, self._loading
         try:
@@ -1769,8 +1802,129 @@ class SeriesTab(QtWidgets.QWidget):
         cols = [_tr(c) for c in COLS[3:-1]]
         rows = ''.join(f'<tr><td style="color:#666;padding-right:10px">{c}</td><td>{v}</td></tr>'
                        for c, v in zip(cols, tx[1:]) if v)
+        n_done = self._show_done(i)
+        extra = (f'<p style="color:#2e7d32">📈 {n_done} {_tr("medida(s) concluída(s) no gráfico")}</p>'
+                 if n_done else '')
         self.lbl_sel.setText(f'<table>{rows}</table><p style="color:#888;font-family:Consolas,monospace">'
-                             f'{step_line(st)}</p>')
+                             f'{step_line(st)}</p>{extra}')
+
+    # ---- medidas concluídas no gráfico
+    def _done_files(self, i):
+        """[(nome, caminho)] das medidas já gravadas da etapa i: da série que acabou de rodar ou, se a série foi
+        aberta da pasta de uma execução, do resumo.csv dessa pasta."""
+        r = self.runner
+        out = []
+        if r.jobs and r.serie is self.serie:
+            for k, j in enumerate(r.jobs):
+                f = r.files.get(k)
+                if j['etapa'] == i and f and os.path.isfile(f):
+                    out.append((j['nome'], f))
+            return out
+        folder, rows = self._resumo_rows() if not self.dirty else ('', [])
+        for row in rows:
+            f = os.path.join(folder, row.get('Arquivo') or '')
+            if row.get('Etapa') == str(i + 1) and row.get('Arquivo') and os.path.isfile(f):
+                out.append((row.get('Nome', ''), f))
+        return out
+
+    def _resumo_rows(self):
+        """(pasta, linhas do resumo.csv) quando a série foi aberta da pasta de uma execução; senão ('', [])."""
+        folder = os.path.dirname(self.path) if self.path else ''
+        res = os.path.join(folder, 'resumo.csv') if folder else ''
+        if not (res and os.path.isfile(res)):
+            return '', []
+        try:
+            with open(res, encoding='utf-8', newline='') as fh:
+                return folder, list(csv.DictReader(fh))
+        except (OSError, csv.Error, UnicodeDecodeError):
+            return '', []
+
+    def _clear_view(self):
+        for c in self._extra:
+            self.plot.removeItem(c)
+        self._extra = []
+        self.legend.clear()
+        self.legend.setVisible(False)
+
+    def _show_done(self, i):
+        """Desenha no gráfico da aba as medidas concluídas da etapa i. Devolve quantas foram desenhadas."""
+        r = self.runner
+        live = r.active and r.job() is not None and r.job()['etapa'] == i
+        files = [] if live else self._done_files(i)
+        self._clear_view()
+        if not files:
+            if self._view_row is not None:
+                self._view_row = None
+                self._plot_k = None
+                self.curve.setData([], [])
+                self.plot.setTitle(_tr('Medida em andamento'))
+            return 0
+        self._view_row = i
+        self.curve.setData([], [])
+        st = self.serie['etapas'][i]
+        t = st['tipo']
+        many = len(files) > 1
+        n = 0
+        if t == 'transiente':
+            self.plot.setLogMode(x=False, y=False)
+            self.plot.setLabel('bottom', 'Tempo (ms)')
+            self.plot.setLabel('left', 'ADC médio')
+            for q, (nome, f) in enumerate(files):
+                try:
+                    d = read_data_csv(f)
+                except OSError:
+                    continue
+                tx = d.get('Tempo_s')
+                ms = [k for k in d if k.startswith('M') and k[1:].isdigit()]
+                if tx is None or not ms:
+                    continue
+                if many:      # uma curva por medida (última média de cada)
+                    c = self.plot.plot(tx * 1000.0, d[ms[-1]], name=nome,
+                                       pen=pg.mkPen(VIEW_COLORS[q % len(VIEW_COLORS)], width=2))
+                    self._extra.append(c)
+                else:         # todas as médias, da primeira (azul) à última (vermelho)
+                    for k, m in enumerate(ms):
+                        a = k / max(len(ms) - 1, 1)
+                        col = QtGui.QColor.fromRgbF(0.12 + 0.8 * a, 0.45 * (1 - a) + 0.2, 0.95 * (1 - a) + 0.15)
+                        nm = (f'{m}' if k in (0, len(ms) - 1) else None)
+                        c = self.plot.plot(tx * 1000.0, d[m], name=nm, pen=pg.mkPen(col, width=1.5))
+                        self._extra.append(c)
+                n += 1
+            self.legend.setVisible(bool(self._extra))
+        else:
+            duplo = t in ('varredura', 'sinal-t', 'duplo-pwm')
+            for q, (nome, f) in enumerate(files):
+                try:
+                    d = read_data_csv(f)
+                except OSError:
+                    continue
+                if duplo:
+                    if 'INMP441_R' not in d or 'OPT101_R' not in d:
+                        continue
+                    y = d['INMP441_R'] / np.where(d['OPT101_R'] > 0, d['OPT101_R'], np.nan)
+                else:
+                    y = d.get('Magnitude_Media')
+                xk = next((k for k in ('Frequencia_Hz', 'PWM_Pct', 'Tempo_s') if k in d), None)
+                if y is None or xk is None:
+                    continue
+                x = d[xk]
+                if xk == 'Tempo_s' and np.nanmax(x, initial=0) > 600:
+                    x = x / 60.0
+                col = VIEW_COLORS[q % len(VIEW_COLORS)]
+                c = self.plot.plot(x, y, name=(nome if many else None), pen=pg.mkPen(col, width=1.5),
+                                   symbol='o', symbolSize=6, symbolBrush=col, symbolPen=None)
+                self._extra.append(c)
+                n += 1
+                logx = xk == 'Frequencia_Hz'
+                self.plot.setLogMode(x=logx, y=logx)
+                self.plot.setLabel('bottom', {'Frequencia_Hz': 'Frequência (Hz)', 'PWM_Pct': 'PWM (%)'}.get(
+                    xk, 'Tempo (min)' if x is not d[xk] else 'Tempo (s)'))
+                self.plot.setLabel('left', 'S = R_INMP441 / R_OPT101' if duplo else
+                                   ('R OPT101 (ADC)' if t.startswith('opt101') else 'R INMP441 (FS)'))
+            self.legend.setVisible(many and bool(self._extra))
+        self.plot.setTitle(f'{_tr("Medida")} {i + 1}: {st.get("nome", "")}' if n else _tr('Medida em andamento'))
+        self.plot.enableAutoRange()
+        return n
 
     def _fill_form(self, st):
         t = st['tipo']
@@ -1962,6 +2116,9 @@ class SeriesTab(QtWidgets.QWidget):
             self.win.flash('Adicione etapas antes de iniciar.')
             return
         self._on_header()
+        self._clear_view()
+        self._view_row, self._plot_k = None, None
+        self.curve.setData([], [])
         if self.runner.start(self.serie, self.path):
             self.btn_pause.setChecked(False)
             self.lbl_folder.setText(_tr('Pasta:') + ' ' + self.runner.folder)
@@ -2051,9 +2208,12 @@ class SeriesTab(QtWidgets.QWidget):
         self.lbl_status.setText('✓ ' + txt)
         self._apply_run_ui()
         self._refresh_states()
+        self._on_select()
 
     def _update_plot(self):
         r, w = self.runner, self.win
+        if self._view_row is not None:
+            return
         tj = getattr(r, 'tjob', None)
         if r.active and r.state == 'run' and tj is not None:
             if tj.avgs and getattr(self, '_plot_k', None) != (id(tj), tj.k):

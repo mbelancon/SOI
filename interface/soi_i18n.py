@@ -2010,4 +2010,8 @@ EN = {
     '--passo precisa ser maior que 0': '--passo must be greater than 0',
     'τ dos filtros': 'filter τ',
     'Nome:': 'Name:',
+    'medida(s) concluída(s) no gráfico': 'completed measurement(s) on the plot',
+    'Tempo (ms)': 'Time (ms)',
+    'PWM (%)': 'PWM (%)',
+    'Tempo (min)': 'Time (min)',
 }

@@ -56,6 +56,12 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   integration). Options `--inicio`, `--fim`, `--passo` (plus `--pwm` or `--f`, `--tau`, `--aquecer`). Same files
   and columns as the sweeps started from the tabs, saved in the series folder; the result window is not opened
   during a series.
+- Completed measurements on the tab plot: after a series (or when a series file is opened from the folder of a
+  run, using its `resumo.csv`), clicking a completed step draws its saved data in the tab plot: S vs f / t / PWM
+  for Dual Mode steps, R vs f / PWM for OPT101/INMP441 sweeps, and every average (first blue to last red) for a
+  Transient. Steps with several measurements (frequency/PWM lists, Repeat) show one curve each, with a legend.
+  The Status column shows the states from `resumo.csv`. During a series, clicking a completed step shows it; clicking
+  the running step goes back to the live plot.
 - Headless: `soi_controller.py --serie file.serie.txt [--amostra name] [--simulado]` runs the same file without
   a window (a Notice waits for Enter in the terminal).
 - Simulated mode works as usual (same sweep and Signal vs t code).
