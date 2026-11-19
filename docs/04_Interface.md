@@ -145,6 +145,27 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
 - *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
+**Detect background noise...** (button after *Sweeps ▸*) opens a window that looks for acoustic noise sources at fixed
+frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the
+sweeps can avoid them.
+- **Detect (quick):** the laser goes to PWM 0 (restored at the end) and the INMP441 is recorded for *Duration* (default
+  20 s). Spectrum: Welch PSD with 4 s Hann windows (0.25 Hz resolution); background = running median of the dB
+  spectrum over ±20 Hz; a **tone** is a peak more than *Threshold* (default 10 dB) above the background, from 20 Hz to
+  5 kHz. A **series** is an f0 with at least 3 peaks at k·f0 (within 0.5 %, k ≤ 10), found even without the
+  fundamental. Peaks at multiples of 60 Hz are marked *mains* (the sweeps already avoid them).
+- **Comparative** (like the two-sample calibration): *1. Record without the source* (fan or other source off), then
+  *2. Record with the source*; only the tones at least *Comparative* dB (default 6) higher in the second recording
+  are listed. Use it when the room has other tones that the source should not be blamed for.
+- **Result:** table (frequency, dB above background, series f0, k, type) and spectrum with the tones marked (the
+  selected rows are circled). **Send to Avoid (Hz)** adds the selected rows (all if none is selected) to the
+  *Avoid (Hz)* field of the Dual Mode frequency sweep; with *Whole series* it adds k·f0 for k = 1…10 up to 5 kHz.
+- **Files** (in `Medidas`): `<sample>_Ruido_fundo_<date>.csv` (`_comparativo` in the comparative mode) with the tones
+  in the header and the columns `Frequencia_Hz`, `PSD_dB`, `Fundo_dB` (plus `PSD_sem_fonte_dB`), and the raw audio
+  `.bin` (12 kS/s float32, same format as the `SOI_GRAVAR_AUDIO` recording).
+- **Headless:** `python interface\soi_controller.py --detectar-ruido [--duracao 20] [--comparar] [--limiar 10]`
+  prints the tones and a ready `--evitar "…"` list for the sweeps (`--comparar` waits for Enter between the two
+  recordings).
+
 ## Dual Mode tab
 
 Measures both lock-ins **in the same step**. The OPT101 R (proportional to the optical intensity) is the power reference for the INMP441 R (photoacoustic signal).
@@ -209,6 +230,13 @@ Measurement Series.
 laser fan), separated by ";". Sweep points within 3 Hz of them move 4 Hz away, on the side they were on, and are
 listed in the CSV header. The field is saved with the settings and also applies to Measurement Series sweeps.
 Headless: `--evitar "170.7;341.4"`.
+
+**Detect noise during warm-up** (next to Order, on by default). With *Wait for warm-up* checked, the SOI analyses the
+INMP441 audio of the warm-up (the last 3 min at most) as in *Detect background noise* (INMP441 tab), ignoring the laser
+frequency and its harmonics within ±0.15 Hz (the modulation is exact in the microphone clock; ±1 Hz would hide 40 % of
+the spectrum with the laser at 5 Hz). The tones and series found are avoided in that sweep and its repetitions, without
+changing the *Avoid (Hz)* field, and are written in the CSV header (`# Ruidos detectados = …`). The headless
+`--aquecer S` does the same; `--sem-detectar-ruido` turns it off.
 
 **Discard room noise** (frequency sweeps, on by default). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.

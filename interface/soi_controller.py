@@ -37,6 +37,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 import soi_i18n  # idioma da interface (português ou inglês, conforme o Windows ou SOI_LANG)
 import soi_serie  # Medidas em Série (fila de varreduras, Sinal x t, pausas e avisos)
+import soi_ruido  # Detectar ruídos de fundo (espectro do INMP441, tons e séries harmônicas)
 
 soi_i18n.install(QtWidgets, QtGui, pg)
 
@@ -163,6 +164,7 @@ ADAPT_MAX_DRIFT_WAIT = 0  # médias extras (mesmo τ) enquanto S ou Δφ derivam
 # Baixa frequência (campanha de deriva 16-17/11): abaixo de ~40 Hz domina o ruído acústico do ambiente, lento e
 # aditivo; a flutuação medida na janela subestima o erro e o τ adaptativo não converge. Opção (padrão): τ adaptativo
 # só acima de LOWF_FMAX, τ fixo por faixa abaixo (f < limite -> τ); acima, o adaptativo recomeça de LOWF_TAU_ABOVE
+NOISE_LASER_TOL_HZ = 0.15  # Detectar ruídos no warm-up: tons a ±0,15 Hz de k·f do laser são do laser
 WARMUP_DEF_S = 600.0      # "Aguardar warm-up" das varreduras (s); 300 -> 600 s na campanha de ruído de 18/11
 LOWF_FMAX = 40.0
 LOWF_TAU_BANDS = ((LOWF_FMAX, ADAPT_TAU_CAP),)   # antes 8 s < 15 Hz e 4 s < 40 Hz; desde 17/11 usa o τ max do quadro
@@ -3398,6 +3400,11 @@ class AudioSimulator:
     TONE_FULL_POWER = 2e-3    # amplitude do tom com laser a 100 % (~ -54 dBFS)
     TONE_TAU = 2e-4           # s, resposta passa-baixas de 1ª ordem do tom (corte ~800 Hz): amplitude e fase variam com a frequência
     CHUNK = AUDIO_PACKET_MAX_SAMPLES
+    try:
+        FAN_HZ = float(os.environ.get('SOI_SIM_RUIDO', '') or 0.0)
+    except ValueError:
+        FAN_HZ = 0.0
+    FAN_AMPS = (6e-5, 2e-5, 4e-5, 3e-5, 1.5e-5)
 
     def __init__(self):
         self.rng = np.random.default_rng()
@@ -3472,6 +3479,9 @@ class AudioSimulator:
              + self.HUM * np.sin(2.0 * np.pi * 60.0 * idx / AUDIO_FS)
              + self.NOISE_RMS * self.rng.standard_normal(m)
              + self._pink(m))
+        if self.FAN_HZ:          # SOI_SIM_RUIDO=<f0>: ventoinha simulada (série harmônica em f0)
+            for k, a in enumerate(self.FAN_AMPS, 1):
+                x = x + a * np.sin(2.0 * np.pi * k * self.FAN_HZ * idx / AUDIO_FS + k)
         pcm = np.clip(np.rint(x * 8388607.0), -8388608, 8388607).astype(np.int32)
         chunks = markers + [((self.n + k) & 0xFFFFFFFF, pcm[k:k + self.CHUNK]) for k in range(0, m, self.CHUNK)]
         self.n += m
@@ -4663,6 +4673,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_audio_sweeps.setToolTip('Mostra ou esconde as varreduras em frequência e PWM do INMP441.')
         self.btn_audio_sweeps.toggled.connect(self.on_audio_sweeps_panel)
         audio_mode.addWidget(self.btn_audio_sweeps)
+        self.btn_noise_detect = QtWidgets.QPushButton('Detectar ruídos de fundo...')
+        self.btn_noise_detect.setToolTip(
+            'Abre uma janela que grava alguns segundos do INMP441 com o laser parado e procura frequências com sinal\n'
+            'acima do fundo e séries harmônicas (ex.: ventoinha do laser em ~170 Hz). Rápido ou comparativo (sem e com\n'
+            'a fonte de ruído). Os tons escolhidos vão para o campo "Evitar (Hz)" das varreduras do Modo Duplo.')
+        self.btn_noise_detect.clicked.connect(self.open_noise_dialog)
+        audio_mode.addWidget(self.btn_noise_detect)
         audio_mode.addSpacing(16)
         audio_mode.addWidget(QtWidgets.QLabel('Gráficos:'))
         self.chk_audio_lockin = QtWidgets.QCheckBox('Lock-In')
@@ -5064,6 +5081,14 @@ class LockInWindow(QtWidgets.QMainWindow):
             'Entre 40 e 200 Hz os erros são pontos isolados (sons do ambiente de alguns segundos), em frequências\n'
             'diferentes a cada varredura: a mediana os descarta, e um τ maior não (campanha de ruído de 18/11).')
         self.sp_dual_reps.valueChanged.connect(self.update_dual_eta)
+        self.chk_dual_warm_noise = QtWidgets.QCheckBox('Detectar ruídos no warm-up')
+        self.chk_dual_warm_noise.setChecked(True)
+        self.chk_dual_warm_noise.setToolTip(
+            'Com "Aguardar warm-up", o SOI analisa o áudio do INMP441 durante a espera (os últimos 3 min, no máximo),\n'
+            'como em "Detectar ruídos de fundo" (aba INMP441), ignorando a frequência do laser e os harmônicos dela\n'
+            '(±0,15 Hz: a frequência do laser é exata no relógio do microfone). Os tons e séries encontrados são\n'
+            'evitados nessa varredura (e nas repetições), sem mudar o campo Evitar (Hz), e ficam no cabeçalho do CSV\n'
+            '("# Ruidos detectados = ...").')
         self.cmb_dual_order = QtWidgets.QComboBox()
         for txt, key in (('Crescente', 'crescente'), ('Decrescente', 'decrescente'), ('Embaralhada', 'embaralhada')):
             self.cmb_dual_order.addItem(txt, key)
@@ -5089,7 +5114,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             f'{100 * NB_REDO_FRAC:.0f} % descartado, a média do ponto é refeita (até {NB_MAX_REDO}×). Campanha de 18/11: o desvio\n'
             'cai de 27 para 15 % em 37 Hz e de 14 para 7 % em 113 Hz; acima de ~500 Hz quase nada é descartado.\n'
             'O CSV ganha as colunas Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido (q ~ 3× o erro típico do ponto).')
-        adapt_row = (('Repetições:', self.sp_dual_reps), ('Ordem:', self.cmb_dual_order), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
+        adapt_row = (('Repetições:', self.sp_dual_reps), ('Ordem:', self.cmb_dual_order), ('', self.chk_dual_warm_noise), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
                      ('Precisão:', self.sp_dual_adapt_tol), ('', self.chk_dual_blocks), ('', self.sp_dual_blocks),
                      ('', self.lbl_dual_taumax))
         # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
@@ -6517,6 +6542,9 @@ class LockInWindow(QtWidgets.QMainWindow):
                 continue
             if 0 < v <= 20000:
                 out.append(v)
+        auto = getattr(self, 'dual_auto_avoid', None)
+        if auto:
+            out += [v for v in auto['vals'] if all(abs(v - o) > 1.0 for o in out)]
         return out
 
     def _dual_order_key(self):
@@ -7199,6 +7227,11 @@ class LockInWindow(QtWidgets.QMainWindow):
         if self.sweep_active:
             self.flash('Já existe uma varredura em andamento.')
             return
+        if not refine and not _rep:
+            if getattr(self, 'dual_auto_pending', False):
+                self.dual_auto_pending = False          # ruídos do warm-up que acabou: valem nesta varredura
+            else:
+                self.dual_auto_avoid = None
         values = list(refine[0]) if refine else self._dual_planned(kind)
         if not values:
             return
@@ -7256,6 +7289,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
             if kind in ('F', 'M') and self.chk_dual_avoid60.isChecked():
                 self.dual_params['mains_moved'] = soi_serie.avoid_mains(self._dual_planned(kind, raw=True))[1]
+            if kind in ('F', 'M') and getattr(self, 'dual_auto_avoid', None):
+                self.dual_params['auto_noise'] = dict(self.dual_auto_avoid)
             if kind in ('F', 'M') and self._dual_avoid_extra():
                 raw = self._dual_planned(kind, raw=True)
                 if self.chk_dual_avoid60.isChecked():
@@ -8555,6 +8590,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                             '(random.Random(semente).shuffle dos índices em ordem crescente)\n')
                 elif order != 'crescente':
                     f.write(f'# Ordem = {order}\n')
+                if q.get('auto_noise'):
+                    an = q['auto_noise']
+                    f.write(f"# Ruidos detectados = {an['summary']} (áudio de {an['dur']:.0f} s do warm-up, laser em "
+                            f"{an['fref']:.4g} Hz e harmônicos ignorados); evitados: "
+                            + (', '.join(f'{v:g}' for v in an['vals']) or 'nenhum') + ' Hz\n')
                 if q.get('extra_avoid'):
                     ex, mv = q['extra_avoid']
                     f.write(f"# Frequências evitadas (fontes de ruído): {', '.join(f'{x:g}' for x in ex)} Hz"
@@ -8789,6 +8829,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         dur = sp_w.value()
         self.warm_state = {'btn': btn, 'start': start, 'until': time.perf_counter() + dur, 'eta': eta,
                            'text': btn.text(), 'style': btn.styleSheet(), 'dur': dur, 'rest': dur}
+        if btn in (self.dual_btns.get('F'), self.dual_btns.get('M')):
+            self.noise_warm_begin()
         print(f'Warm-up: laser em PWM {pwm:g} % por {dur:g} s antes da varredura.')
         btn.setStyleSheet('background:#fff3cd;')
         for b in self.warm_w:
@@ -8810,6 +8852,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             self._eta_render(warm['eta'])
             return
         start = warm['start']
+        self.noise_warm_end()
         self._warm_stop()
         print('Warm-up concluído: começando a varredura.')
         start()
@@ -8818,6 +8861,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         warm = getattr(self, 'warm_state', None)
         if warm is None:
             return
+        if getattr(self, 'noise_warm_on', False):      # warm-up cancelado: descarta o áudio
+            self.noise_warm_on = False
+            self.noise_capture_end()
         if getattr(self, 'warm_timer', None) is not None:
             self.warm_timer.stop()
             self.warm_timer = None
@@ -11393,6 +11439,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_last_sequence = (sequence + len(samples)) & 0xFFFFFFFF
             if self.audio_rec is not None:
                 self.audio_rec.push(sequence, samples)
+            if self.noise_cap is not None:
+                # média de 4 sem perder amostras: o resto do bloco passa para o seguinte (sem saltos de fase)
+                xs = np.concatenate((self.noise_rem, np.asarray(samples, dtype=np.float64)))
+                n4 = (len(xs) // 4) * 4
+                self.noise_rem = xs[n4:]
+                if n4:
+                    self.noise_cap.append((xs[:n4].reshape(-1, 4).mean(axis=1) / 8388608.0).astype(np.float32))
             if self.audio_lockin_enabled and not self.ext_mode:
                 self._nb_feed(samples)
             if self.audio_fft_enabled:
@@ -11402,6 +11455,86 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.audio_received_samples += len(samples)
 
     audio_rec = None          # AudioRecorder (SOI_GRAVAR_AUDIO)
+    noise_cap = None          # Detectar ruídos de fundo: blocos do INMP441 a 12 kS/s (média de 4) durante a gravação
+
+    # ---- Detectar ruídos de fundo (janela em soi_ruido)
+    def noise_fs(self):
+        return AUDIO_FS_REAL / 4.0
+
+    def noise_capture_begin(self):
+        with self.audio_lock:
+            self.noise_cap = []
+            self.noise_rem = np.zeros(0)
+
+    def noise_capture_len(self):
+        cap = self.noise_cap
+        return sum(len(c) for c in list(cap)) if cap is not None else 0
+
+    def noise_capture_end(self):
+        with self.audio_lock:
+            cap, self.noise_cap = self.noise_cap, None
+        return np.concatenate(cap) if cap else np.zeros(0, dtype=np.float32)
+
+    NOISE_WARM_MAX_S = 180.0      # warm-up: analisa só os últimos 3 min
+
+    def noise_warm_begin(self):
+        """Detectar ruídos no warm-up: começa a guardar o áudio (laser ligado, na frequência atual)."""
+        self.noise_warm_on = False
+        if not self.chk_dual_warm_noise.isChecked() or self.ext_mode or self.noise_cap is not None:
+            return
+        self.noise_warm_fref = float(self.ref_freq)
+        self.noise_capture_begin()
+        self.noise_warm_on = True
+
+    def noise_warm_end(self):
+        """Fim do warm-up: tons e séries do áudio (sem a frequência do laser e harmônicos, ±1 Hz) passam a ser
+        evitados na varredura que vai começar."""
+        if not getattr(self, 'noise_warm_on', False):
+            return None
+        self.noise_warm_on = False
+        x = self.noise_capture_end()
+        fs = self.noise_fs()
+        x = x[-int(self.NOISE_WARM_MAX_S * fs):]
+        if len(x) < soi_ruido.SEG_S * fs * 2:
+            print('Detectar ruídos no warm-up: áudio curto demais, nada analisado.', flush=True)
+            return None
+        # Laser e harmônicos: frequência real do TIM4, exata no relógio do I2S -> tolerância estreita (±0,15 Hz).
+        # ±1 Hz esconderia boa parte do espectro com o laser em frequência baixa (a 5 Hz, 40 %).
+        fr = actual_mod_freq(self.noise_warm_fref) if self.noise_warm_fref > 0 else 0.0
+        ex = ([(k * fr, NOISE_LASER_TOL_HZ) for k in range(1, int(soi_ruido.FMAX_HZ / fr) + 2)] if fr > 0 else [])
+        res = soi_ruido.analyze(x, fs, exclude=ex)
+        vals = soi_ruido.avoid_list_for(res, [r[0] for r in soi_ruido.rows(res)], True)
+        self.dual_auto_avoid = {'vals': vals, 'summary': soi_ruido.summary(res), 'dur': len(x) / fs, 'fref': fr}
+        self.dual_auto_pending = True
+        msg = (f"Ruídos detectados no warm-up: {self.dual_auto_avoid['summary']}"
+               + (f" -> evitados nesta varredura: {', '.join(f'{v:g}' for v in vals)} Hz" if vals else ''))
+        print(msg, flush=True)
+        self.flash(msg, 8.0)
+        return res
+
+    def audio_available(self):
+        return bool(self.link.connected or self.simulating)
+
+    def set_pwm(self, pwm):
+        self.sp_power.setValue(pwm)
+        self.on_power(self.sp_power.value())
+
+    def add_avoid(self, vals):
+        """Acrescenta frequências ao campo Evitar (Hz) (sem repetir as que já estão, ±1 Hz). True se mudou."""
+        cur = self._dual_avoid_extra()
+        new = [v for v in vals if all(abs(v - c) > 1.0 for c in cur)]
+        if not new:
+            return False
+        allv = sorted(cur + new)
+        self.ed_dual_avoid.setText('; '.join(f'{v:g}'.replace('.', ',') for v in allv))
+        self.ed_dual_avoid.editingFinished.emit()
+        return True
+
+    def open_noise_dialog(self):
+        if getattr(self, 'noise_dlg', None) is None:
+            self.noise_dlg = soi_ruido.make_dialog(self)
+        self.noise_dlg.show()
+        self.noise_dlg.raise_()
     nb_buf = np.empty(0, dtype=np.float32)
     nb_cnt = 0
     nb_q = deque(maxlen=600)  # (time.time(), f, q) do monitor de ruído pelas vizinhas, 1 por segundo
@@ -11942,7 +12075,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                   'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
                   'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40', 'chk_dual_blocks',
-                  'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb')
+                  'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb', 'chk_dual_warm_noise')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_dual_p_deg', 'cmb_dual_p_target',
@@ -12181,7 +12314,17 @@ def _headless_args(argv):
                     help='em vez da varredura, Sinal x t: --f, --pwm, --tau, --dt, --duracao fixos')
     ap.add_argument('--f', type=float, default=10.0, help='Sinal x t: frequência em Hz (padrão 10)')
     ap.add_argument('--dt', type=float, default=5.0, help='Sinal x t: um ponto a cada dt segundos (padrão 5)')
-    ap.add_argument('--duracao', type=float, default=10.0, help='Sinal x t: duração em minutos (padrão 10)')
+    ap.add_argument('--duracao', type=float, default=None,
+                    help='Sinal x t: duração em minutos (padrão 10); --detectar-ruido: segundos por gravação (padrão 20)')
+    ap.add_argument('--detectar-ruido', action='store_true',
+                    help='Detectar ruídos de fundo: grava o INMP441 com o laser parado, lista os tons acima do fundo e '
+                         'as séries harmônicas e salva Ruido_fundo_*.csv/.bin em Medidas')
+    ap.add_argument('--sem-detectar-ruido', action='store_true',
+                    help='não analisa o áudio do warm-up (--aquecer) para evitar os ruídos de fundo na varredura')
+    ap.add_argument('--comparar', action='store_true',
+                    help='--detectar-ruido comparativo: grava sem a fonte de ruído, espera Enter, grava com a fonte')
+    ap.add_argument('--limiar', type=float, default=None, metavar='DB',
+                    help=f'--detectar-ruido: tom = PSD acima do fundo por mais de DB (padrão {soi_ruido.TONE_DB:g} dB)')
     ap.add_argument('--desligar', action='store_true', help='no fim, PWM 0 (laser parado; para esfriar entre medidas)')
     ap.add_argument('--serie', default=None, metavar='ARQUIVO',
                     help='roda uma série (*.serie.txt, a mesma da aba Medidas em Série); --amostra troca o nome base')
@@ -12202,7 +12345,7 @@ def _headless_time(win, a, pump):
     win.sp_dt_pwm.setValue(a.pwm)
     win.sp_dt_tau.setValue(a.tau if a.tau is not None else 1.0)
     win.sp_dt_dt.setValue(a.dt)
-    win.sp_dt_dur.setValue(a.duracao)
+    win.sp_dt_dur.setValue(a.duracao if a.duracao is not None else 10.0)
     print(f'Sinal x t: {win.sp_dt_f.value():g} Hz, PWM {win.sp_dt_pwm.value():g} %, τ = {win.sp_dt_tau.value():g} s, '
           f'ponto a cada {win.sp_dt_dt.value():g} s, {win.sp_dt_dur.value():g} min; amostra "{win.ed_sample.text()}"'
           + ('; SIMULADO' if a.simulado else ''), flush=True)
@@ -12263,6 +12406,69 @@ def _headless_serie(win, a, serie, pump):
     st = list(runner.status.values())
     win.close()
     return 0 if st and all(x == 'concluída' for x in st) else 7
+
+
+def _headless_noise(win, a, pump):
+    """--detectar-ruido [--comparar] [--duracao S] [--limiar DB]: mesma análise da janela Detectar ruídos de fundo."""
+    dur = a.duracao if a.duracao is not None else soi_ruido.DUR_DEF_S
+    thr = a.limiar if a.limiar is not None else soi_ruido.TONE_DB
+    win.set_pwm(0.0)
+    pump(1.5)                                      # laser parado e áudio chegando
+    fs = win.noise_fs()
+
+    def record(what):
+        print(f'Gravando {dur:g} s do INMP441 {what}(laser em PWM 0)...', flush=True)
+        win.noise_capture_begin()
+        t0 = time.time()
+        while win.noise_capture_len() < dur * fs:
+            pump(0.2)
+            if time.time() - t0 > 2 * dur + 10:
+                win.noise_capture_end()
+                return None
+        x = win.noise_capture_end()
+        return x[:int(dur * fs)]
+    x_off = None
+    if a.comparar:
+        x_off = record('SEM a fonte de ruído ')
+        if x_off is None:
+            print('ERRO: o áudio do INMP441 não chegou.')
+            win.close()
+            return 7
+        try:
+            input('Ligue a fonte de ruído e tecle Enter... ')
+        except EOFError:
+            pass
+    x = record('COM a fonte de ruído ' if a.comparar else '')
+    if x is None:
+        print('ERRO: o áudio do INMP441 não chegou.')
+        win.close()
+        return 7
+    res = (soi_ruido.analyze_compare(x_off, x, fs, thr=thr) if a.comparar else soi_ruido.analyze(x, fs, thr=thr))
+    stem = soi_ruido.file_stem(win.ed_sample.text(), 'Ruido_fundo' + ('_comparativo' if a.comparar else ''))
+    folder = win._save_dir()
+    os.makedirs(folder, exist_ok=True)
+    hdr = [f"Detectar ruidos de fundo (sem janela) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+           f"Modo = {'comparativo (sem/com a fonte)' if a.comparar else 'rapido'}; laser em PWM 0; {dur:g} s por "
+           f"gravacao; INMP441 a {fs:.0f} S/s (media de 4 amostras)" + ('; SIMULADO' if a.simulado else ''),
+           f'Welch Hann {soi_ruido.SEG_S:g} s; fundo = mediana movel +-{soi_ruido.BG_HALF_HZ:g} Hz; limiar {thr:g} dB'
+           + (f'; com a fonte >= {soi_ruido.CMP_DB:g} dB acima' if a.comparar else ''),
+           f'Celula = {win.cmb_cell.currentData()}']
+    path = os.path.join(folder, stem + '.csv')
+    soi_ruido.save_csv(path, res, hdr)
+    soi_ruido.save_bin(os.path.join(folder, stem + '.bin'), x)
+    if x_off is not None:
+        soi_ruido.save_bin(os.path.join(folder, stem + '_sem_fonte.bin'), x_off)
+    for fx, db, f0, k, kind in soi_ruido.rows(res):
+        print(f'  {fx:9.2f} Hz  +{db:5.1f} dB' + (f'  série f0 = {f0:.2f} Hz, k = {k}' if f0 else '')
+              + ('  (rede)' if kind == 'rede' else ''), flush=True)
+    sel = [r[0] for r in soi_ruido.rows(res)]
+    av = soi_ruido.avoid_list_for(res, sel, True)
+    print(f'Ruídos detectados: {soi_ruido.summary(res)}', flush=True)
+    if av:
+        print('Para evitar nas varreduras: --evitar "' + ';'.join(f'{v:g}' for v in av) + '"', flush=True)
+    print(f'Salvo: {path}', flush=True)
+    win.close()
+    return 0
 
 
 def run_headless(argv):
@@ -12362,6 +12568,8 @@ def run_headless(argv):
                 win.close()
                 return 5
             win.cmb_mic_cal.setCurrentIndex(i)
+    if a.detectar_ruido:
+        return _headless_noise(win, a, pump)
     sp0, sp1, space, spn, _ = win.dual_fw['F']
     space.setCurrentIndex(0)                       # pontos em escala log
     if a.fmin is not None:
@@ -12407,7 +12615,13 @@ def run_headless(argv):
             win._set_spin(win.sp_freq, a.f)
             win.apply_frequency(a.f)
         print(f'Warm-up: laser em PWM {win.sp_power.value():g} % por {a.aquecer:g} s...', flush=True)
+        noise_warm = not a.sinal_t and serie is None and not a.sem_detectar_ruido
+        if noise_warm:
+            win.chk_dual_warm_noise.setChecked(True)
+            win.noise_warm_begin()
         pump(a.aquecer)
+        if noise_warm:
+            win.noise_warm_end()
         print('Warm-up concluído.', flush=True)
     if serie is not None:
         return _headless_serie(win, a, serie, pump)
@@ -12470,8 +12684,8 @@ class AudioRecorder:
     """Gravação opcional do áudio bruto do INMP441 (variável de ambiente SOI_GRAVAR_AUDIO=<pasta>), para análise
     offline do ruído acústico. Um arquivo por execução: <pasta>/audio_<amostra ou soi>_<AAAAMMDD_HHMMSS>.bin.
     Cada bloco: uint32 sequence (nº I2S da 1ª amostra), uint32 n_out, float64 t_pc (time.time() na chegada) e
-    n_out float32 = média de cada 4 amostras / 8388608 (12 kS/s; o resto do bloco, se não for múltiplo de 4, é
-    descartado). Little-endian. A thread de áudio só enfileira; uma thread própria grava (flush a cada ~1 s)."""
+    n_out float32 = média de cada 4 amostras / 8388608 (12 kS/s; o resto do bloco, se não for múltiplo de 4, vai
+    para o bloco seguinte quando ele é contíguo). Little-endian. A thread de áudio só enfileira; uma thread própria grava (flush a cada ~1 s)."""
     HEADER = '<IId'
 
     def __init__(self, folder, name_fn):
@@ -12486,12 +12700,23 @@ class AudioRecorder:
         self.th = threading.Thread(target=self._run, name='AudioRecorder', daemon=True)
         self.th.start()
 
+    rem = np.zeros(0)
+    rem_end = None
+
     def push(self, sequence, samples):
-        n = (len(samples) // 4) * 4
+        # o resto (bloco não múltiplo de 4) passa para o bloco seguinte, se ele for contíguo: sem saltos de fase
+        xs = np.asarray(samples, dtype=np.float64)
+        seq0 = sequence
+        if len(self.rem) and self.rem_end == (sequence & 0xFFFFFFFF):
+            xs = np.concatenate((self.rem, xs))
+            seq0 = sequence - len(self.rem)
+        n = (len(xs) // 4) * 4
+        self.rem = xs[n:]
+        self.rem_end = (sequence + len(samples)) & 0xFFFFFFFF
         if n <= 0:
             return
-        x = (np.asarray(samples[:n], dtype=np.float64).reshape(-1, 4).mean(axis=1) / 8388608.0).astype('<f4')
-        self.q.append((sequence & 0xFFFFFFFF, time.time(), x))
+        x = (xs[:n].reshape(-1, 4).mean(axis=1) / 8388608.0).astype('<f4')
+        self.q.append((seq0 & 0xFFFFFFFF, time.time(), x))
 
     def _name(self):
         name = re.sub(r'[^\w.-]+', '_', (self.name_fn() or '').strip()) or 'soi'
@@ -12642,7 +12867,7 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()      # executável (PyInstaller): o processo leitor da serial
     setup_log()
-    if any(k in sys.argv[1:] for k in ('--varredura', '--sinal-t', '--serie', '-h', '--help')):
+    if any(k in sys.argv[1:] for k in ('--varredura', '--sinal-t', '--serie', '--detectar-ruido', '-h', '--help')):
         sys.exit(run_headless(sys.argv[1:]))
     if sys.platform == 'win32':
         # Sem isto, rodando pelo python.exe, a barra de tarefas mostra o ícone do Python.

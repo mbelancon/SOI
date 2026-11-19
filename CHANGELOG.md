@@ -103,6 +103,31 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   away, as with the multiples of 60 Hz, and are listed in the CSV header. Saved with the settings.
 - Headless: `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar "170.7;341.4"`.
 
+#### Added: Detect background noise (approved 2026-11-19)
+- **Why:** the 2026-11-19 noise study found a tone series at ~170.2 Hz (probably the laser fan: 170, 340, 510, 681,
+  851 Hz). Sweep points on such tones pick up noise unrelated to the sample.
+- *Detect background noise...* button in the INMP441 tab opens its own window (new `interface/soi_ruido.py`). Quick
+  mode: laser at PWM 0, records the INMP441 (default 20 s, 12 kS/s), Welch PSD with 4 s Hann windows (0.25 Hz),
+  background = running median of the dB spectrum (±20 Hz), tones > 10 dB above it (adjustable), harmonic series =
+  f0 with ≥ 3 peaks at k·f0 (0.5 %, k ≤ 10), 60 Hz and multiples marked as mains. Comparative mode (like the
+  two-sample calibration): record without the noise source, then with it; the source's tones are those ≥ 6 dB
+  higher in the second recording. Table + spectrum with marks; *Send to Avoid (Hz)* adds the selected tones (or the
+  whole series, k·f0 up to k = 10) to the sweep's *Avoid (Hz)* field. Each analysis saves
+  `<sample>_Ruido_fundo_<date>.csv` (header with the tones; columns `Frequencia_Hz,PSD_dB,Fundo_dB`, plus
+  `PSD_sem_fonte_dB` in the comparative mode) and the raw audio `.bin` (AudioRecorder format) in `Medidas`.
+- *Detect noise during warm-up* (Dual Mode frequency sweep, on by default): with *Wait for warm-up*, the audio of the
+  last 3 min of the warm-up is analysed the same way, ignoring the laser frequency and its harmonics (±0.15 Hz: the
+  modulation is exact in the I2S clock; ±1 Hz would hide 40 % of the spectrum with the laser at 5 Hz). The tones and
+  series found are avoided in that sweep and its repetitions (the *Avoid (Hz)* field is not changed) and are written in
+  the CSV header (`# Ruidos detectados = …`). Headless `--aquecer` does the same; `--sem-detectar-ruido` turns it off.
+- Headless: `--detectar-ruido [--duracao S] [--comparar] [--limiar DB]` prints the tones and a ready `--evitar` list.
+- Simulation: `SOI_SIM_RUIDO=<f0>` adds a fan-like harmonic series to the simulated INMP441.
+
+#### Fixed: raw audio blocks not multiple of 4
+- The 4-sample average of the raw audio recording dropped the remainder of each block, which made phase jumps when
+  a block length was not a multiple of 4. The remainder now goes to the next contiguous block. The board always sends
+  256-sample blocks, so only the simulation was affected.
+
 #### Added: optional raw INMP441 audio recording
 - **Why:** offline analysis of the room's acoustic noise (neighbouring frequencies, broadband energy) to define a rule
   for discarding noisy points. Off by default; turned on with the environment variable `SOI_GRAVAR_AUDIO=<folder>`
