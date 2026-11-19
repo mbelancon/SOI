@@ -238,14 +238,14 @@ the spectrum with the laser at 5 Hz). The tones and series found are avoided in 
 changing the *Avoid (Hz)* field, and are written in the CSV header (`# Ruidos detectados = …`). The headless
 `--aquecer S` does the same; `--sem-detectar-ruido` turns it off.
 
-**Discard stretches with room sounds** (frequency sweeps, on by default). Every second the SOI computes, on the raw INMP441 signal
+**Discard stretches with room sounds** (frequency sweeps, off by default since 2026-11-19: it did not help at night; hover for details). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
 A room sound (door, voice, traffic) raises the neighbours together with the signal. The part of a point's average with
 q > 2 × the median q of that point is discarded; if more than 30 % is discarded, the average is redone (up to twice).
 In the 2026-11-18 heating campaign this cut the rms deviation from 27 to 15 % at 37 Hz and from 14 to 7 % at 113 Hz,
 discarding 7–15 % of the data (removing the same fraction at random changed nothing); at 487 Hz and above it discards
 ≤ 1.4 % and changes nothing. With the laser off q ≈ 1. The CSV gets `Ruido_vizinhas_q` (median q of the point; the
-typical |error| of the point is ~0.3·q), `Descartado_Pct` and `Refeito_ruido`. Headless: `--sem-descarte`.
+typical |error| of the point is ~0.3·q), `Descartado_Pct` and `Refeito_ruido`. Headless: `--descartar` turns it on.
 
 **Mains harmonics.** Frequencies within ±3 Hz of a multiple of 60 Hz pick up mains background (the OPT101 showed it
 at 300 Hz in the 2026-11-16 campaign, and on 2026-11-18 the sweep point at 121.2 Hz, next to 120 Hz, beat with the

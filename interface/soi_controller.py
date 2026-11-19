@@ -5106,7 +5106,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             'em repetições (mediana) do que em τ.')
         self.lbl_dual_taumax.setVisible(False)
         self.chk_dual_nb = QtWidgets.QCheckBox('Descartar trechos com som da sala')
-        self.chk_dual_nb.setChecked(True)
+        self.chk_dual_nb.setChecked(False)             # desligado por padrão desde 19/11 (não ajudou à noite)
         self.chk_dual_nb.setToolTip(
             f'A cada 1 s o SOI compara o sinal do INMP441 nas frequências vizinhas (f ± {100 * NB_REL:.0f} %) com o sinal em f\n'
             f'(q = vizinhas / f). Um som da sala (porta, voz, carro) sobe as vizinhas junto com o sinal: o segundo em que q\n'
@@ -12134,6 +12134,9 @@ class LockInWindow(QtWidgets.QMainWindow):
             tau0 = num('dual_sweep_tau')
             if tau0 is None or tau0 <= 0:
                 tau0 = ADAPT_TAU0_DEF if self.chk_dual_adapt.isChecked() else SWEEP_TAU_DEF
+            if st.value('nb_default_off_20261119') is None:   # descarte por vizinhas: desligado por padrão (uma vez)
+                self.chk_dual_nb.setChecked(False)
+                st.setValue('nb_default_off_20261119', 1)
             if st.value('sweep_defaults_20261118') is None:   # padrão da campanha de ruído (uma vez)
                 self.chk_dual_adapt.setChecked(False)
                 self.sp_dual_reps.setValue(SWEEP_REPS_DEF)
@@ -12284,8 +12287,9 @@ def _headless_args(argv):
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
     ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (padrão desde 18/11; espera 9τ, média 1τ; '
                     '4 s abaixo de 40 Hz)')
-    ap.add_argument('--sem-descarte', action='store_true',
-                    help='não descarta os trechos com ruído do ambiente (monitor das vizinhas f ± 7 %%)')
+    ap.add_argument('--descartar', action='store_true',
+                    help='liga "Descartar trechos com som da sala" (monitor das vizinhas f ± 7 %%; desligado por padrão)')
+    ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
     ap.add_argument('--sem-evitar-rede', action='store_true',
                     help='não desloca os pontos da varredura perto de múltiplos de 60 Hz (±3 Hz)')
     ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='crescente',
@@ -12582,7 +12586,7 @@ def run_headless(argv):
     if a.repeticoes is not None:
         win.sp_dual_reps.setValue(max(1, a.repeticoes))
     win.chk_dual_avoid60.setChecked(not a.sem_evitar_rede)
-    win.chk_dual_nb.setChecked(not a.sem_descarte)
+    win.chk_dual_nb.setChecked(a.descartar and not a.sem_descarte)
     win.cmb_dual_order.setCurrentIndex(win.cmb_dual_order.findData(a.ordem))
     win.dual_seed_fixed = a.semente if a.semente is not None else int.from_bytes(os.urandom(3), 'big')
     if a.evitar is not None:
