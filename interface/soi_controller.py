@@ -5026,8 +5026,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.ed_dual_avoid.setFixedWidth(90)
         self._avoid_tip = (
             f'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";".\n'
-            f'Pontos da varredura a até {soi_serie.MAINS_NEAR_HZ:g} Hz delas vão para f ± {soi_serie.MAINS_SWEEP_SHIFT_HZ:g} Hz, '
-            'do lado em que estavam,\ncomo nos múltiplos de 60 Hz, e ficam listados no cabeçalho do CSV. Vazio = nenhuma.')
+            'Pontos da varredura dentro da janela de uma delas, ±2 % da frequência (mínimo ±3 Hz), vão para 1 Hz além\n'
+            'da borda, do lado em que estavam (a janela cresce com a frequência: o harmônico k de uma fonte que varia\n'
+            'δ varia k·δ), e ficam listados no cabeçalho do CSV. Vazio = nenhuma.')
         self.ed_dual_avoid.setToolTip(self._avoid_tip)
         self.lbl_dual_fn = QtWidgets.QLabel('N pontos:')
         # τ adaptativo (vale para as duas varreduras em frequência; o quadro 'M' fica escondido)
@@ -5092,9 +5093,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cmb_dual_order = QtWidgets.QComboBox()
         for txt, key in (('Crescente', 'crescente'), ('Decrescente', 'decrescente'), ('Embaralhada', 'embaralhada')):
             self.cmb_dual_order.addItem(txt, key)
+        self.cmb_dual_order.setCurrentIndex(2)          # padrão desde 19/11: embaralhada (blocos casualizados)
         self.cmb_dual_order.setToolTip(
-            'Ordem em que as frequências são medidas. Crescente (padrão) ou decrescente: uma deriva lenta (aquecimento)\n'
-            'vira uma inclinação falsa na curva. Embaralhada: nova ordem aleatória a cada repetição, e a deriva vira\n'
+            'Ordem em que as frequências são medidas. Crescente ou decrescente: uma deriva lenta (aquecimento)\n'
+            'vira uma inclinação falsa na curva. Embaralhada (padrão): nova ordem aleatória a cada repetição, e a deriva vira\n'
             'ruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\n'
             'Os CSV continuam em ordem de frequência, com as colunas Ordem_medida (posição em que o ponto foi medido)\n'
             'e Hora_ponto (fim do ponto).')
@@ -5107,6 +5109,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_taumax.setVisible(False)
         self.chk_dual_nb = QtWidgets.QCheckBox('Descartar trechos com som da sala')
         self.chk_dual_nb.setChecked(False)             # desligado por padrão desde 19/11 (não ajudou à noite)
+        self.chk_dual_nb.setVisible(False)             # só aparece com a opção ligada em Configurações
         self.chk_dual_nb.setToolTip(
             f'A cada 1 s o SOI compara o sinal do INMP441 nas frequências vizinhas (f ± {100 * NB_REL:.0f} %) com o sinal em f\n'
             f'(q = vizinhas / f). Um som da sala (porta, voz, carro) sobe as vizinhas junto com o sinal: o segundo em que q\n'
@@ -9400,6 +9403,14 @@ class LockInWindow(QtWidgets.QMainWindow):
         return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
 
     # ------------------------------------------------------------ Configurações
+    show_nb = False           # Configurações: mostrar "Descartar trechos com som da sala"
+
+    def set_show_nb(self, on):
+        self.show_nb = bool(on)
+        self.chk_dual_nb.setVisible(self.show_nb)
+        if not self.show_nb:
+            self.chk_dual_nb.setChecked(False)
+
     def open_settings(self):
         '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101 e Finalizar experimento.'''
         dlg = QtWidgets.QDialog(self)
@@ -9458,6 +9469,18 @@ class LockInWindow(QtWidgets.QMainWindow):
         warn.setVisible(self.opt_supply > 4)
         bl.addWidget(self.chk_scope_fixed)
         self.chk_scope_fixed.show()
+        lay.addWidget(box)
+
+        box = self._group('Varreduras')
+        bl = QtWidgets.QVBoxLayout(box)
+        chk_nb = QtWidgets.QCheckBox('Mostrar "Descartar trechos com som da sala" na varredura em frequência')
+        chk_nb.setChecked(self.show_nb)
+        bl.addWidget(chk_nb)
+        bl.addWidget(info('A cada 1 s o SOI compara o sinal do microfone nas frequências vizinhas (f ± 7 %) com o sinal '
+                          'em f; o segundo em que um som da sala sobe as vizinhas sai da média, e o ponto é refeito se '
+                          'mais de 30 % for descartado. Com τ = 1 s não trouxe ganho (testes de 18–19/11); pode valer '
+                          'com τ maior. Desligada, a caixa some da interface e o descarte fica desligado.'))
+        chk_nb.toggled.connect(self.set_show_nb)
         lay.addWidget(box)
 
         box = self._group('Experimento')
@@ -12078,7 +12101,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                   'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb', 'chk_dual_warm_noise')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
-                  'cmb_dual_p_deg', 'cmb_dual_p_target',
+                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order',
                   'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
         return spins, checks, combos
 
@@ -12134,6 +12157,12 @@ class LockInWindow(QtWidgets.QMainWindow):
             tau0 = num('dual_sweep_tau')
             if tau0 is None or tau0 <= 0:
                 tau0 = ADAPT_TAU0_DEF if self.chk_dual_adapt.isChecked() else SWEEP_TAU_DEF
+            if st.value('sweep_defaults_20261119') is None:   # padrão aprovado em 19/11: embaralhada, τ 1 s, 3× (uma vez)
+                self.cmb_dual_order.setCurrentIndex(2)
+                self.sp_dual_reps.setValue(SWEEP_REPS_DEF)
+                self.chk_dual_adapt.setChecked(False)
+                tau0 = SWEEP_TAU_DEF
+                st.setValue('sweep_defaults_20261119', 1)
             if st.value('nb_default_off_20261119') is None:   # descarte por vizinhas: desligado por padrão (uma vez)
                 self.chk_dual_nb.setChecked(False)
                 st.setValue('nb_default_off_20261119', 1)
@@ -12144,6 +12173,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                 st.setValue('sweep_defaults_20261118', 1)
             self._set_spin(self.sp_dual_tau_f, tau0)
             self._on_sweep_tau_edit('F', tau0)
+            v = st.value('show_nb')
+            self.set_show_nb(str(v).lower() in ('1', 'true') if v is not None else False)
             v = st.value('dual_avoid')
             if v is not None:
                 self.ed_dual_avoid.setText(str(v))
@@ -12192,6 +12223,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         st.setValue('dual_sweep_tau', float(self.sp_dual_tau_f.value()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('dual_avoid', self.ed_dual_avoid.text())
+        st.setValue('show_nb', int(self.show_nb))
         st.setValue('opt_supply', self.opt_supply)
         st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))
         st.setValue('geometry', self.saveGeometry())
@@ -12292,14 +12324,14 @@ def _headless_args(argv):
     ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
     ap.add_argument('--sem-evitar-rede', action='store_true',
                     help='não desloca os pontos da varredura perto de múltiplos de 60 Hz (±3 Hz)')
-    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='crescente',
-                    help='ordem de medida das frequências (padrão crescente); embaralhada = nova ordem aleatória a cada '
-                         'repetição, semente no cabeçalho do CSV')
+    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='embaralhada',
+                    help='ordem de medida das frequências (padrão embaralhada = nova ordem aleatória a cada repetição, '
+                         'semente no cabeçalho do CSV)')
     ap.add_argument('--semente', type=int, default=None,
                     help='semente da ordem embaralhada (repetição k usa semente + k - 1); padrão: aleatória')
     ap.add_argument('--evitar', default=None, metavar='F1;F2',
                     help='frequências de fontes de ruído a evitar, como os múltiplos de 60 Hz (ex.: "170.7" ou '
-                         '"170.7;341.4"): pontos a até 3 Hz delas vão para f ± 4 Hz')
+                         '"170.7;341.4"): pontos a até ±2 %% delas (mínimo 3 Hz) vão para 1 Hz além da borda')
     ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (antes o padrão; --precisao também liga)')
     ap.add_argument('--repeticoes', type=int, default=None, metavar='N',
                     help='repete a varredura N vezes e grava a mediana ponto a ponto (padrão: o da interface, 3)')

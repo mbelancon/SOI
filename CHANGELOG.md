@@ -99,8 +99,8 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - New CSV columns `Ordem_medida` (position in which the point was measured) and `Hora_ponto` (end time of the
   point) in every frequency sweep CSV; in the `_mediana` CSV, `Ordem_medida` lists one position per repetition
   separated by ";".
-- *Avoid (Hz)* field: frequencies of known noise sources (e.g. `170,7`); sweep points within 3 Hz of them move 4 Hz
-  away, as with the multiples of 60 Hz, and are listed in the CSV header. Saved with the settings.
+- *Avoid (Hz)* field: frequencies of known noise sources (e.g. `170,7`); sweep points within ±2 % of them (at least ±3 Hz, proportional window approved 2026-11-19) move 1 Hz beyond the window edge,
+  on the side they were on, and are listed in the CSV header. Saved with the settings.
 - Headless: `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar "170.7;341.4"`.
 
 #### Added: Detect background noise (approved 2026-11-19)
@@ -136,6 +136,18 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   `n_out` float32 = mean of every 4 samples / 8388608 (12 kS/s, ~170 MB/h). Written by its own thread (flush every
   ~1 s); the file name goes to the log. Headless `--amostra` renames the file if it was already open with the
   sample name saved in the interface.
+
+#### Changed: sweep defaults reviewed on 2026-11-19 (approved)
+- *Order* is **Shuffled** by default (and saved with the settings): each repetition is a complete sweep in a new
+  random order, a randomized complete block design, so a slow drift spreads evenly over the frequencies instead of
+  becoming a slope. τ = 1 s fixed and 3 repetitions with median stay. Headless `--ordem` defaults to `embaralhada`.
+  The interface applies these defaults once on the first start of this version.
+- *Discard stretches with room sounds* moved to **Settings → Sweeps** ("Show … in the frequency sweep", off by
+  default): off, the box disappears from the Dual Mode sweep and the discard stays off; on, the box shows as before.
+  With τ = 1 s it brought no gain in the 2026-11-18/19 tests; it may help with longer τ. Headless `--descartar`
+  still turns it on.
+- *Avoid (Hz)* window proportional to frequency (±2 %, at least ±3 Hz) instead of a fixed ±3 Hz → ±4 Hz, also for
+  the tones found during the warm-up.
 
 #### Changed: sweep defaults from the 2026-11-18 noise campaign
 - Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),

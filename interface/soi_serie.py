@@ -130,21 +130,36 @@ def avoid_mains(values, shift=MAINS_SWEEP_SHIFT_HZ):
     return out, moved
 
 
-def avoid_list(values, extra, near=MAINS_NEAR_HZ, shift=MAINS_SWEEP_SHIFT_HZ):
-    """(valores, [(antigo, novo)]): pontos a até `near` Hz de uma frequência de `extra` (fonte de ruído conhecida,
-    ex.: ventoinha do laser) vão para e ± shift, do lado em que estavam (exatamente em e -> +shift)."""
+AVOID_REL = 0.02            # Evitar (Hz): janela proporcional, ±2 % da frequência da fonte (mínimo 3 Hz)
+AVOID_MIN_HZ = MAINS_NEAR_HZ
+AVOID_MARGIN_HZ = 1.0      # o ponto vai para 1 Hz além da borda da janela
+
+
+def avoid_window(e):
+    """Meia-largura da janela de exclusão em torno da frequência e de uma fonte de ruído (Hz)."""
+    return max(AVOID_MIN_HZ, AVOID_REL * float(e))
+
+
+def avoid_list(values, extra):
+    """(valores, [(antigo, novo)]): pontos dentro da janela de uma frequência de `extra` (fonte de ruído conhecida,
+    ex.: ventoinha do laser e harmônicos), |f - e| <= max(3 Hz, 2 % de e), vão para e ± (janela + 1 Hz), do lado em
+    que estavam (exatamente em e -> lado de cima). Proporcional: o k-ésimo harmônico de uma fonte que varia δ em f0
+    varia k·δ."""
+    ex = sorted(float(e) for e in (extra or ()))
     out, moved = [], []
     for f in values:
         g = float(f)
-        for e in extra or ():
-            if abs(g - e) <= near + 1e-9:
-                g = round(e + (shift if g >= e else -shift), 3)
+        for _ in range(4):                      # janelas vizinhas podem se encostar: tenta de novo
+            hit = next((e for e in ex if abs(g - e) <= avoid_window(e) + 1e-9), None)
+            if hit is None:
                 break
+            w = avoid_window(hit) + AVOID_MARGIN_HZ
+            g = round(hit + (w if g >= hit else -w), 1)
         if g != f:
             moved.append((f, g))
         if g not in out:
             out.append(g)
-    return out, moved
+    return sorted(out), moved
 
 
 def measure_order(values, order, seed=None):

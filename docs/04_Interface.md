@@ -216,9 +216,11 @@ shows the repetitions in light grey and the median with error bars of u. The est
 In a Measurement Series, `varredura … --repeticoes N` does the same (older series files without the option keep a
 single sweep and adaptive τ, as they were written).
 
-**Order** (next to Repetitions): Ascending (default), Descending or Shuffled. With an ascending sweep a slow drift
+**Order** (next to Repetitions): Shuffled (default since 2026-11-19), Ascending or Descending. With an ascending sweep a slow drift
 (warm-up) becomes a false slope of the curve; Shuffled measures the frequencies in a new random order in each
-repetition, so the drift becomes scatter that the median reduces. Use it with several repetitions, e.g.
+repetition, so the drift becomes scatter that the median reduces. Each repetition is a complete sweep (a block of a
+randomized complete block design): the repetitions of a frequency fall in different parts of the session and an
+interrupted run still leaves complete curves, which a full randomization of all points would not guarantee. Example:
 `--varredura --tau 1 --repeticoes 15 --ordem embaralhada --aquecer 900`. The seed is written in the header
 (`# Ordem = embaralhada; semente = …`; repetition k uses seed + k − 1, `random.Random(seed).shuffle` of the ascending
 indices), so the order can be rebuilt; `--semente N` fixes it. Plots and CSVs stay in frequency order, with the
@@ -227,7 +229,7 @@ columns `Ordem_medida` (position in which the point was measured) and `Hora_pont
 Measurement Series.
 
 **Avoid (Hz)**: frequencies of known noise sources other than the mains (on 2026-11-19 a source at ~170 Hz, probably the
-laser fan), separated by ";". Sweep points within 3 Hz of them move 4 Hz away, on the side they were on, and are
+laser fan), separated by ";". Sweep points within ±2 % of them (at least ±3 Hz; the window grows with frequency because harmonic k of a source that drifts by δ drifts by k·δ) move 1 Hz beyond the window edge, on the side they were on, and are
 listed in the CSV header. The field is saved with the settings and also applies to Measurement Series sweeps.
 Headless: `--evitar "170.7;341.4"`.
 
@@ -238,7 +240,7 @@ the spectrum with the laser at 5 Hz). The tones and series found are avoided in 
 changing the *Avoid (Hz)* field, and are written in the CSV header (`# Ruidos detectados = …`). The headless
 `--aquecer S` does the same; `--sem-detectar-ruido` turns it off.
 
-**Discard stretches with room sounds** (frequency sweeps, off by default since 2026-11-19: it did not help at night; hover for details). Every second the SOI computes, on the raw INMP441 signal
+**Discard stretches with room sounds** (frequency sweeps; shown only when *Settings → Sweeps → Show "Discard stretches with room sounds"* is on, off by default since 2026-11-19 because it brought no gain with τ = 1 s; it may help with longer τ; hover for details). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
 A room sound (door, voice, traffic) raises the neighbours together with the signal. The part of a point's average with
 q > 2 × the median q of that point is discarded; if more than 30 % is discarded, the average is redone (up to twice).

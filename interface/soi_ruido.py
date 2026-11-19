@@ -341,7 +341,7 @@ def make_dialog(win):
             self.btn_send = QtWidgets.QPushButton('Enviar para Evitar (Hz)')
             self.btn_send.setToolTip('Acrescenta as frequências das linhas selecionadas (todas, se nenhuma estiver '
                                      'selecionada; a rede fica de fora) ao campo "Evitar (Hz)" da varredura em\n'
-                                     'frequência do Modo Duplo. Pontos a até 3 Hz delas vão para ±4 Hz.')
+                                     'frequência do Modo Duplo. Pontos a até ±2 % delas (mínimo 3 Hz) saem da janela.')
             self.btn_send.clicked.connect(self._send)
             self.btn_send.setEnabled(False)
             row.addWidget(self.btn_send)
