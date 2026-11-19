@@ -149,6 +149,32 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - *Avoid (Hz)* window proportional to frequency (±2 %, at least ±3 Hz) instead of a fixed ±3 Hz → ±4 Hz, also for
   the tones found during the warm-up.
 
+#### Changed: noise detection excludes bands by itself, mains included (approved 2026-11-19)
+- **Detected noise is used without "Send":** the tones of the last *Detect background noise* window are excluded from
+  the next Dual Mode frequency sweeps (whole series, k·f0, k ≤ 10) until the next detection or until the interface is
+  closed, together with the warm-up detection. The box *Exclude detected noise* (was *Detect noise during warm-up*)
+  turns both off; it shows how many bands and the time of the last detection. The window button became *Write to
+  Excluded bands (Hz)* (to keep them in the saved field). On 2026-11-19 the sweep at 15:22 used the old field and not
+  the 15:19 detection (117 Hz and 497 Hz were left in).
+- **Mains in the detection:** the detection records the OPT101 together with the INMP441 and keeps its mains tones
+  (60 Hz and multiples; the mains background is electrical, in the OPT101), listed as *mains (OPT101)*. Mains tones
+  found in either sensor are excluded like the others. The *Avoid multiples of 60 Hz* box was removed: with no
+  detection that analysed the OPT101, every multiple of 60 Hz is excluded for safety (as before); the CSV header says
+  which rule applied (`# Rede = …`). The warm-up detection also analyses the OPT101 when the laser harmonics do not
+  cover the multiples of 60 Hz. Simulation: the simulated OPT101 also has a small 300 Hz tone.
+- **"Exclude" instead of "Avoid":** *Avoid (Hz)* became **Excluded bands (Hz)** (no point is measured in the band of
+  ±2 %, at least ±3 Hz, around each frequency). Headless `--excluir` (alias of `--evitar`); CSV header
+  `# Faixas excluidas …` (was `# Frequências evitadas …`; old files keep opening, the line is informative).
+
+#### Changed: no sleep and log of every point during measurements (approved 2026-11-19)
+- The sbook2 entered Modern Standby several times during the 2026-11-19 sweeps (Kernel-Power 506/507). On such PCs
+  Windows goes to standby when the screen turns off, even with `ES_SYSTEM_REQUIRED`, so the interface now also keeps
+  the screen on (`ES_DISPLAY_REQUIRED`) while a measurement runs. "Measurement running" now also covers the warm-up,
+  the gap between repetitions and the whole Measurement Series (also between steps). The log records when the block
+  starts and ends.
+- Every Dual Mode point also goes to `soi.log` when using the window (frequency, S, Δφ, τ, time, fluctuation), as the
+  headless mode already printed, so a lost point can be traced.
+
 #### Changed: narrower Dual Mode window (Marcos's test, 2026-11-19)
 - The *Signal x f (Hz)* box was wider than the screen. *Spacing*, *N points* and *Order* moved to the first row,
   right after *Start*/*End*; the second row has *Avoid multiples of 60 Hz*, *Avoid (Hz)* and *Detect noise during

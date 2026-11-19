@@ -145,20 +145,25 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
 - *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
-**Detect background noise...** (button after *Sweeps ▸*; the same button is also in the Dual Mode, after *Signal x t (s) ▸*) opens a window that looks for acoustic noise sources at fixed
+**Detect background noise...** (button after *Sweeps ▸*; the same button is also in the Dual Mode, after *Signal x t (s) ▸*) opens a window that looks for noise sources at fixed
 frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the
-sweeps can avoid them.
+sweeps exclude them. The INMP441 and the OPT101 are recorded together; in the OPT101 only the mains tones (60 Hz and
+multiples) are kept, because the mains background is electrical and shows up in the OPT101 (e.g. 300 Hz).
 - **Detect (quick):** the laser goes to PWM 0 (restored at the end) and the INMP441 is recorded for *Duration* (default
   20 s). Spectrum: Welch PSD with 4 s Hann windows (0.25 Hz resolution); background = running median of the dB
   spectrum over ±20 Hz; a **tone** is a peak more than *Threshold* (default 10 dB) above the background, from 20 Hz to
   5 kHz. A **series** is an f0 with at least 3 peaks at k·f0 (within 0.5 %, k ≤ 10), found even without the
-  fundamental. Peaks at multiples of 60 Hz are marked *mains* (the sweeps already avoid them).
+  fundamental. Peaks at multiples of 60 Hz are marked *mains*; mains tones seen only in the OPT101 are listed as
+  *mains (OPT101)*. Mains tones are excluded like the others (only the multiples of 60 Hz found).
 - **Comparative** (like the two-sample calibration): *1. Record without the source* (fan or other source off), then
   *2. Record with the source*; only the tones at least *Comparative* dB (default 6) higher in the second recording
   are listed. Use it when the room has other tones that the source should not be blamed for.
-- **Result:** table (frequency, dB above background, series f0, k, type) and spectrum with the tones marked (the
-  selected rows are circled). **Send to Avoid (Hz)** adds the selected rows (all if none is selected) to the
-  *Avoid (Hz)* field of the Dual Mode frequency sweep; with *Whole series* it adds k·f0 for k = 1…10 up to 5 kHz.
+- **Result:** table (frequency, dB above background, series f0, k, type) and INMP441 spectrum with its tones marked
+  (the selected rows are circled). **The tones found are used right away:** with *Exclude detected noise* ticked
+  (Dual Mode, on by default) the next frequency sweeps exclude them (each series as a whole, k·f0 for k = 1…10 up
+  to 5 kHz), until the next detection or until the interface is closed; the box shows how many bands and the time
+  of the detection. **Write to Excluded bands (Hz)** copies the selected rows (all if none is selected) to the
+  *Excluded bands (Hz)* field, which is saved and always applies; with *Whole series* it adds k·f0.
 - **Files** (in `Medidas`): `<sample>_Ruido_fundo_<date>.csv` (`_comparativo` in the comparative mode) with the tones
   in the header and the columns `Frequencia_Hz`, `PSD_dB`, `Fundo_dB` (plus `PSD_sem_fonte_dB`), and the raw audio
   `.bin` (12 kS/s float32, same format as the `SOI_GRAVAR_AUDIO` recording).
@@ -231,17 +236,21 @@ columns `Ordem_medida` (position in which the point was measured) and `Hora_pont
 `_mediana` CSV, `Ordem_medida` lists one position per repetition separated by ";". The box also applies to sweeps of a
 Measurement Series.
 
-**Avoid (Hz)**: frequencies of known noise sources other than the mains (on 2026-11-19 a source at ~170 Hz, probably the
-laser fan), separated by ";". Sweep points within ±2 % of them (at least ±3 Hz; the window grows with frequency because harmonic k of a source that drifts by δ drifts by k·δ) move 1 Hz beyond the window edge, on the side they were on, and are
-listed in the CSV header. The field is saved with the settings and also applies to Measurement Series sweeps.
-Headless: `--evitar "170.7;341.4"`.
+**Excluded bands (Hz)** (before 2026-11-19 *Avoid (Hz)*): frequencies of known noise sources (on 2026-11-19 a source
+at ~170 Hz, the laser fan), separated by ";". No point is measured within an exclusion band of ±2 % around each
+frequency (at least ±3 Hz; the band grows with frequency because harmonic k of a source that drifts by δ drifts by
+k·δ): a point that would fall inside moves 1 Hz beyond the band edge, on the side it was on, and is listed in the CSV
+header. The field is saved with the settings and also applies to Measurement Series sweeps. Headless:
+`--excluir "170.7;341.4"` (`--evitar` still works).
 
-**Detect noise during warm-up** (next to Order, on by default). With *Wait for warm-up* checked, the SOI analyses the
-INMP441 audio of the warm-up (the last 3 min at most) as in *Detect background noise* (INMP441 tab), ignoring the laser
-frequency and its harmonics within ±0.15 Hz (the modulation is exact in the microphone clock; ±1 Hz would hide 40 % of
-the spectrum with the laser at 5 Hz). The tones and series found are avoided in that sweep and its repetitions, without
-changing the *Avoid (Hz)* field, and are written in the CSV header (`# Ruidos detectados = …`). The headless
-`--aquecer S` does the same; `--sem-detectar-ruido` turns it off.
+**Exclude detected noise** (next to the field, on by default). The sweep also excludes, without changing the field:
+the tones of the last *Detect background noise* window (see above) and, with *Wait for warm-up* checked, the tones in
+the INMP441 audio of the warm-up (the last 3 min at most), ignoring the laser frequency and its harmonics within
+±0.15 Hz (the modulation is exact in the microphone clock; ±1 Hz would hide 40 % of the spectrum with the laser at
+5 Hz). During the warm-up the OPT101 is analysed too, for the mains tones, unless the laser harmonics cover the
+multiples of 60 Hz (laser at 5 Hz, for example). The list is fixed when the sweep starts and kept for its repetitions;
+it is written in the CSV header (`# Ruidos detectados = …`). Unticked, no detection is used. The headless
+`--aquecer S` analyses the warm-up; `--sem-detectar-ruido` turns it off.
 
 **Discard stretches with room sounds** (frequency sweeps; shown only when *Settings → Sweeps → Show "Discard stretches with room sounds"* is on, off by default since 2026-11-19 because it brought no gain with τ = 1 s; it may help with longer τ; hover for details). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
@@ -255,9 +264,11 @@ typical |error| of the point is ~0.3·q), `Descartado_Pct` and `Refeito_ruido`. 
 **Mains harmonics.** Frequencies within ±3 Hz of a multiple of 60 Hz pick up mains background (the OPT101 showed it
 at 300 Hz in the 2026-11-16 campaign, and on 2026-11-18 the sweep point at 121.2 Hz, next to 120 Hz, beat with the
 mains in the temperature logger). Fixed-frequency fields (excitation bar, Signal vs t, Measurement Series steps and
-frequency lists) show an orange warning with a **Shift** button that moves the value 5 Hz away; sweeps move such
-points 4 Hz away by default (*Avoid multiples of 60 Hz*; the tooltip lists them), and the shifted points are listed in
-the file header. With the box off the points stay and an orange warning appears. Headless: `--sem-evitar-rede`.
+frequency lists) show an orange warning with a **Shift** button that moves the value 5 Hz away. In sweeps the mains
+is part of the noise detection since 2026-11-19 (the *Avoid multiples of 60 Hz* box was removed): when a detection in
+use analysed the OPT101, only the multiples of 60 Hz it found are excluded (`# Rede = …` in the header); with no such
+detection, every multiple of 60 Hz is excluded for safety (points within ±3 Hz move 4 Hz away; a grey note next to the
+field and the file header list them). Headless: `--sem-evitar-rede` turns that safety rule off.
 
 **Wait for warm-up** (every sweep box: OPT101, INMP441, Dual Mode frequency/PWM/Signal vs t). When checked, a time field appears (default 600 s): clicking the button turns the laser on at the measurement PWM (the highest PWM of a PWM sweep) and waits; the button shows the countdown and a second click cancels. After the laser turns on the photoacoustic signal drops ~14 % with a ~4.4 min time constant at 10 Hz. The laser power (OPT101) drops 3.6 % with a 1 min time constant and the cell heats with τ ≈ 8–9 min, so 10 min of warm-up leaves ~1–3 % drift of S below 100 Hz and < 1 % above. Headless: `--aquecer S`.
 

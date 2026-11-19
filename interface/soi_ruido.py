@@ -1,5 +1,6 @@
 """Detectar ruídos de fundo (aba INMP441): espectro de alguns segundos do INMP441, tons acima do fundo e séries
-harmônicas (ex.: ventoinha do laser em ~170 Hz e múltiplos), para mandar para o campo "Evitar (Hz)" das varreduras.
+harmônicas (ex.: ventoinha do laser em ~170 Hz e múltiplos), excluídos (com uma faixa em volta) das varreduras.
+O OPT101 é analisado junto, só para os tons da rede (60 Hz e múltiplos): o fundo da rede é elétrico, no OPT101.
 
 Análise (funções puras, testáveis sem janela):
 - psd_db: Welch com janelas Hann de 4 s (resolução 0,25 Hz), 50 % de sobreposição, em dB.
@@ -144,8 +145,18 @@ def analyze_compare(x_off, x_on, fs, thr=TONE_DB, dthr=CMP_DB, exclude=()):
             'series': find_series(tones)}
 
 
+def opt_mains(x, fs, thr=TONE_DB, exclude=()):
+    """Tons da rede (60 Hz e múltiplos) no sinal do OPT101: [(f, dB acima do fundo)], em ordem de frequência."""
+    if len(x) < SEG_S * fs:
+        return []
+    f, p = psd_db(x, fs)
+    bg = background_db(f, p)
+    return sorted((t[0], t[1]) for t in find_tones(f, p, bg, thr=thr, exclude=exclude) if is_mains(t[0]))
+
+
 def rows(res):
-    """Linhas da tabela: (f, dB acima do fundo, f0 ou None, k ou None, tipo)."""
+    """Linhas da tabela: (f, dB acima do fundo, f0 ou None, k ou None, tipo); tipo 'rede OPT101' = tom da rede
+    visto só no OPT101."""
     where = {}
     for s in res['series']:
         for k, fk, _ in s['hits']:
@@ -155,19 +166,24 @@ def rows(res):
         f0, k, rede = where.get(round(fx, 3), (None, None, False))
         kind = 'rede' if (rede or is_mains(fx)) else ('série' if f0 else 'tom')
         out.append((fx, db, f0, k, kind))
-    return out
+    for fx, db in res.get('opt_mains', []):
+        if all(abs(fx - r[0]) > 1.0 for r in out):
+            out.append((fx, db, None, None, 'rede OPT101'))
+    return sorted(out, key=lambda r: r[0])
 
 
 def avoid_list_for(res, selected, whole_series=True, fmax=FMAX_HZ):
-    """Frequências para o campo Evitar (Hz): os tons escolhidos e, com whole_series, todos os k·f0 (k <= 10, até
-    fmax) das séries deles. A rede fica de fora (os múltiplos de 60 Hz já são evitados)."""
+    """Frequências a excluir da varredura: os tons escolhidos e, com whole_series, todos os k·f0 (k <= 10, até
+    fmax) das séries deles. Tons da rede (INMP441 ou OPT101) entram só eles mesmos (os múltiplos de 60 Hz achados)."""
     out = []
     by_f = {round(r[0], 3): r for r in rows(res)}
     for fx in selected:
         r = by_f.get(round(fx, 3))
-        if r is None or r[4] == 'rede':
+        if r is None:
             continue
-        if whole_series and r[2]:
+        if r[4].startswith('rede'):
+            out.append(round(60.0 * round(fx / 60.0), 1))
+        elif whole_series and r[2]:
             out += [round(k * r[2], 1) for k in range(1, SERIES_KMAX + 1) if k * r[2] <= fmax]
         else:
             out.append(round(fx, 1))
@@ -186,6 +202,9 @@ def summary(res, limit=8):
     in_series = {round(h[1], 3) for s in res['series'] for h in s['hits']}
     loose = [t for t in res['tones'] if round(t[0], 3) not in in_series and not is_mains(t[0])]
     parts += [f'{t[0]:.1f} Hz (+{t[1]:.0f} dB)' for t in loose[:limit]]
+    mains = sorted({int(round(r[0] / 60.0)) * 60 for r in rows(res) if r[4].startswith('rede')})
+    if mains:
+        parts.append('rede ' + ', '.join(f'{m:d}' for m in mains) + ' Hz')
     return '; '.join(parts) if parts else 'nenhum'
 
 
@@ -196,7 +215,7 @@ def save_csv(path, res, header=()):
         fh.write(f'# Ruidos detectados = {summary(res)}\n')
         for fx, db, f0, k, kind in rows(res):
             fh.write(f'# Tom {fx:.2f} Hz: +{db:.1f} dB' + (f', serie f0 = {f0:.2f} Hz, k = {k}' if f0 else '')
-                     + (f' ({kind})' if kind == 'rede' else '')
+                     + (f' ({kind})' if kind.startswith('rede') else '')
                      + (f", +{res['delta'][round(fx, 3)]:.1f} dB com a fonte" if 'delta' in res and
                         round(fx, 3) in res['delta'] else '') + '\n')
         cmp_ = 'p_off' in res
@@ -254,10 +273,11 @@ def make_dialog(win):
             self.timer.timeout.connect(self._tick)
             lay = QtWidgets.QVBoxLayout(self)
             info = QtWidgets.QLabel(
-                'Grava alguns segundos do INMP441 com o laser parado (PWM 0) e procura frequências com sinal acima do '
-                'fundo, e as que se repetem nos harmônicos (ex.: ventoinha do laser em ~170 Hz). Rápido: uma gravação. '
-                'Comparativo (como a calibração com duas amostras): grave sem a fonte de ruído e depois com ela; ficam '
-                'os tons que sobem com a fonte. Os escolhidos vão para o campo "Evitar (Hz)" das varreduras.')
+                'Grava alguns segundos do INMP441 e do OPT101 com o laser parado (PWM 0) e procura frequências com sinal '
+                'acima do fundo, e as que se repetem nos harmônicos (ex.: ventoinha do laser em ~170 Hz); no OPT101, só '
+                'os tons da rede (60 Hz e múltiplos). Rápido: uma gravação. Comparativo (como a calibração com duas '
+                'amostras): grave sem a fonte de ruído e depois com ela; ficam os tons que sobem com a fonte. Os tons '
+                'encontrados são excluídos das próximas varreduras do Modo Duplo (caixa "Excluir ruídos detectados").')
             info.setWordWrap(True)
             lay.addWidget(info)
             row = QtWidgets.QHBoxLayout()
@@ -338,10 +358,13 @@ def make_dialog(win):
             self.chk_series.setToolTip('Num tom que faz parte de uma série harmônica, envia todos os múltiplos k·f0 '
                                        '(k = 1 a 10, até 5 kHz), não só o tom escolhido.')
             row.addWidget(self.chk_series)
-            self.btn_send = QtWidgets.QPushButton('Enviar para Evitar (Hz)')
-            self.btn_send.setToolTip('Acrescenta as frequências das linhas selecionadas (todas, se nenhuma estiver '
-                                     'selecionada; a rede fica de fora) ao campo "Evitar (Hz)" da varredura em\n'
-                                     'frequência do Modo Duplo. Pontos a até ±2 % delas (mínimo 3 Hz) saem da janela.')
+            self.btn_send = QtWidgets.QPushButton('Gravar em Faixas excluídas (Hz)')
+            self.btn_send.setToolTip('Os tons desta detecção já são excluídos das próximas varreduras do Modo Duplo, sem '
+                                     'clicar aqui (caixa "Excluir ruídos detectados",\nmarcada por padrão; valem até a '
+                                     'próxima detecção ou até fechar a interface).\n'
+                                     'Este botão grava as frequências das linhas selecionadas (todas, se nenhuma estiver '
+                                     'selecionada)\nno campo "Faixas excluídas (Hz)", que fica salvo e vale sempre. '
+                                     'Nenhum ponto é medido a até ±2 % delas (mínimo 3 Hz).')
             self.btn_send.clicked.connect(self._send)
             self.btn_send.setEnabled(False)
             row.addWidget(self.btn_send)
@@ -434,8 +457,12 @@ def make_dialog(win):
                 res = analyze_compare(self.x_off, x, fs, thr=self.sp_thr.value(), dthr=self.sp_cmp.value())
             else:
                 res = analyze(x, fs, thr=self.sp_thr.value())
+            xo, fso = win.noise_last_opt if getattr(win, 'noise_last_opt', None) else (None, 0.0)
+            res['opt_mains'] = opt_mains(xo, fso, thr=self.sp_thr.value()) if xo is not None else []
+            res['opt_ok'] = xo is not None and len(xo) >= SEG_S * fso
             self.res = res
             self._show()
+            used = win.set_noise_detection(res, self.dur) if hasattr(win, 'set_noise_detection') else None
             stem = file_stem(win.ed_sample.text(), 'Ruido_fundo' + ('_comparativo' if mode == 'com' else ''))
             folder = win._save_dir()
             os.makedirs(folder, exist_ok=True)
@@ -456,7 +483,10 @@ def make_dialog(win):
             except OSError as e:
                 self.lbl_file.setText(f'Erro ao salvar: {e}')
             n = len(res['tones'])
-            self.lbl.setText(f'{n} tom(ns) acima do fundo: {summary(res)}' if n else 'Nenhum tom acima do fundo.')
+            self.lbl.setText((f'{n} tom(ns) acima do fundo: {summary(res)}' if n else 'Nenhum tom acima do fundo.')
+                             + (f' | {len(used)} faixa(s) excluída(s) das próximas varreduras' if used else ''))
+            self.lbl.setToolTip(('Excluídas das próximas varreduras (caixa "Excluir ruídos detectados"): '
+                                 + ', '.join(f'{v:g}' for v in used) + ' Hz') if used else '')
             if mode == 'com':
                 self.x_off = None
                 self.btn_on.setEnabled(False)
@@ -472,19 +502,20 @@ def make_dialog(win):
             else:
                 self.c_off.setData([], [])
             tr = rows(res)
-            self.c_t.setData([r[0] for r in tr], [res['p'][int(round((r[0] - f[0]) / (f[1] - f[0])))] for r in tr])
+            tm = [r for r in tr if r[4] != 'rede OPT101']          # no espectro do INMP441, só os tons dele
+            self.c_t.setData([r[0] for r in tm], [res['p'][int(round((r[0] - f[0]) / (f[1] - f[0])))] for r in tm])
             self.c_sel.setData([], [])
             self.tbl.setRowCount(len(tr))
-            names = {'rede': 'rede (60 Hz)', 'série': 'série', 'tom': 'tom'}
+            names = {'rede': 'rede (60 Hz)', 'rede OPT101': 'rede (OPT101)', 'série': 'série', 'tom': 'tom'}
             for i, (fx, db, f0, k, kind) in enumerate(tr):
                 vals = (f'{fx:.2f}', f'{db:.1f}', f'{f0:.2f}' if f0 else '', str(k) if k else '', _tr(names[kind]))
                 for j, v in enumerate(vals):
                     it = QtWidgets.QTableWidgetItem(v)
-                    if kind == 'rede':
+                    if kind.startswith('rede'):
                         it.setForeground(pg.mkColor(130, 130, 130))
                     self.tbl.setItem(i, j, it)
             self.tbl.resizeColumnsToContents()
-            self.btn_send.setEnabled(any(r[4] != 'rede' for r in tr))
+            self.btn_send.setEnabled(bool(tr))
 
         def _selected_f(self):
             tr = rows(self.res) if self.res else []
@@ -504,11 +535,11 @@ def make_dialog(win):
             sel = self._selected_f() or [r[0] for r in rows(self.res)]
             vals = avoid_list_for(self.res, sel, self.chk_series.isChecked())
             if not vals:
-                self.lbl.setText('Nada para enviar (a rede já é evitada pela caixa "Evitar múltiplos de 60 Hz").')
+                self.lbl.setText('Nada para gravar.')
                 return
             added = win.add_avoid(vals)
-            self.lbl.setText(f'Evitar (Hz) agora: {win.ed_dual_avoid.text()}' if added else
-                             'Essas frequências já estavam no campo Evitar (Hz).')
+            self.lbl.setText(f'Faixas excluídas (Hz) agora: {win.ed_dual_avoid.text()}' if added else
+                             'Essas frequências já estavam no campo Faixas excluídas (Hz).')
 
         def closeEvent(self, ev):
             if self.mode is not None:

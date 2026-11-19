@@ -2774,14 +2774,16 @@ def resolution_verdict(res, laser_power=None):
 # ----------------------------------------------------------------------------
 def keep_system_awake(on):
     """Windows: com on=True impede a suspensão (e a hibernação) por inatividade até ser chamada com False.
-    A tela ainda pode apagar. Não impede fechar a tampa nem suspender pelo menu ou pelo botão.
+    Mantém também a tela ligada: nos PCs com Modern Standby (como o sbook2) o Windows entra em espera quando a tela
+    apaga, mesmo com ES_SYSTEM_REQUIRED (visto em 19/11: Kernel-Power 506/507 no meio de varreduras).
+    Não impede fechar a tampa nem suspender pelo menu ou pelo botão.
     Vale para a thread que chama (chame sempre da thread da GUI). Devolve True se o Windows aceitou."""
     if sys.platform != 'win32':
         return False
     try:
         import ctypes
-        es_continuous, es_system_required = 0x80000000, 0x00000001
-        flags = es_continuous | (es_system_required if on else 0)
+        es_continuous, es_system_required, es_display_required = 0x80000000, 0x00000001, 0x00000002
+        flags = es_continuous | ((es_system_required | es_display_required) if on else 0)
         return bool(ctypes.windll.kernel32.SetThreadExecutionState(flags))
     except Exception:
         return False
@@ -3383,7 +3385,7 @@ class SignalSimulator:
         y, zf = self._lfilter([1.0 - a], [1.0, -a], target, zi=[a * self.y])
         self.y = float(y[-1])
         t = idx / self.fs
-        sig = (self.BASELINE + y + 0.003 * np.sin(2 * np.pi * 60.0 * t)
+        sig = (self.BASELINE + y + 0.003 * np.sin(2 * np.pi * 60.0 * t) + 0.001 * np.sin(2 * np.pi * 300.0 * t)
                + self.NOISE * self.rng.standard_normal(m))
         adc = np.clip(np.rint(sig * 4095.0), 0, 4095).astype('<u2')
         return (adc | (ref.astype('<u2') << 15)).tobytes()
@@ -4677,9 +4679,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         audio_mode.addWidget(self.btn_audio_sweeps)
         self.btn_noise_detect = QtWidgets.QPushButton('Detectar ruídos de fundo...')
         self.btn_noise_detect.setToolTip(
-            'Abre uma janela que grava alguns segundos do INMP441 com o laser parado e procura frequências com sinal\n'
-            'acima do fundo e séries harmônicas (ex.: ventoinha do laser em ~170 Hz). Rápido ou comparativo (sem e com\n'
-            'a fonte de ruído). Os tons escolhidos vão para o campo "Evitar (Hz)" das varreduras do Modo Duplo.')
+            'Abre uma janela que grava alguns segundos do INMP441 e do OPT101 com o laser parado e procura frequências\n'
+            'com sinal acima do fundo e séries harmônicas (ex.: ventoinha do laser em ~170 Hz; no OPT101, a rede).\n'
+            'Rápido ou comparativo (sem e com a fonte de ruído). Os tons encontrados são excluídos das próximas\n'
+            'varreduras do Modo Duplo (caixa "Excluir ruídos detectados").')
         self.btn_noise_detect.clicked.connect(self.open_noise_dialog)
         audio_mode.addWidget(self.btn_noise_detect)
         audio_mode.addSpacing(16)
@@ -5018,7 +5021,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.cmb_dual_fspace = QtWidgets.QComboBox()
         self.cmb_dual_fspace.addItems(['Logarítmico', 'Linear'])
         self.sp_dual_fn = self._dspin(1.0, 5000.0, CAL_SWEEP_N, 1, 1.0, None, 90)
-        self.chk_dual_avoid60 = QtWidgets.QCheckBox('Evitar múltiplos de 60 Hz')
+        # Sem caixa na janela desde 19/11: a rede entra na detecção de ruídos (OPT101); sem detecção, os múltiplos de
+        # 60 Hz são excluídos por segurança (_mains_fixed). Fica como estado interno (--sem-evitar-rede desliga).
+        self.chk_dual_avoid60 = QtWidgets.QCheckBox('Excluir múltiplos de 60 Hz')
         self.chk_dual_avoid60.setChecked(True)
         self.lbl_dual_mains = QtWidgets.QLabel('')
         self.lbl_dual_mains.setStyleSheet(f'color:{LOWF_WARN_COLOR};font-weight:bold;')
@@ -5027,10 +5032,13 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.ed_dual_avoid.setPlaceholderText('ex.: 170,7')
         self.ed_dual_avoid.setFixedWidth(90)
         self._avoid_tip = (
-            f'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";".\n'
-            'Pontos da varredura dentro da janela de uma delas, ±2 % da frequência (mínimo ±3 Hz), vão para 1 Hz além\n'
-            'da borda, do lado em que estavam (a janela cresce com a frequência: o harmônico k de uma fonte que varia\n'
-            'δ varia k·δ), e ficam listados no cabeçalho do CSV. Vazio = nenhuma.')
+            'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";", que\n'
+            'ficam sempre excluídas (o campo é salvo). Em volta de cada uma, ±2 % da frequência (mínimo ±3 Hz), nenhum\n'
+            'ponto é medido: um ponto que cairia nessa faixa vai para 1 Hz além da borda, do lado em que estava (a faixa\n'
+            'cresce com a frequência: o harmônico k de uma fonte que varia δ varia k·δ), e fica listado no cabeçalho\n'
+            'do CSV. Os ruídos detectados (caixa ao lado) somam-se a estas sem mudar o campo. Vazio = nenhuma.\n'
+            'Rede: os múltiplos de 60 Hz achados pela detecção (INMP441 ou OPT101) são excluídos; sem nenhuma\n'
+            'detecção em uso, todos os múltiplos de 60 Hz são excluídos (k·60 ± 3 Hz), por segurança.')
         self.ed_dual_avoid.setToolTip(self._avoid_tip)
         self.lbl_dual_fn = QtWidgets.QLabel('N pontos:')
         # τ adaptativo (vale para as duas varreduras em frequência; o quadro 'M' fica escondido)
@@ -5084,14 +5092,20 @@ class LockInWindow(QtWidgets.QMainWindow):
             'Entre 40 e 200 Hz os erros são pontos isolados (sons do ambiente de alguns segundos), em frequências\n'
             'diferentes a cada varredura: a mediana os descarta, e um τ maior não (campanha de ruído de 18/11).')
         self.sp_dual_reps.valueChanged.connect(self.update_dual_eta)
-        self.chk_dual_warm_noise = QtWidgets.QCheckBox('Detectar ruídos no warm-up')
+        self.chk_dual_warm_noise = QtWidgets.QCheckBox('Excluir ruídos detectados')
         self.chk_dual_warm_noise.setChecked(True)
-        self.chk_dual_warm_noise.setToolTip(
-            'Com "Aguardar warm-up", o SOI analisa o áudio do INMP441 durante a espera (os últimos 3 min, no máximo),\n'
-            'como em "Detectar ruídos de fundo" (aba INMP441), ignorando a frequência do laser e os harmônicos dela\n'
-            '(±0,15 Hz: a frequência do laser é exata no relógio do microfone). Os tons e séries encontrados são\n'
-            'evitados nessa varredura (e nas repetições), sem mudar o campo Evitar (Hz), e ficam no cabeçalho do CSV\n'
-            '("# Ruidos detectados = ...").')
+        self._warm_noise_tip = (
+            'Marcada (padrão), a varredura exclui os ruídos detectados (faixa de ±2 %, mínimo ±3 Hz, em volta de cada\n'
+            'um), sem mudar o campo Faixas excluídas (Hz):\n'
+            '- os da última detecção feita na janela "Detectar ruídos de fundo" (valem até a próxima detecção\n'
+            '  ou até fechar a interface; não precisa clicar em "Enviar");\n'
+            '- com "Aguardar warm-up", os do áudio do INMP441 durante a espera (os últimos 3 min, no máximo),\n'
+            '  ignorando a frequência do laser e os harmônicos dela (±0,15 Hz); valem nessa varredura e nas repetições.\n'
+            'Tons de uma série harmônica entram com a série inteira (k·f0, k ≤ 10). A rede (60 Hz e múltiplos) entra\n'
+            'pelo que a detecção achou no INMP441 e no OPT101; sem detecção, todos os múltiplos de 60 Hz são excluídos.\n'
+            'Vão para o cabeçalho do CSV ("# Ruidos detectados = ..."). Desmarcada: nenhuma detecção é usada.')
+        self.chk_dual_warm_noise.setToolTip(self._warm_noise_tip)
+        self.chk_dual_warm_noise.toggled.connect(lambda _: self._noise_det_ui())
         self.cmb_dual_order = QtWidgets.QComboBox()
         for txt, key in (('Crescente', 'crescente'), ('Decrescente', 'decrescente'), ('Embaralhada', 'embaralhada')):
             self.cmb_dual_order.addItem(txt, key)
@@ -5137,8 +5151,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                                         (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1),
                                          ('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn),
                                          ('Ordem:', self.cmb_dual_order), ('', self.lbl_dual_lowf['F'])), 'F',
-                                        mid=(('', self.chk_dual_avoid60), ('', self.lbl_dual_mains),
-                                             ('Evitar (Hz):', self.ed_dual_avoid), ('', self.chk_dual_warm_noise)),
+                                        mid=(('', self.chk_dual_warm_noise), ('Faixas excluídas (Hz):', self.ed_dual_avoid),
+                                             ('', self.lbl_dual_mains)),
                                         adapt=adapt_row)
         # Varredura em frequência das medidas (painel "Varreduras"): parâmetros próprios, para não mexer nos da calibração
         self.sp_dual_m_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 2, 1.0, None, 110, ' Hz')
@@ -6541,12 +6555,13 @@ class LockInWindow(QtWidgets.QMainWindow):
             vals = self._planned_range(f0, f1, spn.value())
         if raw:
             return vals
-        if self.chk_dual_avoid60.isChecked():
+        if self._mains_fixed():
             vals = soi_serie.avoid_mains(vals)[0]
         return soi_serie.avoid_list(vals, self._dual_avoid_extra())[0]
 
-    def _dual_avoid_extra(self):
-        """Frequências do campo "Evitar (Hz)" (fontes de ruído conhecidas); texto inválido é ignorado."""
+    def _dual_avoid_extra(self, field_only=False):
+        """Frequências do campo "Evitar (Hz)" (fontes de ruído conhecidas; texto inválido é ignorado) mais os ruídos
+        detectados (janela Detectar ruídos de fundo e warm-up), se "Excluir ruídos detectados" estiver marcada."""
         out = []
         txt = self.ed_dual_avoid.text() if hasattr(self, 'ed_dual_avoid') else ''
         for p in re.split(r'[;\s]+', txt):
@@ -6556,10 +6571,29 @@ class LockInWindow(QtWidgets.QMainWindow):
                 continue
             if 0 < v <= 20000:
                 out.append(v)
-        auto = getattr(self, 'dual_auto_avoid', None)
-        if auto:
+        if field_only:
+            return out
+        srcs = self._noise_sources()
+        for auto in srcs:
             out += [v for v in auto['vals'] if all(abs(v - o) > 1.0 for o in out)]
         return out
+
+    def _noise_sources(self):
+        """Detecções de ruído que valem para a varredura (com "Excluir ruídos detectados" marcada): a última da
+        janela Detectar ruídos de fundo e a do warm-up que acabou. Durante a varredura, a lista fixada no início."""
+        if getattr(self, 'dual_noise_lock', False) or self.dual_busy():
+            return getattr(self, 'dual_noise_used', None) or []
+        if not (hasattr(self, 'chk_dual_warm_noise') and self.chk_dual_warm_noise.isChecked()):
+            return []
+        return [d for d in (getattr(self, 'noise_det_last', None),
+                            getattr(self, 'dual_auto_avoid', None) if getattr(self, 'dual_auto_pending', False)
+                            else None) if d]
+
+    def _mains_fixed(self):
+        """Excluir todos os múltiplos de 60 Hz (k·60 ± 3 Hz)? Só quando nenhuma detecção em uso analisou o OPT101
+        (sem detecção, por segurança); com detecção, só a rede que ela achou é excluída. --sem-evitar-rede desliga."""
+        return (self.chk_dual_avoid60.isChecked()
+                and not any(d.get('mains_checked') for d in self._noise_sources()))
 
     def _dual_order_key(self):
         return self.cmb_dual_order.currentData() if hasattr(self, 'cmb_dual_order') else 'crescente'
@@ -6695,7 +6729,7 @@ class LockInWindow(QtWidgets.QMainWindow):
     def _update_dual_mains(self):
         """Caixa "Evitar múltiplos de 60 Hz": a dica lista os pontos deslocados; desligada, aviso laranja."""
         _vals, moved = soi_serie.avoid_mains(self._dual_planned('F', raw=True))
-        on = self.chk_dual_avoid60.isChecked()
+        on = self._mains_fixed()
         lst = ', '.join(f'{a:g} → {b:g} Hz' for a, b in moved)
         self.chk_dual_avoid60.setToolTip(
             f'Pontos a até {soi_serie.MAINS_NEAR_HZ:g} Hz de um múltiplo de 60 Hz pegam o fundo da rede (o OPT101 mostra\n'
@@ -6704,7 +6738,12 @@ class LockInWindow(QtWidgets.QMainWindow):
             + (f'\nNesta varredura: {lst}' if moved else '\nNesta varredura nenhum ponto cai perto da rede.'))
         self.lbl_dual_mains.setText(f'⚠ perto de múltiplos de 60 Hz: {len(moved)} ponto(s)' if moved else '')
         self.lbl_dual_mains.setToolTip(lst)
-        self.lbl_dual_mains.setVisible(bool(moved) and not on)
+        self.lbl_dual_mains.setVisible(False)          # sem a caixa da rede, não há o caso "desligada"
+        self.lbl_dual_mains.setText(f'(+ múltiplos de 60 Hz: {len(moved)} ponto(s))' if on and moved else '')
+        self.lbl_dual_mains.setToolTip('Nenhuma detecção de ruído em uso: os pontos perto de múltiplos de 60 Hz são\n'
+                                       'deslocados por segurança: ' + lst if on and moved else '')
+        self.lbl_dual_mains.setStyleSheet('color:gray;')
+        self.lbl_dual_mains.setVisible(bool(on and moved))
         base = _vals if on else self._dual_planned('F', raw=True)
         _v2, moved2 = soi_serie.avoid_list(base, self._dual_avoid_extra())
         self.ed_dual_avoid.setStyleSheet('font-weight:bold;' if moved2 else '')
@@ -7246,6 +7285,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.dual_auto_pending = False          # ruídos do warm-up que acabou: valem nesta varredura
             else:
                 self.dual_auto_avoid = None
+            # ruídos usados nesta varredura (e repetições): última detecção da janela + a do warm-up
+            self.dual_noise_used = ([d for d in (getattr(self, 'noise_det_last', None), self.dual_auto_avoid) if d]
+                                    if self.chk_dual_warm_noise.isChecked() else [])
+            self.dual_noise_lock = True
         values = list(refine[0]) if refine else self._dual_planned(kind)
         if not values:
             return
@@ -7302,13 +7345,15 @@ class LockInWindow(QtWidgets.QMainWindow):
                                 'freq': self.ref_freq, 'pwm': self.laser_power, 'order': (order, seed),
                                 'mode': DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()],
                                 'tau': self.dual_tau_w[kind].value() if long_tau else None}
-            if kind in ('F', 'M') and self.chk_dual_avoid60.isChecked():
+            if kind in ('F', 'M'):
+                self.dual_params['mains_fixed'] = self._mains_fixed()
+            if kind in ('F', 'M') and self._mains_fixed():
                 self.dual_params['mains_moved'] = soi_serie.avoid_mains(self._dual_planned(kind, raw=True))[1]
-            if kind in ('F', 'M') and getattr(self, 'dual_auto_avoid', None):
-                self.dual_params['auto_noise'] = dict(self.dual_auto_avoid)
+            if kind in ('F', 'M') and getattr(self, 'dual_noise_used', None):
+                self.dual_params['auto_noise'] = [dict(d) for d in self.dual_noise_used]
             if kind in ('F', 'M') and self._dual_avoid_extra():
                 raw = self._dual_planned(kind, raw=True)
-                if self.chk_dual_avoid60.isChecked():
+                if self._mains_fixed():
                     raw = soi_serie.avoid_mains(raw)[0]
                 self.dual_params['extra_avoid'] = (self._dual_avoid_extra(),
                                                    soi_serie.avoid_list(raw, self._dual_avoid_extra())[1])
@@ -7386,6 +7431,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _end_dual_sweep(self):
         self.dual_active = False
+        self.dual_noise_lock = False
         self.cal_pending = None
         self.audio_sim.sample = None                # simulação volta ao sinal sem amostra
         self.dual_state = 'IDLE'
@@ -7517,6 +7563,11 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self.dual_ptime.insert(j, datetime.now().strftime('%H:%M:%S'))
                 self.dual_excluded = {i + 1 if i >= j else i for i in self.dual_excluded}
                 self.dual_last_i = j
+            if not getattr(self, 'headless', False):       # sem janela, o run_headless já imprime cada ponto
+                s_pt = row[3] / row[1] if row[1] > 0 else float('nan')
+                print(f'{head}: S = {s_pt:.4g}, Δφ = {wrap_deg(row[5] - row[7]):.2f}°, '
+                      f'τ = {pinfo[0]:g} s, {pinfo[1]:.0f} s, flutuação S {pinfo[3]:.2g} %, Δφ {pinfo[4]:.2g}°',
+                      flush=True)
             self._show_dual_results()
         else:
             n_o = sum(len(c[0]) for c in self.dual_opt)
@@ -8636,7 +8687,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                             f'parte da média descartada (q > {NB_K:g} x mediana de q do ponto); Refeito_ruido = médias '
                             f'refeitas (mais de {100 * NB_REDO_FRAC:.0f} % descartado)\n')
                 if q.get('mains_moved'):
-                    f.write('# Pontos deslocados da rede (Evitar múltiplos de 60 Hz): '
+                    f.write('# Pontos deslocados da rede (múltiplos de 60 Hz excluídos, sem detecção de ruído): '
                             + ', '.join(f'{a:g} -> {b:g} Hz' for a, b in q['mains_moved']) + '\n')
                 order, seed = q.get('order', ('crescente', None))
                 if med is not None and order == 'embaralhada' and med.get('seeds'):
@@ -8647,10 +8698,18 @@ class LockInWindow(QtWidgets.QMainWindow):
                             '(random.Random(semente).shuffle dos índices em ordem crescente)\n')
                 elif order != 'crescente':
                     f.write(f'# Ordem = {order}\n')
-                if q.get('auto_noise'):
-                    an = q['auto_noise']
-                    f.write(f"# Ruidos detectados = {an['summary']} (áudio de {an['dur']:.0f} s do warm-up, laser em "
-                            f"{an['fref']:.4g} Hz e harmônicos ignorados); evitados: "
+                if q.get('mains_fixed') is False:
+                    f.write('# Rede = só os múltiplos de 60 Hz achados pela detecção de ruído (INMP441/OPT101) foram '
+                            'excluídos\n')
+                elif q.get('mains_fixed') and q['kind'] == 'F' and not q.get('mains_moved'):
+                    f.write('# Rede = múltiplos de 60 Hz excluídos (±3 Hz; sem detecção de ruído do OPT101); nenhum '
+                            'ponto perto\n')
+                ans = q.get('auto_noise') or []
+                for an in ([ans] if isinstance(ans, dict) else ans):
+                    src = (f"janela Detectar ruídos de fundo, {an.get('when', '')}, {an['dur']:.0f} s, laser em PWM 0"
+                           if an.get('src') == 'janela' else
+                           f"áudio de {an['dur']:.0f} s do warm-up, laser em {an['fref']:.4g} Hz e harmônicos ignorados")
+                    f.write(f"# Ruidos detectados = {an['summary']} ({src}); excluídos: "
                             + (', '.join(f'{v:g}' for v in an['vals']) or 'nenhum') + ' Hz\n')
                 if q.get('skipped') and med is None:
                     f.write('# Pontos pulados (sem dados de um sensor, mesmo medindo de novo): '
@@ -8660,7 +8719,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                             + '; nesses pontos a mediana usa só as repetições existentes (N_repeticoes)\n')
                 if q.get('extra_avoid'):
                     ex, mv = q['extra_avoid']
-                    f.write(f"# Frequências evitadas (fontes de ruído): {', '.join(f'{x:g}' for x in ex)} Hz"
+                    f.write(f"# Faixas excluidas (fontes de ruído, ±2 %, mín. ±3 Hz): {', '.join(f'{x:g}' for x in ex)} Hz"
                             + ('; pontos deslocados: ' + ', '.join(f'{a:g} -> {b:g} Hz' for a, b in mv) if mv else '')
                             + '\n')
                 ocol = (med is None and not resave and q['kind'] == 'F'
@@ -11548,6 +11607,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         with self.audio_lock:
             self.noise_cap = []
             self.noise_rem = np.zeros(0)
+        self.noise_cap_opt = []               # OPT101 junto (amostras sobreamostradas, RAW_FS/osr), para a rede
+        self.noise_cap_opt_fs = RAW_FS / max(1, int(getattr(self, 'osr', OSR_DEFAULT)))
 
     def noise_capture_len(self):
         cap = self.noise_cap
@@ -11556,6 +11617,8 @@ class LockInWindow(QtWidgets.QMainWindow):
     def noise_capture_end(self):
         with self.audio_lock:
             cap, self.noise_cap = self.noise_cap, None
+        co, self.noise_cap_opt = getattr(self, 'noise_cap_opt', None), None
+        self.noise_last_opt = ((np.concatenate(co), self.noise_cap_opt_fs) if co and not self.ext_mode else None)
         return np.concatenate(cap) if cap else np.zeros(0, dtype=np.float32)
 
     NOISE_WARM_MAX_S = 180.0      # warm-up: analisa só os últimos 3 min
@@ -11586,11 +11649,22 @@ class LockInWindow(QtWidgets.QMainWindow):
         fr = actual_mod_freq(self.noise_warm_fref) if self.noise_warm_fref > 0 else 0.0
         ex = ([(k * fr, NOISE_LASER_TOL_HZ) for k in range(1, int(soi_ruido.FMAX_HZ / fr) + 2)] if fr > 0 else [])
         res = soi_ruido.analyze(x, fs, exclude=ex)
+        res['opt_mains'], res['opt_ok'] = [], False
+        lo = getattr(self, 'noise_last_opt', None)
+        if lo is not None and fr > 0:
+            xo, fso = lo
+            xo = xo[-int(self.NOISE_WARM_MAX_S * fso):]
+            # múltiplos de 60 Hz que caem num harmônico do laser não podem ser vistos no OPT101 (laser ligado)
+            hidden = [m for m in range(60, int(soi_ruido.FMAX_HZ) + 1, 60)
+                      if abs(m / fr - round(m / fr)) * fr <= 2 * NOISE_LASER_TOL_HZ]
+            res['opt_mains'] = soi_ruido.opt_mains(xo, fso, exclude=ex)
+            res['opt_ok'] = len(xo) >= soi_ruido.SEG_S * fso and len(hidden) <= 2
         vals = soi_ruido.avoid_list_for(res, [r[0] for r in soi_ruido.rows(res)], True)
-        self.dual_auto_avoid = {'vals': vals, 'summary': soi_ruido.summary(res), 'dur': len(x) / fs, 'fref': fr}
+        self.dual_auto_avoid = {'vals': vals, 'summary': soi_ruido.summary(res), 'dur': len(x) / fs, 'fref': fr,
+                                'mains_checked': bool(res['opt_ok'])}
         self.dual_auto_pending = True
         msg = (f"Ruídos detectados no warm-up: {self.dual_auto_avoid['summary']}"
-               + (f" -> evitados nesta varredura: {', '.join(f'{v:g}' for v in vals)} Hz" if vals else ''))
+               + (f" -> excluídos desta varredura: {', '.join(f'{v:g}' for v in vals)} Hz" if vals else ''))
         print(msg, flush=True)
         self.flash(msg, 8.0)
         return res
@@ -11604,7 +11678,7 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def add_avoid(self, vals):
         """Acrescenta frequências ao campo Evitar (Hz) (sem repetir as que já estão, ±1 Hz). True se mudou."""
-        cur = self._dual_avoid_extra()
+        cur = self._dual_avoid_extra(field_only=True)
         new = [v for v in vals if all(abs(v - c) > 1.0 for c in cur)]
         if not new:
             return False
@@ -11612,6 +11686,33 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.ed_dual_avoid.setText('; '.join(f'{v:g}'.replace('.', ',') for v in allv))
         self.ed_dual_avoid.editingFinished.emit()
         return True
+
+    def set_noise_detection(self, res, dur):
+        """Resultado da janela Detectar ruídos de fundo: passa a ser evitado nas varreduras seguintes (com
+        "Evitar ruídos detectados" marcada) até a próxima detecção."""
+        rws = [r[0] for r in soi_ruido.rows(res)]
+        vals = soi_ruido.avoid_list_for(res, rws, True)
+        self.noise_det_last = {'vals': vals, 'summary': soi_ruido.summary(res), 'dur': dur, 'fref': 0.0,
+                               'src': 'janela', 'when': datetime.now().strftime('%H:%M'),
+                               'mains_checked': bool(res.get('opt_ok'))}
+        print(f"Detectar ruídos de fundo: {self.noise_det_last['summary']}"
+              + (f" -> excluídos das próximas varreduras: {', '.join(f'{v:g}' for v in vals)} Hz" if vals else ''),
+              flush=True)
+        self._noise_det_ui()
+        self.update_dual_eta()
+        return vals
+
+    def _noise_det_ui(self):
+        """Texto e dica da caixa "Evitar ruídos detectados" com a última detecção da janela."""
+        d = getattr(self, 'noise_det_last', None)
+        txt = 'Excluir ruídos detectados'
+        tip = self._warm_noise_tip
+        if d and d['vals']:
+            txt += f" ({len(d['vals'])} faixas, {d['when']})"
+            tip += (f"\n\nÚltima detecção ({d['when']}): {d['summary']}\nExcluídas: "
+                    + ', '.join(f'{v:g}' for v in d['vals']) + ' Hz')
+        self.chk_dual_warm_noise.setText(txt)
+        self.chk_dual_warm_noise.setToolTip(tip)
 
     def open_noise_dialog(self):
         if getattr(self, 'noise_dlg', None) is None:
@@ -11954,6 +12055,8 @@ class LockInWindow(QtWidgets.QMainWindow):
                 wrapped = self.raw.push(adc, ref)
                 if self.opt_fft_enabled:
                     self._store_opt_samples(adc)
+                if getattr(self, 'noise_cap_opt', None) is not None:      # Detectar ruídos: OPT101 junto
+                    self.noise_cap_opt.append(np.array(adc, dtype=np.float32))
                 if wrapped and not self.chk_scope_fixed.isChecked():
                     self._autoscale_raw()
                 if self.average_mode and self.avg.push(adc, ref):
@@ -12293,7 +12396,11 @@ class LockInWindow(QtWidgets.QMainWindow):
 
     def _measuring(self):
         '''Há uma medida em curso que a suspensão do PC interromperia?'''
+        st = getattr(self, 'series_tab', None)
         return bool(getattr(self, 'sweep_active', False) or getattr(self, 'dual_active', False)
+                    or getattr(self, 'dual_rep', None)                    # entre duas repetições
+                    or getattr(self, 'warm_state', None) is not None      # warm-up antes da varredura
+                    or (st is not None and st.runner.active)              # Medidas em Série (também entre etapas)
                     or getattr(self, 'res_capture', None) is not None)
 
     def _update_keep_awake(self):
@@ -12303,8 +12410,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.keep_awake = busy
         ok = keep_system_awake(busy)
         if busy and ok:
-            self.flash('Medida em curso: o Windows não vai suspender por inatividade até ela terminar '
-                       '(a tela ainda pode apagar; não feche a tampa do notebook).', 6.0)
+            self.flash('Medida em curso: o Windows não vai suspender nem apagar a tela até ela terminar '
+                       '(não feche a tampa do notebook).', 6.0)
+        print('Medida em curso: suspensão e desligamento da tela bloqueados.' if busy else
+              'Fim das medidas: suspensão do Windows liberada.', flush=True)
 
     def closeEvent(self, event):
         if getattr(self, 'series_tab', None) is not None and self.series_tab.runner.active:
@@ -12383,15 +12492,15 @@ def _headless_args(argv):
                     help='liga "Descartar trechos com som da sala" (monitor das vizinhas f ± 7 %%; desligado por padrão)')
     ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
     ap.add_argument('--sem-evitar-rede', action='store_true',
-                    help='não desloca os pontos da varredura perto de múltiplos de 60 Hz (±3 Hz)')
+                    help='sem detecção de ruído, não exclui os múltiplos de 60 Hz (±3 Hz) da varredura')
     ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='embaralhada',
                     help='ordem de medida das frequências (padrão embaralhada = nova ordem aleatória a cada repetição, '
                          'semente no cabeçalho do CSV)')
     ap.add_argument('--semente', type=int, default=None,
                     help='semente da ordem embaralhada (repetição k usa semente + k - 1); padrão: aleatória')
-    ap.add_argument('--evitar', default=None, metavar='F1;F2',
-                    help='frequências de fontes de ruído a evitar, como os múltiplos de 60 Hz (ex.: "170.7" ou '
-                         '"170.7;341.4"): pontos a até ±2 %% delas (mínimo 3 Hz) vão para 1 Hz além da borda')
+    ap.add_argument('--excluir', '--evitar', dest='evitar', default=None, metavar='F1;F2',
+                    help='faixas excluídas: frequências de fontes de ruído (ex.: "170.7" ou "170.7;341.4"); nenhum '
+                         'ponto é medido a até ±2 %% delas (mínimo 3 Hz): o ponto vai para 1 Hz além da borda')
     ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (antes o padrão; --precisao também liga)')
     ap.add_argument('--repeticoes', type=int, default=None, metavar='N',
                     help='repete a varredura N vezes e grava a mediana ponto a ponto (padrão: o da interface, 3)')
@@ -12416,7 +12525,7 @@ def _headless_args(argv):
                     help='Detectar ruídos de fundo: grava o INMP441 com o laser parado, lista os tons acima do fundo e '
                          'as séries harmônicas e salva Ruido_fundo_*.csv/.bin em Medidas')
     ap.add_argument('--sem-detectar-ruido', action='store_true',
-                    help='não analisa o áudio do warm-up (--aquecer) para evitar os ruídos de fundo na varredura')
+                    help='não analisa o áudio do warm-up (--aquecer) para excluir os ruídos de fundo da varredura')
     ap.add_argument('--comparar', action='store_true',
                     help='--detectar-ruido comparativo: grava sem a fonte de ruído, espera Enter, grava com a fonte')
     ap.add_argument('--limiar', type=float, default=None, metavar='DB',
@@ -12540,6 +12649,8 @@ def _headless_noise(win, a, pump):
         win.close()
         return 7
     res = (soi_ruido.analyze_compare(x_off, x, fs, thr=thr) if a.comparar else soi_ruido.analyze(x, fs, thr=thr))
+    lo = getattr(win, 'noise_last_opt', None)
+    res['opt_mains'] = soi_ruido.opt_mains(lo[0], lo[1], thr=thr) if lo is not None else []
     stem = soi_ruido.file_stem(win.ed_sample.text(), 'Ruido_fundo' + ('_comparativo' if a.comparar else ''))
     folder = win._save_dir()
     os.makedirs(folder, exist_ok=True)
@@ -12556,12 +12667,12 @@ def _headless_noise(win, a, pump):
         soi_ruido.save_bin(os.path.join(folder, stem + '_sem_fonte.bin'), x_off)
     for fx, db, f0, k, kind in soi_ruido.rows(res):
         print(f'  {fx:9.2f} Hz  +{db:5.1f} dB' + (f'  série f0 = {f0:.2f} Hz, k = {k}' if f0 else '')
-              + ('  (rede)' if kind == 'rede' else ''), flush=True)
+              + ('  (rede)' if kind == 'rede' else '  (rede, OPT101)' if kind == 'rede OPT101' else ''), flush=True)
     sel = [r[0] for r in soi_ruido.rows(res)]
     av = soi_ruido.avoid_list_for(res, sel, True)
     print(f'Ruídos detectados: {soi_ruido.summary(res)}', flush=True)
     if av:
-        print('Para evitar nas varreduras: --evitar "' + ';'.join(f'{v:g}' for v in av) + '"', flush=True)
+        print('Para excluir sempre nas varreduras: --excluir "' + ';'.join(f'{v:g}' for v in av) + '"', flush=True)
     print(f'Salvo: {path}', flush=True)
     win.close()
     return 0
@@ -12617,6 +12728,7 @@ def run_headless(argv):
         setattr(QtWidgets.QMessageBox, k, staticmethod(_msg(k)))
     LockInWindow.save_settings = lambda self: None        # não mexe nas preferências da interface
     win = LockInWindow()
+    win.headless = True
     win.show()
 
     def pump(sec):
@@ -12685,10 +12797,10 @@ def run_headless(argv):
         win.ed_dual_avoid.setText(a.evitar)
     if win._dual_avoid_extra():
         _base = win._dual_planned('F', raw=True)
-        if win.chk_dual_avoid60.isChecked():
+        if win._mains_fixed():
             _base = soi_serie.avoid_mains(_base)[0]
         _m2 = soi_serie.avoid_list(_base, win._dual_avoid_extra())[1]
-        print(f"Frequências evitadas: {', '.join(f'{x:g}' for x in win._dual_avoid_extra())} Hz"
+        print(f"Faixas excluídas: {', '.join(f'{x:g}' for x in win._dual_avoid_extra())} Hz"
               + ('; pontos deslocados: ' + ', '.join(f'{x:g} -> {y:g} Hz' for x, y in _m2) if _m2 else
                  ' (nenhum ponto perto)'), flush=True)
     _v, moved = soi_serie.avoid_mains(win._dual_planned('F', raw=True))
