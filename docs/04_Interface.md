@@ -238,7 +238,7 @@ the spectrum with the laser at 5 Hz). The tones and series found are avoided in 
 changing the *Avoid (Hz)* field, and are written in the CSV header (`# Ruidos detectados = …`). The headless
 `--aquecer S` does the same; `--sem-detectar-ruido` turns it off.
 
-**Discard room noise** (frequency sweeps, on by default). Every second the SOI computes, on the raw INMP441 signal
+**Discard stretches with room sounds** (frequency sweeps, on by default). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
 A room sound (door, voice, traffic) raises the neighbours together with the signal. The part of a point's average with
 q > 2 × the median q of that point is discarded; if more than 30 % is discarded, the average is redone (up to twice).

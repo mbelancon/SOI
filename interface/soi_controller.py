@@ -5105,15 +5105,15 @@ class LockInWindow(QtWidgets.QMainWindow):
             'em 113 Hz e ~3–4 min em 37 Hz (a deriva do aquecimento da célula passa a dominar). O tempo rende mais\n'
             'em repetições (mediana) do que em τ.')
         self.lbl_dual_taumax.setVisible(False)
-        self.chk_dual_nb = QtWidgets.QCheckBox('Descartar ruído do ambiente')
+        self.chk_dual_nb = QtWidgets.QCheckBox('Descartar trechos com som da sala')
         self.chk_dual_nb.setChecked(True)
         self.chk_dual_nb.setToolTip(
-            f'Monitor de ruído pelas vizinhas: a cada 1 s o SOI mede, no INMP441 bruto, q = R nas frequências vizinhas\n'
-            f'(f ± {100 * NB_REL:.0f} %) / R em f. Um som do ambiente (porta, voz, carro) aparece nas vizinhas junto com o\n'
-            f'sinal: o trecho da média com q > {NB_K:g} × a mediana de q do ponto é descartado e, com mais de\n'
-            f'{100 * NB_REDO_FRAC:.0f} % descartado, a média do ponto é refeita (até {NB_MAX_REDO}×). Campanha de 18/11: o desvio\n'
-            'cai de 27 para 15 % em 37 Hz e de 14 para 7 % em 113 Hz; acima de ~500 Hz quase nada é descartado.\n'
-            'O CSV ganha as colunas Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido (q ~ 3× o erro típico do ponto).')
+            f'A cada 1 s o SOI compara o sinal do INMP441 nas frequências vizinhas (f ± {100 * NB_REL:.0f} %) com o sinal em f\n'
+            f'(q = vizinhas / f). Um som da sala (porta, voz, carro) sobe as vizinhas junto com o sinal: o segundo em que q\n'
+            f'passa de {NB_K:g} × o q típico do ponto sai da média e, com mais de {100 * NB_REDO_FRAC:.0f} % descartado, o ponto é medido\n'
+            f'de novo (até {NB_MAX_REDO}×). Campanha de 18/11 (tarde): o desvio caiu de 27 para 15 % em 37 Hz e de 14 para 7 % em\n'
+            '113 Hz; acima de ~500 Hz quase nada é descartado. À noite (19/11) não ajudou. O CSV ganha as colunas\n'
+            'Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido.')
         adapt_row = (('Repetições:', self.sp_dual_reps), ('Ordem:', self.cmb_dual_order), ('', self.chk_dual_warm_noise), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
                      ('Precisão:', self.sp_dual_adapt_tol), ('', self.chk_dual_blocks), ('', self.sp_dual_blocks),
                      ('', self.lbl_dual_taumax))

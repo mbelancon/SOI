@@ -81,7 +81,7 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - **Why:** intermittent room sounds (seconds long) leave isolated points off by 8–15 % between 40 and 200 Hz; the
   lock-in fluctuation catches only a few of them. A sound shows up at the neighbouring frequencies at the same time.
 - Every 1 s, on the raw INMP441 (2 s Hann window): q = rms(R at f·0.93, R at f·1.07) / R at f, neighbours moved away
-  from multiples of 60 Hz. In the Dual Mode frequency sweeps (*Discard room noise*, on by default) the part of a
+  from multiples of 60 Hz. In the Dual Mode frequency sweeps (*Discard stretches with room sounds*, on by default) the part of a
   point's average with q > 2 × the point's median q is discarded; with more than 30 % discarded the average is redone
   (up to 2×). Limits from the 2026-11-18 heating campaign: rms deviation 27 → 15 % at 37 Hz and 14 → 7 % at 113 Hz,
   discarding 7–15 %; ≥ 487 Hz discards ≤ 1.4 %. Broadband energy did not correlate and is not used.
