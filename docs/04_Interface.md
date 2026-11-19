@@ -145,7 +145,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
 - *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
-**Detect background noise...** (button after *Sweeps ▸*) opens a window that looks for acoustic noise sources at fixed
+**Detect background noise...** (button after *Sweeps ▸*; the same button is also in the Dual Mode, after *Signal x t (s) ▸*) opens a window that looks for acoustic noise sources at fixed
 frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the
 sweeps can avoid them.
 - **Detect (quick):** the laser goes to PWM 0 (restored at the end) and the INMP441 is recorded for *Duration* (default
@@ -213,6 +213,9 @@ a `_mediana` CSV with the same columns (OPT101/INMP441 R and phases: median over
 deviation between them) plus `S` (median of R_INMP441/R_OPT101), `N_repeticoes`, `Incerteza_S_Pct` =
 100·1.25·SD(S)/√N/median(S) and `Incerteza_Fase_Graus` = 1.25·SD(Δφ)/√N (1.25 = efficiency of the median). The plot
 shows the repetitions in light grey and the median with error bars of u. The estimated time includes the repetitions.
+The repetitions are matched by frequency: if one repetition lost a point (a sensor sent no data even after 2 new
+tries; the point is listed in that CSV header as `# Pontos pulados`), the median of that point uses only the
+repetitions that have it, and `N_repeticoes` shows how many.
 In a Measurement Series, `varredura … --repeticoes N` does the same (older series files without the option keep a
 single sweep and adaptive τ, as they were written).
 

@@ -998,6 +998,10 @@ EN = {
         'Dual Mode: no data at ',
     ' (OPT101 e INMP441 conectados?)':
         ' (OPT101 and INMP441 connected?)',
+    '; medindo o ponto de novo.':
+        '; measuring the point again.',
+    '; ponto pulado.':
+        '; point skipped.',
     'O ajuste com modelos vale só para a varredura em frequência.':
         'Model fitting only applies to the frequency sweep.',
     '<span style="color:#606060;">OPT101 corrigido pelo τ do sensor = ':

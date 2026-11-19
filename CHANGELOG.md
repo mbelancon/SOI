@@ -149,6 +149,26 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - *Avoid (Hz)* window proportional to frequency (±2 %, at least ±3 Hz) instead of a fixed ±3 Hz → ±4 Hz, also for
   the tones found during the warm-up.
 
+#### Changed: narrower Dual Mode window (Marcos's test, 2026-11-19)
+- The *Signal x f (Hz)* box was wider than the screen. *Spacing*, *N points* and *Order* moved to the first row,
+  right after *Start*/*End*; the second row has *Avoid multiples of 60 Hz*, *Avoid (Hz)* and *Detect noise during
+  warm-up*; the third has τ, *Repetitions* and the adaptive options. The fit *Model* list is narrower (the drop-down
+  still shows the full names). Dual Mode tab minimum width 2021 → 1534 px.
+- A second *Detect background noise…* button after *Signal x t (s)* in the Dual Mode (same window as the INMP441 tab).
+
+#### Fixed: median of the repetitions matched points by position (found in the 2026-11-19 sweep)
+- `_mediana` paired the repetitions by row position, so a repetition with missing points mixed different
+  frequencies, cut the range (the file name came out "40_1333.03Hz") and gave false uncertainties up to 114 %. The
+  repetitions are now matched by frequency (0.01 Hz); a point missing in one repetition uses only the ones that exist
+  (`N_repeticoes` per point, `Ordem_medida` shows `-` for the missing one) and the header lists
+  `# Repetições incompletas: …`.
+
+#### Fixed: points without data were skipped silently
+- A point where one of the sensors sent no data (USB/serial stall) was skipped with only a 3 s status message, so a
+  repetition could lose points with nothing in `soi.log`. Now the point is measured again up to 2 times; the log
+  says how many OPT101/INMP441 blocks arrived; if it still fails the point is skipped and listed in the CSV header
+  (`# Pontos pulados …`).
+
 #### Changed: sweep defaults from the 2026-11-18 noise campaign
 - Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),
   3 repetitions + median, 600 s warm-up (was 300 s), start at 40 Hz, avoid multiples of 60 Hz. Above τ = 4 s an orange

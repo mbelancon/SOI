@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+import warnings
 import zipfile
 from collections import deque, namedtuple
 from datetime import datetime
@@ -179,6 +180,7 @@ SWEEP_TAU_DEF = 1.0
 LOWF_TAU_FIXED = 4.0       # τ fixo abaixo de LOWF_FMAX com o τ adaptativo desligado
 TAU_USEFUL_MAX = 4.0       # acima disso: aviso "τ > 4 s não melhora: use repetições" (não bloqueia)
 SWEEP_REPS_DEF = 3
+DUAL_NODATA_RETRIES = 2     # ponto sem dados de um sensor: mede de novo até 2 vezes antes de pular
 MEDIAN_EFF = 1.25          # incerteza da mediana = 1,25·DP/√N (eficiência da mediana)
 # Monitor de ruído pelas vizinhas (aprovado por Marcos em 18/11; limites da campanha de aquecimento de 18/11): a cada
 # 1 s, janela Hann de 2 s no INMP441 bruto, q = rms(R em f·0,93, R em f·1,07) / R em f (vizinhas afastadas de múltiplos
@@ -5117,7 +5119,7 @@ class LockInWindow(QtWidgets.QMainWindow):
             f'de novo (até {NB_MAX_REDO}×). Campanha de 18/11 (tarde): o desvio caiu de 27 para 15 % em 37 Hz e de 14 para 7 % em\n'
             '113 Hz; acima de ~500 Hz quase nada é descartado. À noite (19/11) não ajudou. O CSV ganha as colunas\n'
             'Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido.')
-        adapt_row = (('Repetições:', self.sp_dual_reps), ('Ordem:', self.cmb_dual_order), ('', self.chk_dual_warm_noise), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
+        adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
                      ('Precisão:', self.sp_dual_adapt_tol), ('', self.chk_dual_blocks), ('', self.sp_dual_blocks),
                      ('', self.lbl_dual_taumax))
         # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
@@ -5130,12 +5132,13 @@ class LockInWindow(QtWidgets.QMainWindow):
                           'que dê bastante sinal (ex.: inox) ou comece a varredura acima desse limite.')
             lb.setVisible(False)
             self.lbl_dual_lowf[k] = lb
+        # 1ª linha: faixa, espaçamento, pontos e ordem (Marcos, 19/11: a janela passava da largura da tela)
         box_f, btn_f, eta_f = sweep_box('Sinal x f (Hz)',
                                         (('Início:', self.sp_dual_f0), ('Fim:', self.sp_dual_f1),
-                                         ('', self.lbl_dual_lowf['F'])), 'F',
-                                        mid=(('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn),
-                                             ('', self.chk_dual_avoid60), ('', self.lbl_dual_mains),
-                                             ('Evitar (Hz):', self.ed_dual_avoid)),
+                                         ('Espaçamento:', self.cmb_dual_fspace), (self.lbl_dual_fn, self.sp_dual_fn),
+                                         ('Ordem:', self.cmb_dual_order), ('', self.lbl_dual_lowf['F'])), 'F',
+                                        mid=(('', self.chk_dual_avoid60), ('', self.lbl_dual_mains),
+                                             ('Evitar (Hz):', self.ed_dual_avoid), ('', self.chk_dual_warm_noise)),
                                         adapt=adapt_row)
         # Varredura em frequência das medidas (painel "Varreduras"): parâmetros próprios, para não mexer nos da calibração
         self.sp_dual_m_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 2, 1.0, None, 110, ' Hz')
@@ -5206,6 +5209,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_t_panel.setToolTip('Monitora S, Δφ, OPT101 e microfone ao longo do tempo, com frequência e PWM fixos\n'
                                          '(deriva térmica, aquecimento da amostra/célula, estabilidade do laser).')
         top_row.addWidget(self.btn_dual_t_panel)
+        self.btn_noise_detect2 = QtWidgets.QPushButton('Detectar ruídos de fundo...')
+        self.btn_noise_detect2.setToolTip(self.btn_noise_detect.toolTip())
+        self.btn_noise_detect2.clicked.connect(self.open_noise_dialog)
+        top_row.addWidget(self.btn_noise_detect2)
         top_row.addStretch(1)
         lay.addLayout(top_row)
         # Painel "Calibração": o quadro da calibração (preenchido mais abaixo) à esquerda e a varredura em
@@ -5696,6 +5703,10 @@ class LockInWindow(QtWidgets.QMainWindow):
             self.cmb_dual_model.setItemData(self.cmb_dual_model.count() - 1, FREQ_MODEL_TIPS[key],
                                             QtCore.Qt.ItemDataRole.ToolTipRole)
         self.cmb_dual_model.currentIndexChanged.connect(self._on_dual_model)
+        # não alarga o quadro Ajuste pelo nome mais longo de modelo (a janela passava da largura da tela, 19/11)
+        self.cmb_dual_model.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_dual_model.setMinimumContentsLength(18)
+        self.cmb_dual_model.view().setMinimumWidth(self.cmb_dual_model.view().sizeHintForColumn(0) + 20)
         mrow.addWidget(self.cmb_dual_model)
         mrow.addSpacing(10)
         mrow.addWidget(QtWidgets.QLabel('Ajustar:'))
@@ -7274,6 +7285,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_sorted_insert = order != 'crescente'
         self.dual_values = values
         self.dual_idx = 0
+        self.dual_nodata_try = 0
         self.dual_refine = bool(refine)
         self.dual_view_manual = False        # medida nova: volta o ajuste automático dos eixos
         if refine:          # pontos novos entram na varredura atual, que é mantida (com as exclusões)
@@ -7507,7 +7519,22 @@ class LockInWindow(QtWidgets.QMainWindow):
                 self.dual_last_i = j
             self._show_dual_results()
         else:
-            self.flash(f'Modo Duplo: sem dados em {head} (OPT101 e INMP441 conectados?)')
+            n_o = sum(len(c[0]) for c in self.dual_opt)
+            n_a = sum(len(c[0]) for c in aud)
+            tries = getattr(self, 'dual_nodata_try', 0)
+            if tries < DUAL_NODATA_RETRIES:
+                # sem dados de um dos sensores (USB/serial parada um instante?): mede o ponto de novo
+                self.dual_nodata_try = tries + 1
+                print(f'Modo Duplo: sem dados em {head} (blocos OPT101 {n_o}, INMP441 {n_a}); '
+                      f'medindo de novo ({tries + 1}/{DUAL_NODATA_RETRIES}).', flush=True)
+                self.flash(f'Modo Duplo: sem dados em {head}; medindo o ponto de novo.')
+                self._dual_go(v, now)
+                return
+            print(f'Modo Duplo: sem dados em {head} (blocos OPT101 {n_o}, INMP441 {n_a}) depois de '
+                  f'{DUAL_NODATA_RETRIES} tentativas; ponto pulado.', flush=True)
+            self.flash(f'Modo Duplo: sem dados em {head} (OPT101 e INMP441 conectados?); ponto pulado.')
+            self.dual_params.setdefault('skipped', []).append(float(v))
+        self.dual_nodata_try = 0
         self.dual_idx += 1
         if self.dual_idx < n:
             self._dual_go(self.dual_values[self.dual_idx], now)
@@ -7522,6 +7549,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                 rp['runs'].append(list(self.dual_results))
                 rp['csvs'].append(getattr(self, 'dual_last_csv', None))
                 rp.setdefault('orders', []).append(list(getattr(self, 'dual_ordpos', [])))
+                rp.setdefault('cfgs', []).append(list(self.dual_ref_cfg))
                 if rp['k'] < rp['n']:
                     rp['k'] += 1
                     print(f"Repetição {rp['k']} de {rp['n']} da varredura...", flush=True)
@@ -7531,33 +7559,53 @@ class LockInWindow(QtWidgets.QMainWindow):
                     self._dual_finish_median(rp)
 
     def _dual_finish_median(self, rp):
-        """Fim das repetições: mediana ponto a ponto, incerteza u = 1,25·DP/√N, gráfico e CSV _mediana."""
-        runs = [r for r in rp['runs'] if r]
+        """Fim das repetições: mediana ponto a ponto, incerteza u = 1,25·DP/√N, gráfico e CSV _mediana.
+        As repetições são casadas pela frequência (não pela posição na tabela): uma repetição com pontos a menos
+        só deixa de contar nesses pontos, que ficam com N menor."""
+        keep = [i for i, r in enumerate(rp['runs']) if r]
+        runs = [rp['runs'][i] for i in keep]
         if len(runs) < 2:
             return
-        m = min(len(r) for r in runs)
-        arr = np.array([[row[:9] for row in r[:m]] for r in runs], dtype=float)      # (N, pontos, 9)
+        key = lambda f: round(float(f), 2)
+        x = np.array(sorted({key(row[0]) for r in runs for row in r}))
+        col = {f: i for i, f in enumerate(x)}
+        m = x.size
+        arr = np.full((len(runs), m, 9), np.nan)                                     # (N, pontos, 9)
+        for k, r in enumerate(runs):
+            for row in r:
+                arr[k, col[key(row[0])]] = np.asarray(row[:9], dtype=float)
+        arr[:, :, 0] = x
         nrep = arr.shape[0]
-        x = arr[0, :, 0]
+        n_pt = np.sum(np.isfinite(arr[:, :, 1]) & np.isfinite(arr[:, :, 3]), axis=0)  # repetições em cada ponto
         ro, ra, pa, po = arr[:, :, 1], arr[:, :, 3], arr[:, :, 5], arr[:, :, 7]
         with np.errstate(divide='ignore', invalid='ignore'):
             S = np.where(ro > 0, ra / np.where(ro > 0, ro, 1.0), np.nan)
+        missing = [(rp['runs'].index(r) + 1, m - len({key(row[0]) for row in r})) for r in runs
+                   if len({key(row[0]) for row in r}) < m]
+        if missing:
+            print('Mediana: repetição(ões) incompleta(s) ' + ', '.join(f'{k} (faltam {q})' for k, q in missing)
+                  + '; esses pontos usam só as repetições que existem (coluna N_repeticoes).', flush=True)
 
         def circ_med(a):
-            ref = np.degrees(np.angle(np.mean(np.exp(1j * np.radians(a)), axis=0)))
+            ref = np.degrees(np.angle(np.nanmean(np.exp(1j * np.radians(a)), axis=0)))
             d = wrap_deg(a - ref)
-            return wrap_deg(ref + np.median(d, axis=0)), np.std(d, axis=0, ddof=1)
-        dphi = wrap_deg(pa - po)
-        dphi_med, dphi_sd = circ_med(dphi)
-        po_med, po_sd = circ_med(po)
-        pa_med = wrap_deg(po_med + dphi_med)
-        _, pa_sd = circ_med(pa)
-        s_med = np.nanmedian(S, axis=0)
-        u_s = 100.0 * MEDIAN_EFF * np.nanstd(S, axis=0, ddof=1) / np.sqrt(nrep) / np.where(s_med > 0, s_med, np.nan)
-        u_p = MEDIAN_EFF * dphi_sd / np.sqrt(nrep)
-        ro_med, ra_med = np.median(ro, axis=0), np.median(ra, axis=0)
-        csv_rows = [(x[i], ro_med[i], np.std(ro[:, i], ddof=1), ra_med[i], np.std(ra[:, i], ddof=1),
-                     pa_med[i], pa_sd[i], po_med[i], po_sd[i], s_med[i], nrep, u_s[i], u_p[i]) for i in range(m)]
+            return wrap_deg(ref + np.nanmedian(d, axis=0)), np.nanstd(d, axis=0, ddof=1)
+        with warnings.catch_warnings(), np.errstate(divide='ignore', invalid='ignore'):
+            warnings.simplefilter('ignore', RuntimeWarning)        # ponto com 1 repetição: DP = nan
+            dphi = wrap_deg(pa - po)
+            dphi_med, dphi_sd = circ_med(dphi)
+            po_med, po_sd = circ_med(po)
+            pa_med = wrap_deg(po_med + dphi_med)
+            _, pa_sd = circ_med(pa)
+            s_med = np.nanmedian(S, axis=0)
+            sq = np.sqrt(np.maximum(n_pt, 1))
+            u_s = 100.0 * MEDIAN_EFF * np.nanstd(S, axis=0, ddof=1) / sq / np.where(s_med > 0, s_med, np.nan)
+            u_p = MEDIAN_EFF * dphi_sd / sq
+            ro_med, ra_med = np.nanmedian(ro, axis=0), np.nanmedian(ra, axis=0)
+            ro_sd, ra_sd = np.nanstd(ro, axis=0, ddof=1), np.nanstd(ra, axis=0, ddof=1)
+        csv_rows = [(x[i], ro_med[i], ro_sd[i], ra_med[i], ra_sd[i],
+                     pa_med[i], pa_sd[i], po_med[i], po_sd[i], s_med[i], int(n_pt[i]), u_s[i], u_p[i])
+                    for i in range(m)]
         # No gráfico: S = mediana(S) e barras de erro = u (o R do INMP441 entra como mediana(S)·mediana(R_OPT101))
         self.dual_results = [(x[i], ro_med[i], 0.0, s_med[i] * ro_med[i],
                               s_med[i] * ro_med[i] * np.nan_to_num(u_s[i]) / 100.0,
@@ -7565,16 +7613,22 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_pinfo = []
         self.dual_nb = []
         self.dual_excluded = set()
-        self.dual_ref_cfg = self.dual_ref_cfg[:m] if len(self.dual_ref_cfg) >= m else []
+        cfg = {}
+        for r, c in zip(rp['runs'], rp.get('cfgs', [])):
+            if r and len(c) == len(r):
+                cfg.update({key(row[0]): ci for row, ci in zip(r, c)})
+        self.dual_ref_cfg = [cfg[f] for f in x] if all(f in cfg for f in x) else []
         self.dual_params['values'] = [float(v) for v in x]
         self.dual_params['t_start'] = rp.get('t0', self.dual_params.get('t_start'))
         self.dual_params.pop('t_end', None)
-        ords = [o for o, r in zip(rp.get('orders', []), rp['runs']) if r and len(o) >= m]
+        ords = [{key(row[0]): o_i for row, o_i in zip(r, o)}
+                for o, r in zip(rp.get('orders', []), rp['runs']) if r and len(o) == len(r)]
         self.dual_median = {'rows': csv_rows, 'n': nrep, 'S': S, 'ra': ra,
                             'csvs': [os.path.basename(c) for c in rp['csvs'] if c],
-                            'orders': ([';'.join(str(o[i]) for o in ords) for i in range(m)]
+                            'orders': ([';'.join(str(o.get(f, '-')) for o in ords) for f in x]
                                        if len(ords) == nrep else None),
-                            'seeds': list(rp.get('seeds', []))[:nrep]}
+                            'seeds': [sd for i, sd in enumerate(rp.get('seeds', [])) if i in keep],
+                            'missing': missing}
         self._show_dual_results()
         self._export_dual()
         ok = np.isfinite(u_s)
@@ -8598,6 +8652,12 @@ class LockInWindow(QtWidgets.QMainWindow):
                     f.write(f"# Ruidos detectados = {an['summary']} (áudio de {an['dur']:.0f} s do warm-up, laser em "
                             f"{an['fref']:.4g} Hz e harmônicos ignorados); evitados: "
                             + (', '.join(f'{v:g}' for v in an['vals']) or 'nenhum') + ' Hz\n')
+                if q.get('skipped') and med is None:
+                    f.write('# Pontos pulados (sem dados de um sensor, mesmo medindo de novo): '
+                            + ', '.join(f'{v:g}' for v in q['skipped']) + ' Hz\n')
+                if med is not None and med.get('missing'):
+                    f.write('# Repetições incompletas: ' + '; '.join(f'{k} (faltam {n})' for k, n in med['missing'])
+                            + '; nesses pontos a mediana usa só as repetições existentes (N_repeticoes)\n')
                 if q.get('extra_avoid'):
                     ex, mv = q['extra_avoid']
                     f.write(f"# Frequências evitadas (fontes de ruído): {', '.join(f'{x:g}' for x in ex)} Hz"
