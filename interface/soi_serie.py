@@ -130,6 +130,34 @@ def avoid_mains(values, shift=MAINS_SWEEP_SHIFT_HZ):
     return out, moved
 
 
+def avoid_list(values, extra, near=MAINS_NEAR_HZ, shift=MAINS_SWEEP_SHIFT_HZ):
+    """(valores, [(antigo, novo)]): pontos a até `near` Hz de uma frequência de `extra` (fonte de ruído conhecida,
+    ex.: ventoinha do laser) vão para e ± shift, do lado em que estavam (exatamente em e -> +shift)."""
+    out, moved = [], []
+    for f in values:
+        g = float(f)
+        for e in extra or ():
+            if abs(g - e) <= near + 1e-9:
+                g = round(e + (shift if g >= e else -shift), 3)
+                break
+        if g != f:
+            moved.append((f, g))
+        if g not in out:
+            out.append(g)
+    return out, moved
+
+
+def measure_order(values, order, seed=None):
+    """Índices de `values` na ordem de medida: crescente, decrescente ou embaralhada (permutação da semente)."""
+    idx = sorted(range(len(values)), key=lambda i: values[i])
+    if order == 'decrescente':
+        return idx[::-1]
+    if order == 'embaralhada':
+        import random
+        random.Random(seed).shuffle(idx)
+    return idx
+
+
 def step_mains(st):
     """Frequências fixas da etapa perto da rede."""
     v = st.get('f')

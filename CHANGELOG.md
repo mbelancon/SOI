@@ -88,6 +88,21 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - New CSV columns `Ruido_vizinhas_q` (median q of the point; the typical |error| is ~0.3·q), `Descartado_Pct`,
   `Refeito_ruido`. Headless `--sem-descarte` turns it off.
 
+#### Added: shuffled measurement order and extra frequencies to avoid (approved 2026-11-19)
+- **Why:** with an ascending sweep a slow drift (cell warm-up) turns into a false slope of the curve. Measuring the
+  frequencies in a new random order in each repetition turns the drift into scatter that the median of the
+  repetitions reduces. The 2026-11-19 noise study also found a noise source at ~170 Hz (probably the laser fan).
+- *Order* box next to *Repetitions* in the Dual Mode frequency sweep: Ascending (default), Descending or Shuffled.
+  Shuffled draws a new permutation in each repetition (`random.Random(seed).shuffle` of the ascending indices; seed
+  + k − 1 in repetition k), written in the CSV header (`# Ordem = embaralhada; semente = …`). The plot and the CSVs
+  stay in frequency order.
+- New CSV columns `Ordem_medida` (position in which the point was measured) and `Hora_ponto` (end time of the
+  point) in every frequency sweep CSV; in the `_mediana` CSV, `Ordem_medida` lists one position per repetition
+  separated by ";".
+- *Avoid (Hz)* field: frequencies of known noise sources (e.g. `170,7`); sweep points within 3 Hz of them move 4 Hz
+  away, as with the multiples of 60 Hz, and are listed in the CSV header. Saved with the settings.
+- Headless: `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar "170.7;341.4"`.
+
 #### Added: optional raw INMP441 audio recording
 - **Why:** offline analysis of the room's acoustic noise (neighbouring frequencies, broadband energy) to define a rule
   for discarding noisy points. Off by default; turned on with the environment variable `SOI_GRAVAR_AUDIO=<folder>`

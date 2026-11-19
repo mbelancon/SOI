@@ -195,6 +195,21 @@ shows the repetitions in light grey and the median with error bars of u. The est
 In a Measurement Series, `varredura … --repeticoes N` does the same (older series files without the option keep a
 single sweep and adaptive τ, as they were written).
 
+**Order** (next to Repetitions): Ascending (default), Descending or Shuffled. With an ascending sweep a slow drift
+(warm-up) becomes a false slope of the curve; Shuffled measures the frequencies in a new random order in each
+repetition, so the drift becomes scatter that the median reduces. Use it with several repetitions, e.g.
+`--varredura --tau 1 --repeticoes 15 --ordem embaralhada --aquecer 900`. The seed is written in the header
+(`# Ordem = embaralhada; semente = …`; repetition k uses seed + k − 1, `random.Random(seed).shuffle` of the ascending
+indices), so the order can be rebuilt; `--semente N` fixes it. Plots and CSVs stay in frequency order, with the
+columns `Ordem_medida` (position in which the point was measured) and `Hora_ponto` (end time of the point); in the
+`_mediana` CSV, `Ordem_medida` lists one position per repetition separated by ";". The box also applies to sweeps of a
+Measurement Series.
+
+**Avoid (Hz)**: frequencies of known noise sources other than the mains (on 2026-11-19 a source at ~170 Hz, probably the
+laser fan), separated by ";". Sweep points within 3 Hz of them move 4 Hz away, on the side they were on, and are
+listed in the CSV header. The field is saved with the settings and also applies to Measurement Series sweeps.
+Headless: `--evitar "170.7;341.4"`.
+
 **Discard room noise** (frequency sweeps, on by default). Every second the SOI computes, on the raw INMP441 signal
 (2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
 A room sound (door, voice, traffic) raises the neighbours together with the signal. The part of a point's average with
@@ -330,7 +345,7 @@ Column glossary: Tempo = time, Fase = phase, Graus = degrees, Media = mean, Desv
 
 ## Headless sweep (command line)
 
-`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--celula Camara|OPC`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
+`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--repeticoes N`, `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar F1;F2`, `--celula Camara|OPC`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
 
 ## Signal vs t (Dual Mode)
 
