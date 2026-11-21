@@ -48,7 +48,7 @@ Proposed allocation (only new firmware work where marked):
 
 | Pin | New use | Firmware |
 |---|---|---|
-| PB3, PB4 | OPT101 gain range A0, A1 (4 ranges) | new command, e.g. `G0..G3` |
+| PB3, PB4, PB10 | OPT101 gain range A0, A1, A2 (8 ranges) | new command, e.g. `G0..G7` |
 | PB5 | gain switch enable (all off at reset) | idem |
 | PA1 | NTC on the cell wall, ADC1 injected channel (JAUTO after each PA0 sample) | proposal already in memory: PA0 84 → 56 cycles, still < 5 µs |
 | PB6 / PB7 | I2C1: ambient sensor (TMP117 or similar), ADS1115 (plan B for the NTC), ID EEPROM | 1 Hz reading |
@@ -58,9 +58,9 @@ Proposed allocation (only new firmware work where marked):
 | PA15 | fan PWM (TIM2_CH1), optional | optional |
 | PA9 / PA10 | USART1 debug header | none |
 
-The optical word has bits 12–14 free today. Bits 12–13 can carry the gain range of each sample (so a range
-change is visible in the data stream, sample by sample) and bit 14 stays for the TTL input. Adding gain
-commands and bits is a protocol change: per the version rule, firmware and interface go to **MAJOR 3**.
+The optical word has bits 12–14 free today; bit 14 stays for the TTL input and the gain range goes in a status
+packet (see section 3). Adding the gain command, the status
+packet and the TTL bit is a protocol change: per the version rule, firmware and interface go to **MAJOR 3**.
 
 ## 3. OPT101 gain control (essential)
 
@@ -84,6 +84,17 @@ Full scale (OPT101 output 2.0 V at Vs = 3.3 V, responsivity ≈ 0.30 A/W at 532 
 length; assumptions: microphone output delay ≤ 60 ns, 5 ns/m propagation, 100 pF/m, SD driver ≈ 200 Ω without
 buffer. Script: [`images/pcb_ranges_i2s.py`](images/pcb_ranges_i2s.py).*
 
+### Current setup (prototype)
+Today a 500 kΩ potentiometer sits in parallel with the internal 1 MΩ, so Rf = 1 MΩ ∥ R_pot goes from ≈ 0 to
+333 kΩ (full scale ≥ ≈ 20 µW at 532 nm). Points to fix on the board:
+- Rf is in the reference of every measurement: the wiper resistance and the pot tempco (carbon ~±500 ppm/°C,
+  cermet ~±100 ppm/°C, thin-film resistor 25 ppm/°C) go straight into S/OPT101. Touching the pot between a
+  calibration and a measurement changes the normalized signal.
+- Wires from the pot to the summing node (pin 2) pick up mains (a candidate for the 300 Hz background) and add
+  capacitance (gain peaking near the OPT101 bandwidth).
+- The setting is not recorded: the board must report the range in the data and in the CSV header.
+The useful range today (≈ 100–333 kΩ, to be confirmed with a multimeter) must be inside the new ranges.
+
 ### Options
 
 | Option | How | Pros | Cons |
@@ -93,9 +104,12 @@ buffer. Script: [`images/pcb_ranges_i2s.py`](images/pcb_ranges_i2s.py).*
 | **C. PGA after the OPT101** | OPT101 fixed at 1 MΩ; SPI PGA (e.g. MCP6S21, gains 1–32) before the ADC | Fine steps, simple | Amplifies the OPT101 noise and offset too: helps only while the 12-bit ADC step (0.8 mV) dominates. Does not extend the range up (strong light) |
 | **D. A + fixed buffer** (recommended) | Option A with 4 decade ranges, then a rail-to-rail op-amp on the 3.3 V analog rail with gain ≈ 1.5 (2.0 V → 3.0 V at the ADC) and an RC (≈ 100 Ω + 2.2 nF) at PA0 | Uses the full ADC scale at the safe Vs = 3.3 V. The op-amp supply is 3.3 V, so PA0 cannot see 5 V: removes the risk of the 5 V OPT101 option | One more op-amp |
 
-Recommendation: **D**, with ranges 10 k / 100 k / 1 M / 10 M (thin-film, 0.1 %, 25 ppm/°C), the switch on the
-output side of each branch, and footprints for a fifth reed-relay branch (100 MΩ) left unpopulated for
-luminescence. Ranges are selected by the interface (manual, with a "too low / saturated" hint); auto-ranging only
+Recommendation: **D** with an **8:1 mux** (TMUX1108 / ADG1208 class) and half-decade ranges 10 k / 33 k / 100 k /
+330 k / 1 M / 3.3 M / 10 M (thin-film, 0.1 %, 25 ppm/°C), which covers today's pot setting (≤ 333 kΩ) with steps
+of ≈ 3×; the eighth position is a spare (or a reed-relay 100 MΩ branch, unpopulated, for luminescence). The
+switch goes on the output side of each branch. With 8 ranges the range index (3 bits) goes in a status packet
+and in the CSV header, not in the optical word (bit 14 stays for the TTL input); range changes happen only
+between measurements anyway. Ranges are selected by the interface (manual, with a "too low / saturated" hint); auto-ranging only
 between measurements, never inside a lock-in window. Each range needs a gain and phase calibration (laser
 directly on the OPT101), stored on the board (STM32 flash or the ID EEPROM) and written in the CSV header.
 
@@ -222,12 +236,12 @@ resistors and ESD protection.
 
 ## 10. Decisions for Marcos
 
-1. **Gain control:** option D (4 decade ranges with analog switch + buffer), with an unpopulated reed-relay
-   100 MΩ branch? Which ranges (default 10 k / 100 k / 1 M / 10 M)?
+1. **Gain control:** option D (8:1 analog mux, half-decade ranges 10 k … 10 M, + buffer), with an unpopulated
+   reed-relay 100 MΩ branch? Which pot setting is used today (measure R between pins 2 and 5)?
 2. **OPT101 supply:** 3.3 V analog rail only (recommended), dropping the 5 V option?
 3. **Cable:** RJ45 + Cat6 S/FTP, target 1 m, buffer footprint only?
-4. **Microphone board** with two INMP441 positions + NTC pads (and accept firmware/interface MAJOR 3 for gain
-   bits and two channels)?
+4. **Microphone board** with two INMP441 positions + NTC pads (and accept firmware/interface MAJOR 3 for the gain
+   command/status packet and two channels)?
 5. **Laser driver** outside the box, logic connector + hardware interlock? Laser model/supply/TTL input? On-board
    MOSFET footprint as an option?
 6. **USB isolation:** footprint with bypass in phase 1?
