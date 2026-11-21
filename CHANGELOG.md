@@ -10,30 +10,11 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
-## [2.4.1] - 2026-11-21
-
-Patch version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.
-
-### Interface (`interface/soi_controller.py`, `interface/soi_serie.py`, new `interface/soi_layout.py`)
-
-#### Fixed
-- Window opened maximized with the top bar (Excitation, Calibration, Simulate sampling, Settings) cut off on the
-  right and the rest of the window badly sized, until it was restored and maximized again (seen on a laptop with
-  high Windows display scaling). Two causes, both fixed:
-  - The top bar was a single row about 1600 px wide, which set the window's minimum width. With 125–200 % scaling
-    that is wider than the screen, so the maximized window could not fit its content. The top bar now wraps into
-    two rows when the window is narrow (groups: excitation, sample, calibration, cell, SNR, and Simulate/Settings
-    kept at the right). The row at the top of the Measurement Series tab wraps the same way. Minimum window width
-    went from ~1600 to ~960 px.
-  - A window closed maximized was restored already maximized, before it existed on screen. It now opens at its
-    saved normal size (fitted to the screen) and is maximized right after `show()`. This replaces the 2.4.0
-    workaround (restore + maximize again on a timer), which did not help on that laptop.
-
 ## [2.4.0] - 2026-11-18
 
 Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.
 
-### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py`)
+### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py` and `interface/soi_layout.py`)
 
 #### Added: Measurement Series tab ("Medidas em Série")
 - **Why:** long campaigns (drift, noise, repeated sweeps) were run from .bat files with the headless mode, with
@@ -227,9 +208,17 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
 - The Dual Mode PNG is drawn at screen size even when the Dual Mode tab is hidden.
 
 #### Fixed
-- Window opened maximized (saved geometry) with the right side cut off until it was restored and maximized again:
-  the screen-fit resize is no longer applied to a maximized window, and a maximized window is re-maximized once
-  right after opening.
+- Window opened maximized with the top bar (Excitation, Calibration, Simulate sampling, Settings) cut off on the
+  right and the rest of the window badly sized, until it was restored and maximized again (seen on a laptop with
+  high Windows display scaling). Two causes, both fixed:
+  - The top bar was a single row about 1600 px wide, which set the window's minimum width. With 125–200 % scaling
+    that is wider than the screen, so the maximized window could not fit its content. The top bar now wraps into
+    two rows when the window is narrow (groups: excitation, sample, calibration, cell, SNR, and Simulate/Settings
+    kept at the right). The row at the top of the Measurement Series tab wraps the same way. Minimum window width
+    went from ~1600 to ~960 px.
+  - A window closed maximized was restored already maximized, before it existed on screen. It now opens at its
+    saved normal size (fitted to the screen) and is maximized right after `show()`. This replaces an
+    earlier workaround (restore + maximize again on a timer), which did not help on that laptop.
 
 ## [2.3.0] - 2026-11-17
 

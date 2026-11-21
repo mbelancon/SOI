@@ -14,7 +14,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.4.1'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.4.0'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
