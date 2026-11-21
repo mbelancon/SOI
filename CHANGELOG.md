@@ -10,6 +10,9 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+#### Added: PCB requirements draft
+- `docs/09_PCB_Requirements.md`: requirements and options for a dedicated SOI board (OPT101 gain ranges, I2S cable to the INMP441, laser driver and interlock, power and shielding, cell temperature, Black Pill vs soldered STM32), with the decisions to be approved before the schematic. Figure script in `docs/images/pcb_ranges_i2s.py`. Documentation only: firmware and interface unchanged.
+
 ## [2.3.0] - 2026-11-17
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
