@@ -14,7 +14,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.4.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.4.1'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -39,6 +39,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import soi_i18n  # idioma da interface (português ou inglês, conforme o Windows ou SOI_LANG)
 import soi_serie  # Medidas em Série (fila de varreduras, Sinal x t, pausas e avisos)
 import soi_ruido  # Detectar ruídos de fundo (espectro do INMP441, tons e séries harmônicas)
+import soi_layout  # FlowBar: barras que quebram linha em telas estreitas ou com escala alta
 
 soi_i18n.install(QtWidgets, QtGui, pg)
 
@@ -3918,6 +3919,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle(f'SOI Controller {__version__} - LCTM')
         self.resize(1280, 1000)
+        self.start_maximized = False          # load_settings: a janela foi fechada maximizada
 
         # --- Parâmetros ---
         self.ref_freq = 5.0
@@ -4073,7 +4075,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         # Excitação (comum a todas as abas): frequência e potência
         self.sp_freq = self._dspin(0.0, 5000.0, self.ref_freq, 3, 0.1, self.on_freq)
         self.sp_power = self._dspin(0.0, 100.0, self.laser_power, 1, 0.1, self.on_power)
-        excitation = QtWidgets.QHBoxLayout()
+        top_bar = soi_layout.FlowBar()
+        excitation = top_bar.group()
         lbl_exc = QtWidgets.QLabel('Excitação:')
         lbl_exc.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_exc)
@@ -4102,7 +4105,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_ext.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_ext.setVisible(False)
         excitation.addWidget(self.lbl_ext)
-        excitation.addSpacing(8)
+        excitation = top_bar.group()
         lbl_sample = QtWidgets.QLabel('Amostra:')
         lbl_sample.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_sample)
@@ -4113,7 +4116,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                                   'Caracteres inválidos em nomes de arquivo viram "_". Vazio = sem prefixo.')
         excitation.addWidget(self.ed_sample)
         # Calibração do microfone: começa na mais recente da pasta, marcada para uso
-        excitation.addSpacing(8)
+        excitation = top_bar.group()
         lbl_cal = QtWidgets.QLabel('Calibração:')
         lbl_cal.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_cal)
@@ -4129,7 +4132,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.chk_mic_cal.toggled.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.chk_mic_cal)
         # Configuração da célula: a calibração só vale na configuração em que foi feita (acústica diferente)
-        excitation.addSpacing(8)
+        excitation = top_bar.group()
         lbl_cell = QtWidgets.QLabel('Célula:')
         lbl_cell.setStyleSheet('font-weight:bold;')
         excitation.addWidget(lbl_cell)
@@ -4142,7 +4145,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                                    'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.cmb_cell)
-        excitation.addSpacing(10)
+        excitation = top_bar.group()
         # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
         # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
         self.lbl_snr_top = QtWidgets.QLabel('SNR OPT/INMP: — / — dB')
@@ -4161,7 +4164,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.snr_top_timer = QtCore.QTimer(self)
         self.snr_top_timer.timeout.connect(self._update_snr_top)
         self.snr_top_timer.start(1000)
-        excitation.addStretch(1)
+        excitation = top_bar.group()          # último grupo: encostado à direita
         self.chk_sim = QtWidgets.QCheckBox('Simular amostragem')
         self.chk_sim.setStyleSheet('QCheckBox{font-weight:bold;color:#006400;}')
         self.chk_sim.setToolTip('Gera um sinal simulado (com ruído) quando não há STM32 conectado.')
@@ -4192,7 +4195,7 @@ class LockInWindow(QtWidgets.QMainWindow):
                                    'desde que a interface abriu (ou desde o último "Finalizar experimento"),\n'
                                    'junto com a calibração do microfone em uso.')
         self.btn_finish.clicked.connect(self.finish_experiment)
-        central_layout.addLayout(excitation)
+        central_layout.addLayout(top_bar)
 
         tabs = QtWidgets.QTabWidget()
         self.tabs = tabs
@@ -12364,6 +12367,12 @@ class LockInWindow(QtWidgets.QMainWindow):
             geo = st.value('geometry')
             if geo is not None:
                 self.restoreGeometry(geo)
+            # Maximizada: guarda só a intenção e abre normal; main() chama showMaximized() depois do show().
+            # Restaurar já maximizada (antes de a janela existir) fazia o Windows com escala alta desenhar o
+            # conteúdo com o tamanho errado até o usuário restaurar e maximizar de novo.
+            self.start_maximized = self.isMaximized()
+            if self.start_maximized:
+                self.setWindowState(self.windowState() & ~QtCore.Qt.WindowState.WindowMaximized)
             self._fit_to_screen()
             v = num('tab')
             if v is not None:
@@ -13089,14 +13098,9 @@ def main():
     if not icon.isNull():
         app.setWindowIcon(icon)           # janela principal, diálogos e barra de tarefas
     win = LockInWindow()
-    win.show()
-    if win.isMaximized():
-        # Aberta maximizada (geometria salva), o Windows às vezes desenha o conteúdo maior que a tela e corta o lado
-        # direito; restaurar e maximizar de novo (o que o usuário fazia à mão) acerta o tamanho.
-        def _remax():
-            win.showNormal()
-            win.showMaximized()
-        QtCore.QTimer.singleShot(0, _remax)
+    win.show()                            # primeiro normal (geometria já cabe na tela), depois maximiza
+    if win.start_maximized:
+        win.showMaximized()
     # Aviso único se o Arduino não estiver ligado na abertura (não bloqueia a GUI).
     QtCore.QTimer.singleShot(2500, win.warn_not_found)
     sys.exit(app.exec())

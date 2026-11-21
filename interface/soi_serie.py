@@ -432,6 +432,7 @@ def fmt_dur(sec):
 # --------------------------------------------------------------------------- execução (Qt)
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets    # noqa: E402
 import pyqtgraph as pg                               # noqa: E402
+import soi_layout                                    # noqa: E402
 
 
 def read_data_csv(path):
@@ -1104,7 +1105,8 @@ class SeriesTab(QtWidgets.QWidget):
         self._status_style('idle')
         root.addWidget(self.lbl_status)
 
-        row = QtWidgets.QHBoxLayout()
+        bar = soi_layout.FlowBar(hspace=14, last_right=False)   # quebra a linha em telas estreitas
+        row = bar.group()
         self.btn_open = QtWidgets.QPushButton('Abrir série...')
         self.btn_save = QtWidgets.QPushButton('Salvar')
         self.btn_saveas = QtWidgets.QPushButton('Salvar como...')
@@ -1120,7 +1122,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.lbl_file = QtWidgets.QLabel('')
         self.lbl_file.setStyleSheet('color:#555;')
         row.addWidget(self.lbl_file)
-        row.addSpacing(20)
+        row = bar.group()
         lb = QtWidgets.QLabel('Nome base:')
         lb.setStyleSheet('font-weight:bold;')
         row.addWidget(lb)
@@ -1131,7 +1133,7 @@ class SeriesTab(QtWidgets.QWidget):
                                 'Vazio = o nome da Amostra da barra de cima.')
         self.ed_base.textEdited.connect(self._on_header)
         row.addWidget(self.ed_base)
-        row.addSpacing(14)
+        row = bar.group()
         self.chk_start = QtWidgets.QCheckBox('Começar às')
         self.chk_start.setToolTip('A série espera (com o laser parado) até este horário.\n'
                                   'Se o horário já passou hoje, começa amanhã.')
@@ -1145,7 +1147,7 @@ class SeriesTab(QtWidgets.QWidget):
         row.addWidget(self.chk_start)
         row.addWidget(self.ed_start)
         row.addWidget(self.lbl_start_day)
-        row.addSpacing(14)
+        row = bar.group()
         row.addWidget(QtWidgets.QLabel('Repetir a série:'))
         self.sp_cycles = QtWidgets.QSpinBox()
         self.sp_cycles.setRange(1, 999)
@@ -1153,14 +1155,13 @@ class SeriesTab(QtWidgets.QWidget):
         self.sp_cycles.setToolTip('Roda a série inteira N vezes (arquivos com _ciclo1, _ciclo2, ...).')
         self.sp_cycles.valueChanged.connect(self._on_header)
         row.addWidget(self.sp_cycles)
-        row.addSpacing(14)
+        row = bar.group()
         self.chk_end_off = QtWidgets.QCheckBox('Laser parado no fim')
         self.chk_end_off.setChecked(True)
         self.chk_end_off.setToolTip('No fim da série (ou ao parar), PWM 0.')
         self.chk_end_off.toggled.connect(self._on_header)
         row.addWidget(self.chk_end_off)
-        row.addStretch(1)
-        root.addLayout(row)
+        root.addLayout(bar)
 
         split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         root.addWidget(split, 1)
