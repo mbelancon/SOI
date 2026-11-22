@@ -18,7 +18,7 @@ Architecture proposed by Marcos:
  │  gain ranges (Rf switch)  →  buffer  →  PA0         │◄────────────►│ INMP441 (cell)    │
  │  STM32 (Black Pill or soldered)                     │  ≤ 1 m       │ INMP441 (ref, opt)│
  │  NTC input, I2C header, SWD, BOOT                   │              │ NTC on cell wall  │
- │  USB-C │ SYNC OUT │ TTL IN │ LASER (logic) │ MIC    │              └───────────────────┘
+ │  USB-C │ SYNC │ LASER (logic) │ LED │ 5V IN │ MIC  │              └───────────────────┘
  └───┬────────────────────────────┬───────────────────┘
      │ USB (PC)                   │ logic-level modulation + enable
      ▼                            ▼
@@ -48,19 +48,19 @@ Proposed allocation (only new firmware work where marked):
 
 | Pin | New use | Firmware |
 |---|---|---|
-| PB3, PB4, PB10 | OPT101 gain range A0, A1, A2 (8 ranges) | new command, e.g. `G0..G7` |
+| PB3, PB4, PA4 | OPT101 gain range A0, A1, A2 (8 ranges) | new command, e.g. `G0..G7` |
 | PB5 | gain switch enable (all off at reset) | idem |
 | PA1 | NTC on the cell wall, ADC1 injected channel (JAUTO after each PA0 sample) | proposal already in memory: PA0 84 → 56 cycles, still < 5 µs |
 | PB6 / PB7 | I2C1: ambient sensor (TMP117 or similar), ADS1115 (plan B for the NTC), ID EEPROM | 1 Hz reading |
-| PB1 | TTL input (optical chopper / external trigger) → bit 14 of the optical word | already in "Pendências" |
 | PB8 | laser ENABLE (hardware AND with PWM and interlock) | on/off command |
 | PB9 | interlock state (read only) | reported to the interface |
 | PA15 | fan PWM (TIM2_CH1), optional | optional |
+| PB10 | LED current setpoint, 20 kHz PWM (TIM2_CH3) → RC filter | `I<mA>` |
+| PA2 | LED_EN (hardware AND with PWM and interlock) | source selection |
 | PA9 / PA10 | USART1 debug header | none |
 
-The optical word has bits 12–14 free today; bit 14 stays for the TTL input and the gain range goes in a status
-packet (see section 3). Adding the gain command, the status
-packet and the TTL bit is a protocol change: per the version rule, firmware and interface go to **MAJOR 3**.
+The optical word has bits 12–14 free today; they stay free (the gain range goes in a status packet, section 3).
+Adding the gain and source commands and the status packet is a protocol change: per the version rule, firmware and interface go to **MAJOR 3**.
 
 ## 3. OPT101 gain control (essential)
 
@@ -108,7 +108,7 @@ Recommendation: **D** with an **8:1 mux** (TMUX1108 / ADG1208 class) and half-de
 330 k / 1 M / 3.3 M / 10 M (thin-film, 0.1 %, 25 ppm/°C), which covers today's pot setting (≤ 333 kΩ) with steps
 of ≈ 3×; the eighth position is a spare (or a reed-relay 100 MΩ branch, unpopulated, for luminescence). The
 switch goes on the output side of each branch. With 8 ranges the range index (3 bits) goes in a status packet
-and in the CSV header, not in the optical word (bit 14 stays for the TTL input); range changes happen only
+and in the CSV header, not in the optical word; range changes happen only
 between measurements anyway. Ranges are selected by the interface (manual, with a "too low / saturated" hint); auto-ranging only
 between measurements, never inside a lock-in window. Each range needs a gain and phase calibration (laser
 directly on the OPT101), stored on the board (STM32 flash or the ID EEPROM) and written in the CSV header.
@@ -180,9 +180,63 @@ The box sends only logic:
 **Information needed from Marcos:** laser model, supply voltage/current, whether it has a TTL or analog
 modulation input, and whether the fan is powered by the module.
 
+## 5b. 3 W LED source (requested 22/11)
+
+A 3 W power LED (≈ 700 mA–1 A; Vf ≈ 2.2–2.6 V red, ≈ 3.0–3.6 V green/blue/white) as an alternative excitation
+source, driven from the box.
+
+**Driver: linear constant-current sink (recommended).** Op-amp + logic-level MOSFET (DPAK/TO-220) + 0.1–0.2 Ω
+sense resistor. The op-amp reference is the current setpoint; the modulation gates the reference.
+- **No switching noise:** a buck LED driver (PT4115/AL8860 class, 6–30 V in, DIM pin) is efficient but switches
+  at 0.1–1 MHz with ~1 A next to the OPT101 and the ADC. The linear sink has no ripple, so it is the choice for a
+  lock-in.
+- **Intensity by current, not by the 5 kHz PWM:** in LED mode PA8 stays at 100 % in the "on" half-periods and the
+  intensity comes from the setpoint: a 20 kHz PWM on PB10 (TIM2_CH3) through a 2-pole RC filter (DAC on a future
+  F446). The light then has no 5 kHz carrier.
+- **Edges:** rise/fall slew-limited to ≈ 5–10 µs (RC on the gated reference). Fast enough for modulation up to
+  5 kHz and for τ ≥ ~20 µs; slow enough to limit di/dt in the wiring.
+- **Mechanical chopper:** LED in continuous mode (F0) and the existing optical mode of the interface (reference
+  from the OPT101). No chopper reference input on the board (Marcos, 22/11).
+
+**Power.** Never from USB (500 mA at most). Separate **5 V / 2 A** input (barrel jack, wall adapter), with a
+reverse-polarity MOSFET and a fuse/PTC. 5 V is the lowest supply that keeps the sink in regulation for blue/white
+LEDs plus the sense and cable drop. A 12 V input would make the sink dissipate ≈ 8 W, so it would need the buck
+driver instead.
+
+**Dissipation (5 V input).** P_MOSFET ≈ (5 V − Vf − I·R_sense) · I:
+
+| LED | I | P in the MOSFET |
+|---|---|---|
+| white/blue/green (3.4 V) | 0.7 A / 1.0 A | ≈ 1.0 W / ≈ 1.4 W |
+| red (2.4 V) | 0.7 A / 1.0 A | ≈ 1.7 W / ≈ 2.4 W |
+
+With a 50 % modulation the average is half. The MOSFET goes on a small heatsink or on the aluminium box wall
+(thermal pad), **far from the OPT101** (its dark current and the Rf resistors drift with temperature). For red
+LEDs a series power resistor (≈ 1 Ω, 2 W) can take part of the dissipation off the board. The LED itself needs its
+own heatsink (≈ 3–5 °C/W) outside the box, connected by a twisted pair.
+
+**Noise in the OPT101: the main risk.** The LED current switches at exactly the lock-in frequency. Any shared
+ground resistance or magnetic coupling becomes a **coherent** error in the OPT101 channel, which averaging does
+not remove (1 A × 1 mΩ = 1 mV, i.e. ≈ 1 ADC step, in phase with the reference). Requirements:
+- LED current loop (supply input → LED connector → MOSFET → sense → supply return) on its own copper, joined to
+  the signal ground at one point only (star at the power input); tight forward/return traces and a twisted cable
+  to the LED.
+- Sense-resistor feedback by Kelvin connection.
+- Driver at the opposite end of the board from the OPT101/ADC section; the OPT101 summing node guarded.
+- Acceptance test: LED on and modulated, OPT101 covered (dark): lock-in amplitude on the OPT101 channel must stay
+  below 1 count (OSR 16) at 10 Hz–5 kHz. Same test for the INMP441 (no light in the cell).
+
+**Control and safety.** LED_EN on PA2 in the same hardware AND as the laser (PWM · enable · interlock), with
+pull-downs: off during reset and DFU. Current limit set by the sense resistor in hardware (≤ 1 A regardless of
+firmware). Front-panel "source on" LED driven by the AND output. Laser and LED may share the MOD signal, but only
+one enable is active at a time (firmware rule + interface choice of source).
+
+**Firmware/interface:** new commands for source selection (laser / LED) and current setpoint (`I<mA>`), LED mode
+uses PA8 at 100 % during the on half-period. Goes with the MAJOR 3 changes.
+
 ## 6. Power, grounding and shielding
 
-- USB 5 V only for the box (budget ≈ 60 mA: STM32 ~30 mA, two INMP441 3 mA, OPT101 + op-amps < 5 mA, LEDs).
+- USB 5 V for the electronics; separate 5 V / 2 A input only for the 3 W LED (section 5b). USB budget ≈ 60 mA: STM32 ~30 mA, two INMP441 3 mA, OPT101 + op-amps < 5 mA, LEDs).
 - Separate **low-noise analog 3.3 V LDO** (LP5907 / TPS7A20 class) for OPT101, buffer and NTC divider. On the
   Black Pill VDDA comes from the board 3V3 (filtered); with a soldered STM32, VDDA/VREF+ can come from this rail
   or a reference.
@@ -230,9 +284,10 @@ update the firmware by DFU, and an SWD header inside the box.
 
 ## 9. Other connectors on the box
 
-USB-C (PC) · RJ45 (microphone) · LASER (logic) · BNC SYNC OUT (PB0, 50 Ω series, TTL) · BNC TTL IN (PB1,
-protected, optional) · interlock jack · internal: SWD, I2C, UART debug. All external lines with series
-resistors and ESD protection.
+USB-C (PC) · RJ45 (microphone) · LASER (logic) · LED (2-pin, locking, ≥ 2 A) · 5 V / 2 A DC input (LED
+only) · BNC SYNC OUT (PB0, 50 Ω series, TTL) · interlock jack · internal: SWD, I2C, UART debug. All external
+lines with series resistors and ESD protection. No chopper reference input (Marcos, 22/11: the mechanical chopper
+uses the optical mode with the OPT101 as reference).
 
 ## 10. Decisions for Marcos
 
@@ -248,4 +303,6 @@ resistors and ESD protection.
 7. **Phase 1 with the Black Pill in sockets**, F401 vs F446 decided after phase 1?
 8. **Box:** extruded aluminium (Hammond 1455 type) with OPT101 window, diffuser and filter slot?
 9. **Temperature:** NTC on PA1 (injected) as main, I2C header for ambient/TMP117/ADS1115?
-10. **Licence for distribution:** CERN-OHL-S (or -P) for the hardware, keep the current software licence?
+10. **3 W LED:** linear current sink (≤ 1 A) on the board, separate 5 V / 2 A input, MOSFET on the box wall,
+    intensity by current setpoint (no 5 kHz PWM)? Which LED colour (red needs more dissipation)?
+11. **Licence for distribution:** CERN-OHL-S (or -P) for the hardware, keep the current software licence?
