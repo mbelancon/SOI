@@ -88,6 +88,13 @@ class FlowBar(QtWidgets.QLayout):
             line.append(it)
         if line:
             lines.append(line)
+        if not test:
+            # Grupos vazios (todos os widgets escondidos) não entram nas linhas, mas o QWidget do grupo continua
+            # visível: sem geometria ele ficava em (0, 0, 640, 480) por cima do quadro e engolia os cliques
+            shown = {id(it) for line in lines for it in line}
+            for it in self._items:
+                if id(it) not in shown:
+                    it.setGeometry(QtCore.QRect(r.x(), r.y(), 0, 0))
         y = r.y()
         for k, line in enumerate(lines):
             lh = max(it.sizeHint().height() for it in line)

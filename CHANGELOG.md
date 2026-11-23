@@ -237,6 +237,9 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   Dual Mode controls now wraps onto a second line, and the status bars of the OPT101, INMP441 and Dual Mode tabs, the
   refine note and the manual-sweep readout shrink (cut at the edge or wrap) instead of raising the window's minimum
   width.
+  (A first version of these wrapping rows left an empty group, one whose only label was hidden, as an invisible
+  640×480 widget over the top of the Dual Mode tab, so no field there reacted to clicks. Empty groups now get zero
+  size; a test clicks every button, field and box of all tabs.)
 
 ## [2.3.0] - 2026-11-17
 
