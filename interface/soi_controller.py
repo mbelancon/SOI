@@ -4211,7 +4211,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_status = QtWidgets.QLabel('Inicializando...')
         self.lbl_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        root.addWidget(self.lbl_status)
+        root.addWidget(soi_layout.no_widen(self.lbl_status))
 
         # Janela do osciloscópio (topo da aba OPT101); Freq e PWM ficam na linha "Excitação"
         top = QtWidgets.QHBoxLayout()
@@ -4669,7 +4669,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.audio_status = QtWidgets.QLabel('Inicializando áudio...')
         self.audio_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.audio_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        audio_layout.addWidget(self.audio_status)
+        audio_layout.addWidget(soi_layout.no_widen(self.audio_status))
         # Exibição: gráficos, R/θ ou X/Y e fase
         view_box = self._group('Exibição')
         audio_mode = QtWidgets.QHBoxLayout(view_box)
@@ -5192,6 +5192,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         row_ref.addWidget(self.sp_dual_refine_n)
         self.lbl_dual_refine = QtWidgets.QLabel('')
         self.lbl_dual_refine.setStyleSheet('color:#606060;')
+        self.lbl_dual_refine.setWordWrap(True)
         row_ref.addWidget(self.lbl_dual_refine)
         row_ref.addStretch(1)
         box_f.layout().addLayout(row_ref)
@@ -5334,9 +5335,8 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_now = QtWidgets.QLabel('')         # flutuação do ponto em medida, no meio
         self.lbl_dual_now.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_now.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        bar_h.addWidget(self.lbl_dual_status, 1)
-        bar_h.addWidget(self.lbl_dual_now, 1)
-        bar_h.addWidget(self.lbl_dual_fl, 1)
+        for lb in (self.lbl_dual_status, self.lbl_dual_now, self.lbl_dual_fl):   # textos longos não alargam a janela
+            bar_h.addWidget(soi_layout.no_widen(lb), 1)
         self.lbl_dual_fl.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
                                         '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.\n'
                                         'Verde: dentro da Precisão; amarelo: até 2×; vermelho: acima.')
@@ -5405,7 +5405,9 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.pw_dual_b.addItem(self.e_dual_b)
         self.c_dual_b_fit = self.pw_dual_b.plot([], [], pen=pg.mkPen('#e67e22', width=2,
                                                                      style=QtCore.Qt.PenStyle.DashLine))
-        excl_row = QtWidgets.QHBoxLayout()
+        # Linha que quebra em vez de alargar a janela quando aparecem os avisos (ex.: Ressonância deslocada)
+        excl_bar = soi_layout.FlowBar(hspace=12, vspace=3, last_right=False)
+        excl_row = excl_bar.group()
         excl_hint = QtWidgets.QLabel('Clique num ponto para tirá-lo do ajuste.')
         excl_hint.setToolTip('Clique num ponto do gráfico da esquerda para tirá-lo do ajuste; clique de novo para incluí-lo.')
         excl_hint.setStyleSheet('color:#606060;')
@@ -5431,7 +5433,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.btn_dual_diag.toggled.connect(lambda _: self._show_dual_results())
         self.btn_dual_diag.setEnabled(False)
         excl_row.addWidget(self.btn_dual_diag)
-        excl_row.addSpacing(16)
+        excl_row = excl_bar.group()
         self.chk_dual_norm = QtWidgets.QCheckBox('Normalizar pelo OPT101')
         self.chk_dual_norm.setChecked(True)
         self.chk_dual_norm.setToolTip(
@@ -5449,24 +5451,20 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.lbl_dual_warn = QtWidgets.QLabel('')
         self.lbl_dual_warn.setStyleSheet(f'color:{LOWF_WARN_COLOR};font-weight:bold;')
         self.lbl_dual_warn.setVisible(False)
-        excl_row.addSpacing(12)
-        excl_row.addWidget(self.lbl_dual_warn)
+        excl_bar.group().addWidget(self.lbl_dual_warn)
         # Textos informativos que ficavam no quadro "Resultados" (Diagnóstico, Sinal x t, ajuste do PWM, pontos
         # excluídos...): indicador "ℹ Resultados", com o texto no tooltip
         self.lbl_dual_info = QtWidgets.QLabel('')
         self.lbl_dual_info.setStyleSheet('color:#1f4e9c;font-weight:bold;')
         self.lbl_dual_info.setVisible(False)
-        excl_row.addSpacing(12)
-        excl_row.addWidget(self.lbl_dual_info)
+        excl_bar.group().addWidget(self.lbl_dual_info)
         # Ressonância da medida longe da calibração (ou só numa delas): aviso vermelho bem visível
         self.lbl_dual_res_shift = QtWidgets.QLabel('')
         self.lbl_dual_res_shift.setStyleSheet('color:white;background:#d00000;font-weight:bold;'
                                               'padding:2px 8px;border-radius:3px;')
         self.lbl_dual_res_shift.setVisible(False)
-        excl_row.addSpacing(12)
-        excl_row.addWidget(self.lbl_dual_res_shift)
-        excl_row.addStretch(1)
-        lay.addLayout(excl_row)
+        excl_bar.group().addWidget(self.lbl_dual_res_shift)
+        lay.addLayout(excl_bar)
         lay.addWidget(self.dual_plots, 1)
         # Sinais de cada sensor (recolhível): amplitude relativa (÷ mediana) e fase de cada um
         self.dual_sensor_plots = QtWidgets.QWidget()
@@ -6916,6 +6914,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         row.addWidget(self.btn_man_point)
         self.lbl_man = QtWidgets.QLabel('')
         self.lbl_man.setStyleSheet('font-family:Consolas,monospace;')
+        self.lbl_man.setWordWrap(True)
         row.addWidget(self.lbl_man)
         row.addStretch(1)
         lay.addLayout(row)

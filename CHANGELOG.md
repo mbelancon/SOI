@@ -232,6 +232,11 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   the fit), so the point just measured could stay off the scale. It showed up with shuffled sweeps that go below
   40 Hz, whose low-frequency points have much smaller S and Δφ (e.g. 4 points measured, 2 visible; the 5 Hz point in
   the CSV but not in the plot). The axes are now fitted after the curves are updated.
+- Warnings and status texts made the window wider than the screen when they appeared (e.g. the red "Resonance
+  shifted" badge, "⚠ N warning(s)", "ℹ Results", a long file name in the status bar of a tab). The row under the
+  Dual Mode controls now wraps onto a second line, and the status bars of the OPT101, INMP441 and Dual Mode tabs, the
+  refine note and the manual-sweep readout shrink (cut at the edge or wrap) instead of raising the window's minimum
+  width.
 
 ## [2.3.0] - 2026-11-17
 

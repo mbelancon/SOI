@@ -3,6 +3,15 @@
 from pyqtgraph.Qt import QtCore, QtWidgets
 
 
+def no_widen(label):
+    '''Rótulo de texto variável (status, avisos) que nunca alarga a janela: com texto maior que o espaço ele é
+    cortado na borda em vez de aumentar a largura mínima (o que fazia a janela passar da tela).'''
+    # Largura mínima explícita (1 px) no lugar da largura do texto: com espaço, o layout ainda dá ao rótulo a largura
+    # do texto (sizeHint); sem espaço, ele encolhe e corta
+    label.setMinimumWidth(1)
+    return label
+
+
 class FlowBar(QtWidgets.QLayout):
     '''Barra de grupos que quebra em mais linhas quando a janela é estreita. A barra superior inteira tem
     ~1600 px numa linha: com a escala do Windows em 125-200 % isso passa da largura da tela, e a janela
