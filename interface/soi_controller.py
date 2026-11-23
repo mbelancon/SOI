@@ -8045,6 +8045,10 @@ class LockInWindow(QtWidgets.QMainWindow):
                 m = 0.05 * (xb[1] - xb[0]) if xb[1] > xb[0] else 1.0
                 vb.setXRange(xb[0] - m, xb[1] + m, padding=0)
 
+    def _dual_refit_after_update(self):
+        if getattr(self, 'dual_results', None) and not getattr(self, 'dual_view_manual', False):
+            self._dual_set_xrange(self._dual_arrays()[0])
+
     def _dual_arrays(self):
         res = np.array(self.dual_results, dtype=float).reshape(-1, 9)
         return res.T
@@ -8063,6 +8067,10 @@ class LockInWindow(QtWidgets.QMainWindow):
         x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
         if not getattr(self, 'dual_view_manual', False):
             self._dual_set_xrange(x)
+            # O y se ajusta aos pontos já desenhados: aqui as curvas ainda têm os dados anteriores (o ponto novo
+            # ficava fora da escala, ex.: o de 5 Hz numa varredura que desce abaixo de 40 Hz). Refaz depois que o
+            # resto desta função atualizou as curvas.
+            QtCore.QTimer.singleShot(0, self._dual_refit_after_update)
         self._update_dual_sensor_plots(x, ro, ra, pa, po)
         self.dual_fit = None
         self.dual_std = None
@@ -9039,14 +9047,16 @@ class LockInWindow(QtWidgets.QMainWindow):
         for row_fields in (fields, extra) + tuple(more):
             if not row_fields:
                 continue
-            row1 = QtWidgets.QHBoxLayout()
+            # Cada rótulo + campo é um grupo que não se divide; sem espaço na largura, a linha quebra (antes os
+            # campos se sobrepunham aos rótulos quando a janela era mais estreita que a linha)
+            row1 = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)
             for label, w in row_fields:
+                g = row1.group()
                 if isinstance(label, QtWidgets.QWidget):
-                    row1.addWidget(label)
+                    g.addWidget(label)
                 elif label:
-                    row1.addWidget(QtWidgets.QLabel(label))
-                row1.addWidget(w)
-            row1.addStretch(1)
+                    g.addWidget(QtWidgets.QLabel(label))
+                g.addWidget(w)
             lay.addLayout(row1)
         row2 = QtWidgets.QHBoxLayout()
         btn = QtWidgets.QPushButton('▶ Varredura')

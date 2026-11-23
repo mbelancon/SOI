@@ -224,6 +224,14 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   limited to the measured spectrum (±0.1 decade, PSD ±40 dB), the left axis has a fixed width, near-zero bins (the
   -300 dB log floor) are clipped 30 dB below the 1st percentile so they no longer stretch the y axis, and a double
   click on the plot goes back to the full spectrum, as in the other plots.
+- Sweep boxes (Dual Mode "Signal vs f", Calibration, PWM and the OPT101/INMP441 sweep panels): when the window was
+  narrower than a row of fields (high Windows scaling, or after the orange "high SNR at f < 40 Hz" notice appeared),
+  the spin boxes overlapped the labels "End:" and "Spacing:" and the notice was cut. Each label + field pair is now a
+  group and the row wraps onto a new line instead of overlapping.
+- Dual Mode plots: the y axis was fitted to the points drawn before the newest one (the curves were updated after
+  the fit), so the point just measured could stay off the scale. It showed up with shuffled sweeps that go below
+  40 Hz, whose low-frequency points have much smaller S and Δφ (e.g. 4 points measured, 2 visible; the 5 Hz point in
+  the CSV but not in the plot). The axes are now fitted after the curves are updated.
 
 ## [2.3.0] - 2026-11-17
 

@@ -50,7 +50,9 @@ class FlowBar(QtWidgets.QLayout):
         self._do_layout(rect, False)
 
     def _visible(self):
-        return [it for it in self._items if not (it.widget() and it.widget().isHidden())]
+        # Grupos escondidos ou vazios (todos os widgets do grupo escondidos) não ocupam lugar nem espaçamento
+        return [it for it in self._items if not (it.widget() and it.widget().isHidden())
+                and it.sizeHint().width() > 0]
 
     def sizeHint(self):
         items = self._visible()
