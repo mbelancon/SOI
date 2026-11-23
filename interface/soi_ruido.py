@@ -267,6 +267,7 @@ def make_dialog(win):
             self.setWindowTitle('Detectar ruídos de fundo (INMP441)')
             self.resize(1050, 720)
             self.res = None
+            self._view = None          # (log10 f0, log10 f1, y0, y1) do espectro inteiro, para o duplo clique
             self.x_off = None
             self.mode = None
             self.timer = QtCore.QTimer(self)
@@ -332,7 +333,12 @@ def make_dialog(win):
             self.pw.showGrid(x=True, y=True, alpha=0.3)
             self.pw.setLabel('bottom', 'Frequência (Hz)')
             self.pw.setLabel('left', 'PSD (dB)')
+            # Eixo esquerdo com largura fixa: com o zoom levado a valores enormes os rótulos ficavam compridos e
+            # alargavam o gráfico (e a janela) além da tela
+            self.pw.getPlotItem().getAxis('left').setWidth(60)
             self.pw.addLegend(offset=(-10, 10))
+            # Duplo clique na área do gráfico volta ao espectro inteiro (como nos outros gráficos)
+            self.pw.scene().sigMouseClicked.connect(self._plot_clicked)
             self.c_off = self.pw.plot([], [], pen=pg.mkPen((170, 170, 170), width=1), name='sem a fonte')
             self.c_p = self.pw.plot([], [], pen=pg.mkPen('dodgerblue', width=1), name='espectro')
             self.c_bg = self.pw.plot([], [], pen=pg.mkPen((90, 90, 90), width=1, style=QtCore.Qt.DashLine),
@@ -491,14 +497,50 @@ def make_dialog(win):
                 self.x_off = None
                 self.btn_on.setEnabled(False)
 
+        def _plot_clicked(self, ev):
+            if not ev.double() or ev.button() != QtCore.Qt.MouseButton.LeftButton:
+                return
+            vb = self.pw.getPlotItem().vb
+            if vb.sceneBoundingRect().contains(ev.scenePos()):
+                self._full_range()
+                ev.accept()
+
+        def _full_range(self):
+            '''Espectro inteiro (de 10 Hz ao fim) e faixa de PSD dos dados mostrados.'''
+            vb = self.pw.getPlotItem().vb
+            if self._view is None:
+                vb.enableAutoRange()
+                return
+            x0, x1, y0, y1 = self._view
+            vb.setRange(xRange=(x0, x1), yRange=(y0, y1), padding=0.02)
+
         def _show(self):
             res = self.res
             f = res['f']
             sel = (f >= 10.0) & (f <= FMAX_HZ * 1.2)
-            self.c_p.setData(f[sel], res['p'][sel])
-            self.c_bg.setData(f[sel], res['bg'][sel])
+            # Bins quase nulos viram -300 dB (piso do log): cortados 30 dB abaixo do 1o percentil para não esticar
+            # o eixo y até lá
+            curves = [res['p'][sel], res['bg'][sel]] + ([res['p_off'][sel]] if 'p_off' in res else [])
+            allp = np.concatenate(curves)
+            allp = allp[np.isfinite(allp)]
+            if sel.any() and allp.size:
+                lo = float(np.percentile(allp, 1)) - 30.0
+                hi = float(allp.max())
+                clip = lambda a: np.clip(a, lo, None)
+                self.c_p.setData(f[sel], clip(res['p'][sel]))
+                self.c_bg.setData(f[sel], clip(res['bg'][sel]))
+                # Limites do zoom/arraste (x em log10 por causa do eixo log): não sai para escalas absurdas
+                x0, x1 = np.log10(f[sel][0]), np.log10(f[sel][-1])
+                self._view = (x0, x1, lo, hi + 5.0)
+                self.pw.getPlotItem().vb.setLimits(xMin=x0 - 0.1, xMax=x1 + 0.1, yMin=lo - 40.0, yMax=hi + 40.0,
+                                                   minXRange=0.002, minYRange=1.0)
+                self._full_range()
+            else:
+                clip = lambda a: a
+                self.c_p.setData([], [])
+                self.c_bg.setData([], [])
             if 'p_off' in res:
-                self.c_off.setData(f[sel], res['p_off'][sel])
+                self.c_off.setData(f[sel], clip(res['p_off'][sel]))
             else:
                 self.c_off.setData([], [])
             tr = rows(res)

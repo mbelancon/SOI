@@ -219,6 +219,11 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   - A window closed maximized was restored already maximized, before it existed on screen. It now opens at its
     saved normal size (fitted to the screen) and is maximized right after `show()`. This replaces an
     earlier workaround (restore + maximize again on a timer), which did not help on that laptop.
+- "Detect background noise" window: dragging or zooming the spectrum could run off to absurd scales (frequency axis
+  from 10^-307 to 10^308 Hz, PSD around 10^9 dB), and the long axis labels made the plot much wider. The view is now
+  limited to the measured spectrum (±0.1 decade, PSD ±40 dB), the left axis has a fixed width, near-zero bins (the
+  -300 dB log floor) are clipped 30 dB below the 1st percentile so they no longer stretch the y axis, and a double
+  click on the plot goes back to the full spectrum, as in the other plots.
 
 ## [2.3.0] - 2026-11-17
 
