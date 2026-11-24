@@ -13,9 +13,9 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - OPT101 → PA0 (ADC, 0–3,3 V). Saída de ~7,5 mV a Vs − 1,3 V: com Vs = 3,3 V, máx. ~2,0 V.
 - INMP441 (I2S): SCK PB13, WS PB12, SD PB15.
 - Modulação do laser: PWM em PA8 (via driver); sincronismo em PB0. Laser 532 nm.
-- Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura (INMP441
-  com o-rings de um lado, furo de equalização do outro, fechado nas medidas), janela de lâmina de 1 mm.
-  Estado baixo em 19/11: f0 = 1052 Hz, Q ≈ 4,2.
+- Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura,
+  janela de lâmina de 1 mm. Desde 23/11 sem a câmara do microfone e com nova fixação do INMP441 (canal menor):
+  sem ressonância até ~3 kHz e sem a flutuação em baixa frequência.
 - Peças de Al (todas termicamente grossas): disco "pequena" ~12–15 × ~5 mm (~2 g, medir exato), 30×20×18 mm
   (~29 g) e 120×20×18 mm (~117 g).
 - A ventoinha do laser gera 170,2 Hz + harmônicos (340, 510, 681, 851, 1021 Hz; f0 varia 169,6–171,8 Hz), que
@@ -45,13 +45,14 @@ Série, varredura embaralhada com mediana, faixas excluídas e "Detectar ruídos
 Depois do merge: PR só de reorganização dividindo o `soi_controller.py` em módulos (aprovado 20/11; ver relatório
 "SOI — como gastar menos tokens").
 
-## Descobertas principais (detalhes em NOTAS_MEDIDAS.md)
-- < 30–40 Hz domina ruído acústico da sala (fundo diurno 3–5× o noturno): medir com PWM 100 %, grave à noite.
-- Deriva de S ao ligar o laser: aquecimento local sob o feixe (não a T média da peça); some após ~11 min. Warm-up 10–15 min.
-- Evitar múltiplos de 60 Hz e a série da ventoinha (170,2 Hz + harmônicos).
-- Varredura recomendada: τ 1 s, 3 repetições, mediana, ordem embaralhada.
-- SNR do ponto: verde ≥ 25 dB (erro ≲ 10 %), amarelo 15–25, vermelho < 15 dB.
-- Calibração por duas amostras (Al + Inox, sempre a mesma face); conferir f0 da célula (estados ~1,05/1,54/1,79 kHz) antes de aplicar.
+## Medidas
+- As medidas até 23/11 estavam sujeitas a vazamento da célula, provavelmente pelo ponto do microfone, o que
+  comprometia o desempenho em baixa frequência.
+- Tudo até 23/11 está arquivado (dados de 23/11 não confiáveis): resumo em
+  `arquivo/ate_20261123/RESUMO_ate_20261123.md` (pasta do projeto) e `Projetos\Claude\SOI_arquivo\ate_20261123\` no PC.
+- Lições de método a conferir no sistema novo: PWM 100 %, warm-up, evitar múltiplos de 60 Hz e a série da ventoinha
+  (170,2 Hz + harmônicos), ordem embaralhada com mediana, calibração Al + Inox na mesma face.
+- Quinta, 26/11: bateria consolidada para as análises de ruído, parâmetros do lock-in (τ, médias) e τ adaptativo.
 
 ## Planos próximos
 - Semana de 23/11 (SOI volta da apresentação): melhorias mecânicas medidas antes/depois (isopor sob o board de metal,
