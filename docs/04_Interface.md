@@ -1,6 +1,6 @@
 # 4. PC interface – SOI Controller
 
-File: [`interface/soi_controller.py`](../interface/soi_controller.py). Built with PyQt/PySide + pyqtgraph. The lock-in is computed in Python (numpy/scipy), in the same file.
+File to run: [`interface/soi_controller.py`](../interface/soi_controller.py) (the window's parts are in `interface/soi_win_*.py`). Built with PyQt/PySide + pyqtgraph. The lock-in is computed in Python (numpy/scipy), in [`interface/soi_dsp.py`](../interface/soi_dsp.py).
 
 **Language.** The interface is bilingual (Portuguese and English) and picks the language from the Windows display language: Portuguese if Windows is in Portuguese, English otherwise. The environment variable `SOI_LANG=pt` or `SOI_LANG=en` forces one of them. The labels in this document are the English ones. File names, CSV column names and CSV header keys stay the same in both languages, so files from either language open in the other.
 

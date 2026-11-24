@@ -14,7 +14,7 @@ The interface and the firmware share the same version number. It appears in `__v
 
 Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.
 
-### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py` and `interface/soi_layout.py`)
+### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py`, `interface/soi_layout.py` and the modules listed under "Changed")
 
 #### Added: Measurement Series tab ("Medidas em Série")
 - **Why:** long campaigns (drift, noise, repeated sweeps) were run from .bat files with the headless mode, with
@@ -253,6 +253,26 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   check) opened only at the end of the warm-up, and the measurement waited there, with the laser on, until someone
   clicked OK. They are now asked when the sweep button is clicked, before the warm-up, and the sweep starts by
   itself when the warm-up ends.
+
+#### Changed: interface code split into modules (no change in behavior)
+- **Why:** `soi_controller.py` had grown to ~13,200 lines (~600 KB), hard to read and to change safely. It is also the
+  first step of the planned 2.5.0 layout for small screens (1366×768), where each tab becomes a module.
+- `soi_controller.py` is still the file to run (`rodar_interface.bat`, the executable and the headless commands do not
+  change) and keeps `__version__`, the main window class (`LockInWindow`: start-up, timer, status, settings, close),
+  the log and `main()`.
+- New modules without Qt windows: `soi_const.py` (constants), `soi_analise.py` (calibration, fits, diagnosis, CSV
+  reading), `soi_dsp.py` (lock-ins, external reference, buffers, resolution test, raw audio recorder), `soi_serial.py`
+  (port detection and serial reader), `soi_sim.py` (simulated mode), `soi_widgets.py` (custom widgets), `soi_headless.py`
+  (`--varredura`, `--sinal-t`, `--serie`, `--detectar-ruido`) and `soi_comum.py` (imports all of them).
+- The window methods moved, unchanged, to mixin classes by subject: `soi_win_ui.py` (top bar, OPT101 and INMP441
+  tabs), `soi_win_dual_ui.py` (Dual Mode tab), `soi_win_cal.py` (two-sample calibration), `soi_win_dual.py` and
+  `soi_win_dual_sweep.py` (Dual Mode sweeps, results, export), `soi_win_dual_fit.py` (panels, model fits),
+  `soi_win_comum.py` (shared controls, Settings), `soi_win_opt.py`, `soi_win_audio.py` and `soi_win_series.py`.
+- Only real code change: the OPT101 rate after oversampling (`FS`, `DECIMATION`), which changes with the OSR, is now
+  `RATE.FS` / `RATE.DECIMATION` (one shared object) instead of module globals, so every module sees the current value.
+- Checked in simulated mode: screenshots of every tab and panel identical to the previous build (except live data),
+  same minimum window sizes, OSR change, Settings dialog, and the headless `--varredura`, `--sinal-t`, `--serie` and
+  `--detectar-ruido` with `--simulado`.
 
 ## [2.3.0] - 2026-11-17
 
