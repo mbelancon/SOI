@@ -240,6 +240,19 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   (A first version of these wrapping rows left an empty group, one whose only label was hidden, as an invisible
   640×480 widget over the top of the Dual Mode tab, so no field there reacted to clicks. Empty groups now get zero
   size; a test clicks every button, field and box of all tabs.)
+- Window and panels resized badly during use until the window was restored and maximized again. The wrapping rows
+  above reported, as their minimum, the height of one group per line, which pushed the window's minimum height to
+  ~990 px (more than a 1080p screen at 125 % scaling, or a Surface Book at 200 %); they now report one line and get
+  their real height from the width they receive. The Calibration panel of the Dual Mode is capped at 40 % of the
+  screen height (with a vertical scroll bar), and the estimated-time label no longer widens the sweep box when
+  "Wait for warm-up" is ticked. Measured offscreen at 1500×950: minimum window size 1119×654 (was 1668×654 in
+  the first 2.4.0 build), 1119×840 with the Calibration panel open. As a safety net, a maximized window whose frame
+  ends up larger than the screen after a layout change is restored and maximized again automatically (once every
+  3 s at most, and only if its minimum size fits the screen).
+- Dual Mode sweeps with "Wait for warm-up": the confirmations ("sweep below 40 Hz" and the calibration conditions
+  check) opened only at the end of the warm-up, and the measurement waited there, with the laser on, until someone
+  clicked OK. They are now asked when the sweep button is clicked, before the warm-up, and the sweep starts by
+  itself when the warm-up ends.
 
 ## [2.3.0] - 2026-11-17
 

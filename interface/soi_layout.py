@@ -72,8 +72,12 @@ class FlowBar(QtWidgets.QLayout):
 
     def minimumSize(self):
         m = self.contentsMargins()
-        w = max((it.sizeHint().width() for it in self._visible()), default=0)
-        return QtCore.QSize(w + m.left() + m.right(), self.heightForWidth(w + m.left() + m.right()))
+        items = self._visible()
+        w = max((it.sizeHint().width() for it in items), default=0)
+        # Altura mínima = uma linha: a altura real vem de heightForWidth na largura que a barra recebe. Usar a altura
+        # na largura mínima (um grupo por linha) inflava a altura mínima da janela até passar da tela.
+        h = max((it.sizeHint().height() for it in items), default=0)
+        return QtCore.QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
 
     def _do_layout(self, rect, test):
         m = self.contentsMargins()

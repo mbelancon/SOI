@@ -3920,6 +3920,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f'SOI Controller {__version__} - LCTM')
         self.resize(1280, 1000)
         self.start_maximized = False          # load_settings: a janela foi fechada maximizada
+        self.dual_prechecked = None           # varredura cujos avisos já foram confirmados antes do warm-up
 
         # --- Parâmetros ---
         self.ref_freq = 5.0
@@ -5257,7 +5258,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.dual_cal_scroll = QtWidgets.QScrollArea()
         self.dual_cal_scroll.setWidgetResizable(True)
         self.dual_cal_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.dual_cal_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.dual_cal_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.dual_cal_scroll.setWidget(self.dual_sweeps_panel)
         self.dual_cal_scroll.setVisible(False)
         lay.addWidget(self.dual_cal_scroll)
@@ -7294,10 +7295,12 @@ class LockInWindow(QtWidgets.QMainWindow):
         values = list(refine[0]) if refine else self._dual_planned(kind)
         if not values:
             return
-        if (kind == 'F' and not _rep and self.btn_dual_sweeps_panel.isChecked()
+        prechecked = getattr(self, 'dual_prechecked', None) == kind      # já confirmado antes do warm-up
+        self.dual_prechecked = None
+        if (kind == 'F' and not _rep and not prechecked and self.btn_dual_sweeps_panel.isChecked()
                 and not getattr(self, 'series_active', False) and not self._check_cal_conditions()):
             return
-        if not refine and not _rep and not self._confirm_lowf(kind, values):
+        if not refine and not _rep and not prechecked and not self._confirm_lowf(kind, values):
             return
         if not refine and not _rep:
             n_rep = self.sp_dual_reps.value() if (kind in ('F', 'M') and not self.cal_pending) else 1
@@ -8941,6 +8944,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         if warm is not None:
             if warm['btn'] is btn:
                 self._warm_stop()
+                self.dual_prechecked = None             # o próximo clique pergunta de novo
                 self.flash('Warm-up cancelado pelo usuário.')
             else:
                 self.flash('Aguarde o fim do warm-up em andamento (ou cancele-o).')
@@ -8952,6 +8956,11 @@ class LockInWindow(QtWidgets.QMainWindow):
             return
         if self.average_mode:
             self.flash('As varreduras precisam do Modo Lock-In.')
+            return
+        # Avisos com confirmação (pontos abaixo de 40 Hz, condições da calibração) ANTES do warm-up, com o usuário
+        # ainda na frente do PC: antes eles abriam no fim da espera e a medida ficava parada esperando o OK
+        kind = next((k for k, b in getattr(self, 'dual_btns', {}).items() if b is btn), None)
+        if kind is not None and not self._dual_prechecks(kind):
             return
         pwm = warm_pwm() if warm_pwm else self.sp_power.value()
         if pwm <= 0:
@@ -8972,6 +8981,22 @@ class LockInWindow(QtWidgets.QMainWindow):
         self.warm_timer.timeout.connect(self._warm_tick)
         self.warm_timer.start(500)
         self._warm_tick()
+
+    def _dual_prechecks(self, kind):
+        '''Confirmações da varredura do Modo Duplo feitas no clique, antes do warm-up. Marca dual_prechecked para
+        toggle_dual_sweep não perguntar de novo quando a espera acabar.'''
+        self.dual_prechecked = None
+        if getattr(self, 'series_active', False):
+            return True
+        values = self._dual_planned(kind)
+        if not values:
+            return True
+        if (kind == 'F' and self.btn_dual_sweeps_panel.isChecked() and not self._check_cal_conditions()):
+            return False
+        if not self._confirm_lowf(kind, values):
+            return False
+        self.dual_prechecked = kind
+        return True
 
     def _warm_tick(self):
         warm = getattr(self, 'warm_state', None)
@@ -9068,7 +9093,7 @@ class LockInWindow(QtWidgets.QMainWindow):
         # espaço ele quebra a linha em vez de alargar a janela. O botão tem largura para "⏹ Warm-up 0:00:00".
         eta.setWordWrap(True)
         eta.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
-        eta.setMinimumWidth(160)
+        eta.setMinimumWidth(70)                # quebra a linha; não alarga a janela com o warm-up ligado
         btn.setMinimumWidth(max(110, btn.fontMetrics().horizontalAdvance('⏹ Warm-up 0:00:00') + 24))
         # Aguardar warm-up: laser ligado (no PWM da medida) por N s antes do 1º ponto (aquecimento da amostra/célula)
         chk_w = QtWidgets.QCheckBox('Aguardar warm-up')
@@ -9127,8 +9152,43 @@ class LockInWindow(QtWidgets.QMainWindow):
             h = panel.sizeHint().height()
         if panel.minimumSizeHint().width() > sc.viewport().width():
             h += sc.horizontalScrollBar().sizeHint().height()
+        # Teto de ~40 % da altura da tela (com barra de rolagem vertical): numa janela estreita os textos quebram e o
+        # painel crescia até a janela passar da tela (o Windows só acertava ao restaurar e maximizar de novo)
+        scr = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if scr is not None:
+            h = min(h, max(150, int(0.4 * scr.availableGeometry().height())))
         if sc.height() != h + 2:
             sc.setFixedHeight(h + 2)
+
+    def event(self, ev):
+        # Rede de segurança do Windows: janela maximizada cujo conteúdo muda de tamanho (painel aberto, aviso) às vezes
+        # fica maior que a tela até o usuário restaurar e maximizar de novo. Confere 0,4 s depois de cada mudança de
+        # layout e, se a moldura passou da área útil da tela, faz o mesmo restaurar + maximizar.
+        if ev.type() == QtCore.QEvent.Type.LayoutRequest and self.isMaximized():
+            t = getattr(self, '_max_fit_timer', None)
+            if t is None:
+                t = self._max_fit_timer = QtCore.QTimer(self)
+                t.setSingleShot(True)
+                t.timeout.connect(self._check_max_fit)
+            t.start(400)
+        return super().event(ev)
+
+    def _check_max_fit(self):
+        if not self.isMaximized() or self.isFullScreen():
+            return
+        scr = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if scr is None:
+            return
+        a, f = scr.availableGeometry(), self.frameGeometry()
+        over = f.width() > a.width() + 16 or f.height() > a.height() + 16
+        fits = self.minimumSizeHint().width() <= a.width() and self.minimumSizeHint().height() <= a.height()
+        now = time.monotonic()
+        if over and fits and now - getattr(self, '_last_remax', 0.0) > 3.0:
+            self._last_remax = now
+            print(f'Janela maximizada maior que a tela ({f.width()}x{f.height()} > {a.width()}x{a.height()}): '
+                  'restaurando e maximizando de novo.')
+            self.showNormal()
+            self.showMaximized()
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
