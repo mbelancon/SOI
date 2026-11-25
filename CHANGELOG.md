@@ -25,6 +25,9 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   **oscilloscope collapses** with the header above it, and a divider sets its height against the lower plot. The FFT
   now sits next to the lower plot.
 - **INMP441:** sections *Display*, *Lock-In* and *Sweeps*.
+- **Lock-in filters (OPT101 and INMP441), Marcos 2026-11-25:** only the τ field is shown. The high-pass filter still
+  works, always automatic (2 % of f, 0.01–0.05 Hz; a hand-set value saved by an older version is not restored), and
+  the −3 dB cut-off, ENBW and 9τ wait moved to the τ tooltip.
 - **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
   so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
 - **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**

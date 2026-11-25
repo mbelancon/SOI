@@ -103,8 +103,8 @@ The STM32 (firmware 2.0.0) sends every ADC sample, 12 bits at 200 kS/s, and the 
 **Lower plot, two modes** (side panel, **Lock-In and Average** section):
 
 1. **Lock-In:** magnitude (blue) and phase (red) versus time. 50 points/s; the plot shows the last 200 (4 s).
-   - *τ* (time constant of each low-pass pole): the arrows step through the 1–3–10 sequence (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s and 100 s), and a typed value in between (e.g. 0.5 s or 200 ms) is also accepted. When the frequency changes, τ goes back to automatic: ~3 modulation periods, rounded to 0.3 s (above ~5.8 Hz), 1 s (~1.8 to 5.8 Hz) or 3 s (below that). Next to it, computed from τ: the −3 dB cut-off of the 2-pole filter (0.644/(2πτ)), the equivalent noise bandwidth ENBW = 1/(8τ) and the 9τ wait used by sweeps.
-   - *High-pass* (Hz): automatic when the frequency changes (2 % of f, limited to 0.01–0.05 Hz) and editable by hand.
+   - *τ* (time constant of each low-pass pole): the arrows step through the 1–3–10 sequence (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s and 100 s), and a typed value in between (e.g. 0.5 s or 200 ms) is also accepted. When the frequency changes, τ goes back to automatic: ~3 modulation periods, rounded to 0.3 s (above ~5.8 Hz), 1 s (~1.8 to 5.8 Hz) or 3 s (below that). The τ tooltip shows, computed from τ: the −3 dB cut-off of the 2-pole filter (0.644/(2πτ)), the equivalent noise bandwidth ENBW = 1/(8τ) and the 9τ wait used by sweeps.
+   - *High-pass*: removes the DC level before demodulation; automatic (2 % of f, limited to 0.01–0.05 Hz), with no field on screen since 2.5.0.
 2. **Average:** mean ADC waveform over N pulses (1–1000), synchronized on the laser rising edge.
    - ◀ / ▶ adjust the pre-trigger in 10 ms steps.
    - **Curve analysis** (with the plot paused): fit of **1 or 2 exponentials** `y = y∞ + A1·e^(−t/τ1) [+ A2·e^(−t/τ2)]` to the *On* or *Off* segment. The interval is chosen with two draggable green lines. **Fit** draws the model with the typed parameters; **Optimize** runs least squares starting from them and shows R².
@@ -137,7 +137,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - **R/θ ↔ X/Y**: magnitude and phase, or in-phase and quadrature components.
 - **Auto-phase**: zeroes the mean phase of the last 1 s (the signal goes entirely into X). *Offset (°)*: manual correction.
 
-**Lock-in** (side panel): τ, High-pass and *Window (s)* (1–60 s displayed). 20 points/s (blocks of 2400 samples at 48 kHz).
+**Lock-in** (side panel): τ (high-pass automatic, as in the OPT101) and *Window (s)* (1–60 s displayed). 20 points/s (blocks of 2400 samples at 48 kHz).
 
 **Noise/SNR:** mean and standard deviation of the lock-in output over a moving window (the same window as the plot, up to 30 s). SNR is shown in dB. *SNR alert < (dB)* defaults to 10 dB (signal ≈ 3× noise). Use a window of at least 10τ.
 

@@ -565,7 +565,8 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                     w = getattr(self, name)
                     w.setValue(int(v) if isinstance(w, QtWidgets.QSpinBox) else v)
             # Filtros por último: a frequência redefine os cortes automáticos
-            for name in ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
+            # 2.5.0: passa-altas sem campo na tela; fica no automático da frequência (um valor manual antigo não volta)
+            for name in ('sp_tau', 'sp_audio_tau'):
                 v = num(name)
                 if v is not None:
                     getattr(self, name).setValue(v)

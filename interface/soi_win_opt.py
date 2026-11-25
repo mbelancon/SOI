@@ -62,20 +62,17 @@ class OptMixin:
         '''τ do passa-baixas, valores derivados dele (−3 dB, ENBW, espera) e passa-altas de um lock-in, com
         dicas. Devolve o rótulo dos valores derivados.'''
         lbl_tau = QtWidgets.QLabel()
-        if isinstance(lay, QtWidgets.QGridLayout):     # 2.5.0: painel lateral (τ, valores derivados, passa-altas)
-            lbl_tau.setWordWrap(True)
-            lbl_tau.setStyleSheet('color:#555;')
-            for r, (text, w, tip) in enumerate((('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
-                                                 ('Passa-Altas (Hz):', sp_hp, HP_TIP))):
-                w.setToolTip(tip)
-                if text:
-                    lbl = QtWidgets.QLabel(text)
-                    lbl.setToolTip(tip)
-                    lay.addWidget(lbl, r, 0)
-                    lay.addWidget(w, r, 1)
-                else:
-                    lay.addWidget(w, r, 0, 1, 2)
+        if isinstance(lay, QtWidgets.QGridLayout):
+            # 2.5.0 (Marcos, 25/11): no painel lateral só o τ. O passa-altas continua agindo, automático (2 % de f,
+            # 0,01–0,05 Hz), sem campo na tela; −3 dB, ENBW e espera vão para a dica do τ (update_tau_labels)
+            lbl = QtWidgets.QLabel('τ:')
+            lbl.setToolTip(TAU_TIP)
+            sp_tau.setToolTip(TAU_TIP)
+            sp_tau.tau_info_tip = True
+            lay.addWidget(lbl, 0, 0)
+            lay.addWidget(sp_tau, 0, 1)
             lay.setColumnStretch(1, 1)
+            sp_hp.setToolTip(HP_TIP)
             return lbl_tau
         lbl_tau.setMinimumWidth(250)
         for text, w, tip in (('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
@@ -92,10 +89,16 @@ class OptMixin:
 
     def update_tau_labels(self):
         '''Atualiza o corte −3 dB, a ENBW e a espera exibidos ao lado do τ de cada lock-in.'''
-        if hasattr(self, 'lbl_tau'):
-            self.lbl_tau.setText(fmt_lp_info(lp_tau(self.cutoff_lp, RATE.FS)))
-        if hasattr(self, 'lbl_audio_tau'):
-            self.lbl_audio_tau.setText(fmt_lp_info(lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
+        from soi_i18n import tr
+        for lbl, sp, cut, fs in (('lbl_tau', 'sp_tau', 'cutoff_lp', RATE.FS),
+                                 ('lbl_audio_tau', 'sp_audio_tau', 'audio_cutoff_lp', AUDIO_FS_REAL)):
+            if not hasattr(self, lbl):
+                continue
+            info = fmt_lp_info(lp_tau(getattr(self, cut), fs))
+            getattr(self, lbl).setText(info)
+            w = getattr(self, sp, None)
+            if getattr(w, 'tau_info_tip', False):            # 2.5.0: valores derivados na dica do τ
+                w.setToolTip(tr(TAU_TIP) + '\n\n' + tr(info))
 
     def on_hp(self, val):
         self.cutoff_hp = val
