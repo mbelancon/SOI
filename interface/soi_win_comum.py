@@ -751,4 +751,3 @@ class CommonMixin:
         with self.dsp_lock:
             self.dsp.set_mains_filter(checked)
 
-    # ------------------------------------------------------------ Teste de resolução

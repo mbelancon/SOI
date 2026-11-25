@@ -10,6 +10,25 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.5.0] - in development
+
+Minor version: only the interface changes (firmware 2.0.0, same USB protocol). Goal: a cleaner window that fits
+1366×768 screens (also at 125 % Windows scaling). Plan approved by Marcos on 2026-11-24/25.
+
+### Removed (requested by Marcos, 2026-11-25)
+- **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
+  opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB
+  drop does not turn into simulated data), and the headless mode still simulates only with `--simulado`.
+- **Cell selector (OPC / Chamber) and the OPC mode:** everything is the Chamber cell. Files still write
+  `# Celula = Camara`, and old OPC files still open. `--celula` accepts only `Camara`.
+- **Setup drawings** (cell schematic in the Signal vs f and Calibration panels) and the **explanatory texts of the
+  Calibration panel** (sample descriptions, expected curve, mounting steps); the pair check and thickness warnings stay.
+- **Resolution test** (button, window and analysis).
+- **60 Hz filter** (OPT101 and INMP441): the mains notches are always off. The "avoid multiples of 60 Hz" option of the
+  sweeps stays.
+- **"Allow averages × N"** of adaptive τ: repeat separate sweeps instead (Repetitions). `--medias` (headless and old
+  series files) is ignored with a notice.
+
 ## [2.4.0] - 2026-11-18
 
 Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.

@@ -628,9 +628,9 @@ class DualSweepMixin:
         return False
 
     def _adapt_blocks_max(self):
-        """Número máximo de medidas por ponto (1 sem "Permitir médias")."""
-        chk = getattr(self, 'chk_dual_blocks', None)
-        return self.sp_dual_blocks.value() if chk is not None and chk.isChecked() else 1
+        """Número máximo de medidas por ponto. Desde a 2.5.0 sempre 1: "Permitir médias" saiu (Marcos, 25/11); quando
+        for preciso, repetem-se varreduras separadas (Repetições)."""
+        return 1
 
     def _blocks_reset(self):
         self.adapt_blocks, self.adapt_block_len = 1, None

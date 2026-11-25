@@ -51,11 +51,11 @@ def _headless_args(argv):
     ap.add_argument('--aquecer', type=float, default=0.0, metavar='S',
                     help='warm-up: espera S segundos com o laser ligado (no PWM escolhido) antes de começar')
     ap.add_argument('--medias', type=int, default=0, metavar='N',
-                    help=f'τ adaptativo: "Permitir médias", até N medidas com o mesmo τ (o τ max) por ponto')
+                    help='(ignorado desde a 2.5.0: "Permitir médias" saiu; use --repeticoes)')
     ap.add_argument('--adapt-tudo', action='store_true',
                     help=f'τ adaptativo também abaixo de {LOWF_FMAX:g} Hz (padrão: τ fixo por faixa abaixo)')
     ap.add_argument('--pwm', type=float, default=100.0, help='PWM do laser em %% (padrão 100)')
-    ap.add_argument('--celula', choices=('Camara', 'OPC'), default=None, help='montagem (padrão: a da interface)')
+    ap.add_argument('--celula', choices=('Camara',), default=None, help='montagem (desde a 2.5.0 só Camara; mantido por compatibilidade)')
     ap.add_argument('--cal', default=None, help='arquivo CAL_*.csv da pasta Medidas aplicado no gráfico, ou "nenhuma"')
     ap.add_argument('--porta', default=None, help='porta serial (ex.: COM5); padrão: detecção automática')
     ap.add_argument('--simulado', action='store_true', help='amostragem simulada, sem a placa')
@@ -354,9 +354,9 @@ def run_headless(argv, LockInWindow):
     if a.sinal_t and soi_serie.mains_near(a.f) is not None:
         print('Aviso: ' + soi_serie.mains_msg(a.f), flush=True)
     win.chk_dual_adapt40.setChecked(not a.adapt_tudo)
-    win.chk_dual_blocks.setChecked(a.medias > 1)
+    win.chk_dual_blocks.setChecked(False)
     if a.medias > 1:
-        win.sp_dual_blocks.setValue(a.medias)
+        print('Aviso: --medias é ignorado desde a 2.5.0 ("Permitir médias" saiu); use --repeticoes.', flush=True)
     win._apply_adapt_ui()
     if a.tau is not None:
         win.dual_tau_w['F'].setValue(a.tau)

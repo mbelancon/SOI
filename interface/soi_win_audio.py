@@ -26,9 +26,6 @@ class AudioMixin:
                 return
             res = self.dsp.process(self.rx_bytes, RATE.DECIMATION, not self.average_mode, self.normalize_mode,
                                    stream_pos=self.rx_pos)
-            cap = self.res_capture          # Teste de resolução: guarda as palavras cruas consumidas
-            if cap is not None and len(cap) < self.res_capture_bytes:
-                cap.extend(self.rx_bytes[:min(res.consumed, self.res_capture_bytes - len(cap))])
             if res.consumed > 0:
                 del self.rx_bytes[:res.consumed]
                 self.rx_pos += res.consumed // 2

@@ -107,8 +107,7 @@ class CalMixin:
                              for s, k in (('A', a), ('B', b)) if k is not None) if w]
         pair = (f'<span style="color:#2e7d32;">✓ par indicado: {why}</span>' if ok else
                 f'<span style="color:#c62828;">✗ par não indicado: {why}</span>')
-        info = (f'<b>Célula:</b> {CELLS.get(cell, cell)} &nbsp; <b>Curva esperada nas duas:</b> S ∝ f<sup>−{n:g}</sup>, '
-                f'fase constante &nbsp; {pair}')
+        info = pair                                   # 2.5.0: sem "Célula" e "Curva esperada" (Marcos, 25/11)
         if warns:
             info += '<br><span style="color:#b35c00;">⚠ ' + '<br>⚠ '.join(warns) + '</span>'
         self.lbl_cal_ref_info.setText(info)

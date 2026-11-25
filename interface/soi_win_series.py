@@ -45,7 +45,7 @@ class SeriesMixin:
                 lo, hi = lo + t, hi + t
             elif not p.get('adapt_tudo') and lowf_band_tau(v) is not None:
                 st, me = adapt_times(tau)
-                t = st + me * max(1, int(p.get('medias', 1)))
+                t = st + me                         # 2.5.0: sem médias por ponto
                 lo, hi = lo + t, hi + t
             else:
                 lo += sum(adapt_times(adapt_tau_min(v)))
@@ -143,9 +143,7 @@ class SeriesMixin:
         self.chk_dual_adapt.setChecked(not p['tau_fixo'])
         self.sp_dual_reps.setValue(max(1, int(p.get('repeticoes', 1))))
         self.chk_dual_adapt40.setChecked(not p.get('adapt_tudo', False))
-        self.chk_dual_blocks.setChecked(int(p.get('medias', 1)) > 1)
-        if int(p.get('medias', 1)) > 1:
-            self.sp_dual_blocks.setValue(int(p['medias']))
+        self.chk_dual_blocks.setChecked(False)         # 2.5.0: "--medias" de séries antigas é ignorado
         self._apply_adapt_ui()
         self.dual_tau_w['F'].setValue(p['tau'])
         if not p['tau_fixo']:

@@ -59,7 +59,7 @@ PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET o
    ```bash
    python interface/soi_controller.py
    ```
-   The port is detected automatically. Without the STM32 connected, tick **Simular amostragem** (simulate sampling) to try the interface with simulated signals.
+   The port is detected automatically. Without the STM32 connected, the interface switches to simulated signals by itself (the status bar says so) and back to the board when it is plugged in.
 5. Measurements are saved in the `Medidas/` folder, created next to the script (or the executable).
 
 ## Documentation

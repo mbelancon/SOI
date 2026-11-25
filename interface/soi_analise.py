@@ -631,7 +631,7 @@ def fit_pa_standard(f, s, s_rel, dphi, dphi_e, snr, snr_min, use_phase=True, n_e
 # Rosencwaig–Gersho (célula fechada, amostra dentro): amostra opaca dá S ∝ f^-1 seja termicamente fina ou
 # grossa. OPC (amostra fecha a célula, detecção traseira): folha termicamente fina dá S ∝ f^-1,5, enquanto
 # f << f1 = α/(πL²).
-CELLS = {'OPC': 'OPC', 'Camara': 'Câmara'}
+CELLS = {'Camara': 'Câmara'}      # 2.5.0: só a Câmara (modo OPC removido, Marcos 25/11)
 CELL_TIPS = {'OPC': 'OPC: a amostra fecha a abertura da célula; a luz chega pelo lado de fora e o microfone fica do outro lado.',
              'Camara': 'Câmara: a amostra fica dentro da célula, iluminada através de uma janela de vidro.'}
 CAL_REFS = {

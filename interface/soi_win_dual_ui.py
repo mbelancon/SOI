@@ -133,6 +133,9 @@ class DualUiMixin:
         self.sp_dual_blocks.setEnabled(False)
         self.chk_dual_blocks.toggled.connect(lambda _: (self._apply_adapt_ui(), self.update_dual_eta()))
         self.sp_dual_blocks.valueChanged.connect(self.update_dual_eta)
+        for w in (self.chk_dual_blocks, self.sp_dual_blocks):    # 2.5.0: fora da tela (Permitir médias saiu)
+            w.setParent(self)
+            w.setVisible(False)
         self.sp_dual_reps = QtWidgets.QSpinBox()
         self.sp_dual_reps.setRange(1, 20)
         self.sp_dual_reps.setValue(SWEEP_REPS_DEF)
@@ -187,7 +190,7 @@ class DualUiMixin:
             '113 Hz; acima de ~500 Hz quase nada é descartado. À noite (19/11) não ajudou. O CSV ganha as colunas\n'
             'Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido.')
         adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
-                     ('Precisão:', self.sp_dual_adapt_tol), ('', self.chk_dual_blocks), ('', self.sp_dual_blocks),
+                     ('Precisão:', self.sp_dual_adapt_tol),
                      ('', self.lbl_dual_taumax))
         # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
         self.lbl_dual_lowf = {}
@@ -630,18 +633,10 @@ class DualUiMixin:
         self.lbl_cal_ref_info.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_cal_ref_info.setWordWrap(True)
         cal_v.addWidget(self.lbl_cal_ref_info)
-        # Esquema da montagem (Câmara/OPC): fica no quadro Varredura (ao lado dos campos da varredura)
+        # 2.5.0 (Marcos, 25/11): sem o esquema da montagem e sem as dicas de montagem; os widgets continuam (fora da
+        # tela) porque _on_cal_samples ainda os atualiza
         self.cal_schematic = CellSchematic()
-        sch_v = QtWidgets.QVBoxLayout()
-        sch_v.setSpacing(2)
-        sch_v.addWidget(self.cal_schematic)
-        sch_v.addStretch(1)
-        self.dual_box_f_h.addLayout(sch_v)
-        # Dicas de montagem na coluna da esquerda (largura livre): nunca invadem o desenho
         self.lbl_cal_tips = QtWidgets.QLabel('')
-        self.lbl_cal_tips.setWordWrap(True)
-        self.lbl_cal_tips.setStyleSheet('color:#404040;')
-        cal_v.addWidget(self.lbl_cal_tips)
         # Widgets do antigo "Fitar padrão" (fora do layout): a calibração agora é M = S·fⁿ, sem ajuste de modelo,
         # e a faixa com S ∝ f⁻ⁿ é procurada no painel Ajuste
         self.chk_dual_std = QtWidgets.QCheckBox()
@@ -654,8 +649,7 @@ class DualUiMixin:
         self.lbl_cal_steps = QtWidgets.QLabel(
             'Monte a <b>A</b> como no esquema (quadro Varredura) e clique em <b>Medir A</b>; troque pela <b>B</b> sem mexer em mais nada e '
             'clique em <b>Medir B</b>; depois, <b>Gerar calibração</b> (verificada se a razão A/B for constante em ≥ 1 década).')
-        self.lbl_cal_steps.setWordWrap(True)
-        frow.addWidget(self.lbl_cal_steps, 1)
+        self.lbl_cal_steps.setWordWrap(True)          # 2.5.0: texto de instruções fora da tela (Marcos, 25/11)
         frow = QtWidgets.QHBoxLayout()
         cal_v.addLayout(frow)
         self.btn_dual_adv = QtWidgets.QPushButton('Avançado ▸')

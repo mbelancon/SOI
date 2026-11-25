@@ -240,6 +240,7 @@ SERIES_DIR = os.path.join(os.path.dirname(MEDIDAS_DIR), 'Series')   # arquivos *
 MAX_POINTS = 200          # Pontos exibidos de R e Fase
 MAX_RX_BYTES = 4_000_000  # Proteção contra acúmulo de bytes se a GUI travar (10 s a 200 kS/s; múltiplo de 2)
 MAX_SCOPE_POINTS = 120_000  # pontos guardados no osciloscópio; acima disso a janela é reduzida por média
+SIM_AUTO_DELAY_S = 2.0    # sem STM32 por este tempo depois de abrir: entra no modo simulado sozinho
 GUI_INTERVAL_MS = 40      # 25 FPS (indistinguível de 30 para este sinal)
 STATUS_INTERVAL = 0.15    # s entre atualizações do texto de status
 RANGE_INTERVAL = 0.5      # s entre reajustes automáticos de escala Y

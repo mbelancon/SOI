@@ -73,11 +73,10 @@ class UiMixin:
         self.chk_mic_cal.toggled.connect(lambda _: self._show_dual_results())
         excitation.addWidget(self.chk_mic_cal)
         # Configuração da célula: a calibração só vale na configuração em que foi feita (acústica diferente)
-        excitation = top_bar.group()
-        lbl_cell = QtWidgets.QLabel('Célula:')
-        lbl_cell.setStyleSheet('font-weight:bold;')
-        excitation.addWidget(lbl_cell)
-        self.cmb_cell = QtWidgets.QComboBox()
+        # 2.5.0: só a Câmara (modo OPC removido, Marcos 25/11). O combo continua fora da tela: vai para os CSV
+        # ("# Celula = Camara") e as funções da calibração o leem.
+        self.cmb_cell = QtWidgets.QComboBox(self)
+        self.cmb_cell.setVisible(False)
         for key, name in CELLS.items():
             self.cmb_cell.addItem(name, key)
             self.cmb_cell.setItemData(self.cmb_cell.count() - 1, CELL_TIPS[key], QtCore.Qt.ItemDataRole.ToolTipRole)
@@ -85,7 +84,6 @@ class UiMixin:
                                  + '\nA calibração do microfone só vale na configuração em que foi feita (o volume de gás e a\n'
                                    'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
-        excitation.addWidget(self.cmb_cell)
         excitation = top_bar.group()
         # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
         # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
@@ -110,8 +108,9 @@ class UiMixin:
         self.chk_sim.setStyleSheet('QCheckBox{font-weight:bold;color:#006400;}')
         self.chk_sim.setToolTip('Gera um sinal simulado (com ruído) quando não há STM32 conectado.')
         self.chk_sim.toggled.connect(self.on_simulate)
+        # 2.5.0: sem caixa na tela (simulado automático sem STM32); o widget guarda o estado e fica escondido
+        self.chk_sim.setParent(self)
         self.chk_sim.setVisible(False)
-        excitation.addWidget(self.chk_sim)
         self.opt_supply = 3.3                 # alimentação do OPT101 (V), escolhida em Configurações
         self.chk_scope_fixed = QtWidgets.QCheckBox('Escala do osciloscópio fixa de 0 a 3,3 V')
         self.chk_scope_fixed.setChecked(False)
@@ -168,7 +167,9 @@ class UiMixin:
         if not getattr(self.dsp, 'supports_mains', False):
             self.chk_mains.setEnabled(False)
             self.chk_mains.setToolTip('Disponível apenas no lock-in em Python.')
-        top.addWidget(self.chk_mains)
+        # 2.5.0 (Marcos, 25/11): sem o Filtro 60 Hz na tela; a caixa fica escondida e sempre desmarcada
+        self.chk_mains.setParent(self)
+        self.chk_mains.setVisible(False)
         top.addSpacing(16)
         top.addWidget(QtWidgets.QLabel('Sobreamostragem:'))
         self.cmb_osr = QtWidgets.QComboBox()
@@ -179,17 +180,9 @@ class UiMixin:
             'O STM32 envia todas as amostras do ADC (12 bits, 200 kS/s). A interface tira a média de\n'
             'OSR amostras seguidas: o ruído branco cai com √OSR (+½ bit a cada dobra) e a taxa\n'
             'cai para 200/OSR kS/s. 16x reproduz a versão 1.0.0 (12,5 kS/s).\n'
-            'Use "Teste de resolução" para ver até onde o ganho é real no seu sinal.\n'
             'Bloqueado durante varreduras.')
         self.cmb_osr.currentIndexChanged.connect(lambda i: self.set_osr(self.cmb_osr.itemData(i)))
         top.addWidget(self.cmb_osr)
-        self.btn_res_test = QtWidgets.QPushButton('Teste de resolução')
-        self.btn_res_test.setToolTip(
-            'Mede, com sinal estável (laser desligado ou luz constante), quanto a sobreamostragem\n'
-            'reduz o ruído de fato: ruído × OSR comparado com o ideal 1/√OSR, bits efetivos e\n'
-            'histograma dos códigos crus do ADC.')
-        self.btn_res_test.clicked.connect(self.open_resolution_test)
-        top.addWidget(self.btn_res_test)
         # Faixa em que a frequência do chopper é procurada (modulação óptica)
         self.ext_range_w = QtWidgets.QWidget()
         er = QtWidgets.QHBoxLayout(self.ext_range_w)
@@ -677,9 +670,10 @@ class UiMixin:
         self.chk_audio_mains = QtWidgets.QCheckBox('Filtro 60 Hz')
         self.chk_audio_mains.setToolTip('Rejeita 60 Hz e múltiplos (até 1,5 kHz) no sinal do lock-in.\n'
                                         'Notches que caem sobre a frequência de modulação são omitidos.')
-        self.chk_audio_mains.setChecked(self.audio_mains)
+        self.chk_audio_mains.setChecked(False)
         self.chk_audio_mains.toggled.connect(self.on_audio_mains)
-        audio_params.addWidget(self.chk_audio_mains)
+        self.chk_audio_mains.setParent(self)            # 2.5.0: sem o Filtro 60 Hz na tela (sempre desligado)
+        self.chk_audio_mains.setVisible(False)
         audio_params.addSpacing(12)
         audio_params.addWidget(QtWidgets.QLabel('Janela (s):'))
         self.sp_audio_span = self._dspin(1.0, AUDIO_NOISE_SPAN, self.audio_span, 0, 1.0, self.on_audio_span, width=60)
