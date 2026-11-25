@@ -32,13 +32,29 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
 - Pasta local de trabalho e testes: `C:\Users\mbelancon\ownCloud\Projetos\Claude\SOI` (roda o script Python,
   não o executável; a interface grava em `interface\Medidas`). Mudanças testadas lá voltam ao repositório por
   PR antes de cada release.
-- Ao copiar uma versão nova para a pasta local, guardar antes um backup da versão anterior.
+- A pasta local se atualiza só por git (`git fetch` + checkout da branch em teste, ou `git pull`), nunca copiando
+  arquivos. Antes, anotar o commit anterior (é o backup: voltar = checkout dele). Nunca atualizar durante medidas.
+- PC padrão do projeto: sbook2. Na pasta SOI dele nunca usar `git push --tags` nem `--mirror` (tags antigas
+  apagadas voltariam ao GitHub): empurrar só branches ou tags específicas.
+
+## Medidas
+- Grade de frequências: evitar múltiplos de 60 Hz e a série da ventoinha do laser (170 Hz × k).
+- Recurso novo de análise (descarte, correções) é avaliado offline com dados reais antes de propor na interface.
+
+## Apresentações
+- Ênfase em portátil, sem lock-in nem chopper externos, velocidade/estabilidade do STM32; "baixo custo" não é o
+  ponto principal.
 
 ## Segurança do hardware
 - A entrada analógica do STM32F401 (PA0) não tolera 5 V. O OPT101 pode ser alimentado com 5 V para ganhar
   resolução (saída máx. ~3,7 V), mas só com proteção no ADC: 1 kΩ em série + Schottky BAT54 para 3,3 V.
   Sempre avisar do risco de queimar o STM32 ao sugerir essa opção. Padrão: Vs = 3,3 V, saída máx. ~2,0 V.
 - O laser é sempre acionado por driver, nunca direto pelo PA8.
+
+## Economia de tokens
+- Uma thread por recurso ou análise; assunto novo vai para thread nova. Ler só o trecho/módulo necessário do código
+  (grep antes de ler). Descobertas de medidas ficam no NOTAS_MEDIDAS.md, lido só quando o trabalho é de medida.
+- Memória do projeto: índice curto, um arquivo por assunto, sem logs de cópias ou md5.
 
 ## CONTEXTO.md e conversas longas
 - Ao fim de uma sessão em que algo mudou, propor a atualização do CONTEXTO.md como diff curto e só gravar
