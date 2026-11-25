@@ -62,7 +62,6 @@ class AudioMixin:
         self.audio_fft_panel.setVisible(use_fft)
         self.audio_li_group.setEnabled(use_lockin)
         self.audio_xy_group.setEnabled(show_li)
-        self.lbl_audio_noise.setVisible(use_lockin)
         # Com o ruído embaixo, o eixo de tempo (rótulo) fica só no gráfico de baixo
         self.plot_audio_wave.getPlotItem().getAxis('bottom').setLabel('' if show_noise else 'Tempo relativo (s)')
         if not use_lockin:

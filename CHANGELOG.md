@@ -28,6 +28,9 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
 - **Lock-in filters (OPT101 and INMP441), Marcos 2026-11-25:** only the τ field is shown. The high-pass filter still
   works, always automatic (2 % of f, 0.01–0.05 Hz; a hand-set value saved by an older version is not restored), and
   the −3 dB cut-off, ENBW and 9τ wait moved to the τ tooltip.
+- **INMP441, Marcos 2026-11-25:** the noise line above the plots (signal, noise, SNR, density) and the values box of
+  the FFT fit are no longer shown. The SNR stays in the status bar and in the Noise/SNR plot; the fit curve and the
+  "peak not found" notice stay. (The box's peak/floor SNR is a different quantity from the lock-in SNR.)
 - **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
   so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
 - **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**

@@ -144,7 +144,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 **FFT:**
 - Default: zoom around the reference, with an FFT of 4 s of history (resolution ≈ 0.25 Hz).
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
-- *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
+- *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window and draws the fitted curve (since 2.5.0 without the values box; the SNR is in the status bar and the Noise/SNR plot).
 
 **Detect background noise...** (button in the *Display* section; the same button is at the top of the Dual Mode panel) opens a window that looks for noise sources at fixed
 frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the

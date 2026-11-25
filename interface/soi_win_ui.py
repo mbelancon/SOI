@@ -788,7 +788,9 @@ class UiMixin:
         self.lbl_audio_noise.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_audio_noise.setWordWrap(True)
         self.lbl_audio_noise.setStyleSheet('font-size:11pt;padding:2px 6px;')
-        audio_layout.addWidget(self.lbl_audio_noise)
+        # 2.5.0 (Marcos, 25/11): linha fora da tela (o SNR já está na barra de status e no gráfico Ruído/SNR)
+        self.lbl_audio_noise.setParent(self)
+        self.lbl_audio_noise.setVisible(False)
 
         audio_plots = QtWidgets.QHBoxLayout()
 
