@@ -1518,6 +1518,7 @@ class SeriesTab(QtWidgets.QWidget):
         g.addWidget(QtWidgets.QLabel('Repetições (mediana):'), 4, 0)
         g.addWidget(f['repeticoes'], 4, 1)
         g.addWidget(f['adapt_tudo'], 5, 0, 1, 3)
+        f['adapt_tudo'].setVisible(False)               # 2.5.0: τ adaptativo sempre em toda a faixa
         g.addWidget(f['desligar'], 5, 3, 1, 3)
         f['tau_note'] = QtWidgets.QLabel('τ fixo: 4 s abaixo de 40 Hz (espera 7τ, média 3τ). τ > 4 s não melhora: '
                                          'use repetições.')

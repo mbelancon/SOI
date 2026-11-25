@@ -53,7 +53,7 @@ def _headless_args(argv):
     ap.add_argument('--medias', type=int, default=0, metavar='N',
                     help='(ignorado desde a 2.5.0: "Permitir médias" saiu; use --repeticoes)')
     ap.add_argument('--adapt-tudo', action='store_true',
-                    help=f'τ adaptativo também abaixo de {LOWF_FMAX:g} Hz (padrão: τ fixo por faixa abaixo)')
+                    help='(desde a 2.5.0 o τ adaptativo vale em toda a faixa; mantido por compatibilidade)')
     ap.add_argument('--pwm', type=float, default=100.0, help='PWM do laser em %% (padrão 100)')
     ap.add_argument('--celula', choices=('Camara',), default=None, help='montagem (desde a 2.5.0 só Camara; mantido por compatibilidade)')
     ap.add_argument('--cal', default=None, help='arquivo CAL_*.csv da pasta Medidas aplicado no gráfico, ou "nenhuma"')
@@ -353,7 +353,7 @@ def run_headless(argv, LockInWindow):
                'Pontos deslocados da rede: ') + ', '.join(f'{x:g} -> {y:g} Hz' for x, y in moved), flush=True)
     if a.sinal_t and soi_serie.mains_near(a.f) is not None:
         print('Aviso: ' + soi_serie.mains_msg(a.f), flush=True)
-    win.chk_dual_adapt40.setChecked(not a.adapt_tudo)
+    win.chk_dual_adapt40.setChecked(False)          # 2.5.0: τ adaptativo em toda a faixa (--adapt-tudo é o padrão)
     win.chk_dual_blocks.setChecked(False)
     if a.medias > 1:
         print('Aviso: --medias é ignorado desde a 2.5.0 ("Permitir médias" saiu); use --repeticoes.', flush=True)

@@ -836,7 +836,6 @@ class DualSweepMixin:
             return
         if self.dual_kind == 'P':
             self._fit_dual_model(np.empty(0), np.empty(0), np.empty(0), np.empty(0), np.empty(0))
-            self._dual_diagnose(None, None, None)
             if self.btn_dual_model_panel.isChecked() and self.cmb_dual_model.currentData() is not None:
                 self.lbl_dual_model.setText('O ajuste com modelos vale só para a varredura em frequência.')
             self._set_dual_points(ro, ra, np.arange(x.size), keep)
@@ -1006,7 +1005,6 @@ class DualSweepMixin:
         self.c_dual_a_theory.setData([], [])
         m = ok & keep                                     # pontos que entram no ajuste
         self._fit_dual_model(x[m], s[m], s_rel[m], dphi[m], dphi_e[m])
-        self._dual_diagnose(x[m], s[m], dphi[m])
         # Calibração (painel aberto): M(f) = S(f)·fⁿ da referência, sem ajuste de modelo; a faixa plana de M é onde
         # o sistema não distorce (lá S segue f⁻ⁿ). Pronta para "Gerar curva de calibração".
         cal_on = self.btn_dual_cal_panel.isChecked()
@@ -1307,8 +1305,6 @@ class DualSweepMixin:
                     f.write(f'# {self.dual_fit}\n')
                 if q['kind'] == 'F' and self.dual_model_txt:
                     f.write(f'# Ajuste com modelo: {self.dual_model_txt}\n')
-                if q['kind'] == 'F' and self.dual_diag_txt:
-                    f.write(f'# Diagnostico: {self.dual_diag_txt}\n')
                 if self.dual_excluded:
                     f.write(f'# Pontos excluídos do ajuste com clique ({col}): '
                             + ', '.join(f'{self.dual_results[i][0]:g}' for i in sorted(self.dual_excluded))

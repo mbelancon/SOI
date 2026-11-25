@@ -94,61 +94,6 @@ class DualPanelsMixin:
             self.btn_dual_peak.setChecked(False)
         self._show_dual_results()
 
-    def _dual_diagnose(self, f, s, dphi):
-        '''Botão Diagnóstico: ajusta diagnose_freq aos pontos do ajuste (os mesmos do modelo) e desenha as
-        componentes. O resultado fica guardado enquanto os pontos não mudam (o ajuste leva alguns segundos).'''
-        for c in self.c_dual_diag:
-            c.setData([], [])
-        for lg in self.dual_diag_leg:
-            lg.clear()
-            lg.setVisible(False)
-        self.dual_diag_txt = None
-        freq = f is not None
-        self.btn_dual_diag.setEnabled(freq)
-        on = freq and self.btn_dual_diag.isChecked() and not self.dual_active   # não refaz a cada ponto
-        self.lbl_dual_diag.setVisible(on)
-        if not on:
-            return
-        key = (np.asarray(f).tobytes(), np.asarray(s).tobytes(), np.asarray(dphi).tobytes())
-        if self.dual_diag is None or self.dual_diag[0] != key:
-            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
-            try:
-                self.dual_diag = (key, diagnose_freq(f, s, dphi))
-            finally:
-                QtWidgets.QApplication.restoreOverrideCursor()
-        d = self.dual_diag[1]
-        if d is None:
-            self.lbl_dual_diag.setText('<b>Diagnóstico:</b> são necessários pelo menos 12 pontos cobrindo uma década '
-                                       'de frequência.')
-            return
-        ff = np.logspace(np.log10(d['fmin']), np.log10(d['fmax']), 400)
-        tot, pa, bg = d['func'](ff)
-        self.c_dual_diag[0].setData(ff, np.abs(tot))
-        self.c_dual_diag[1].setData(ff, np.abs(pa))
-        if d['bg']:
-            self.c_dual_diag[2].setData(ff, np.abs(bg))
-        # fase do modelo desenrolada e posta na mesma volta dos dados
-        ph = np.degrees(np.unwrap(np.angle(tot)))
-        fs_ = np.asarray(f, dtype=float)
-        k = np.argsort(fs_)
-        off = np.median(np.asarray(dphi, dtype=float)[k] - np.interp(fs_[k], ff, ph))
-        self.c_dual_diag[3].setData(ff, ph + 360.0 * np.round(off / 360.0))
-        la, lb = self.dual_diag_leg
-        la.addItem(self.c_dual_diag[0], 'Modelo (soma)')
-        la.addItem(self.c_dual_diag[1], f'Fotoacústico (∝ f⁻ⁿ, n = {d["n"]:.2f})')
-        if d['bg']:
-            la.addItem(self.c_dual_diag[2], 'Fundo plano (não fotoacústico)')
-        lb.addItem(self.c_dual_diag[3], 'Modelo (soma)')
-        for lg in self.dual_diag_leg:
-            lg.setVisible(True)
-        txt, tip = diagnose_text(d, calibrated=self.dual_cal is not None)
-        if self.dual_cal is None:
-            txt += ('<br><span style="color:#606060;">Sem calibração aplicada, a resposta da célula + microfone entra no '
-                    'ajuste e parte do "fundo" pode ser dela. Para separar componentes da amostra, aplique a calibração.</span>')
-        self.lbl_dual_diag.setText('<b>Diagnóstico</b> &nbsp; ' + txt)
-        self.lbl_dual_diag.setToolTip(tip)
-        self.dual_diag_txt = tip.replace('\n', ' ')
-
     def _on_dual_peak_mode(self, checked):
         '''Liga a captura de dois cliques no gráfico da esquerda (faixa do ajuste da ressonância).'''
         self.dual_peak_clicks = [] if checked else None

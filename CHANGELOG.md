@@ -34,6 +34,11 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   FFT lost the same box.
 - **Refine resonance** (Dual Mode, Signal vs f) removed: most measurements will use non-resonant cells (Marcos,
   2026-11-25). The *Cell resonance* fit model stays.
+- **Diagnostics** button and analysis (Dual Mode, photoacoustic + flat background fit) removed (Marcos, 2026-11-25);
+  CSVs no longer get the `# Diagnostico` line.
+- **Adaptive τ over the whole range** (Marcos, 2026-11-25): the "only f > 40 Hz" box is gone and adaptive τ now works
+  the same at every frequency (headless `--adapt-tudo` is now the default and kept only for compatibility). The
+  minimum τ of about 3 modulation periods stays (3 s at 1 Hz), so the lock-in still rejects the 2f ripple.
 - **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
   so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
 - **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**

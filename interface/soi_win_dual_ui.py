@@ -107,7 +107,10 @@ class DualUiMixin:
             'sinal limpo, o τ cai para ~0,1 s e o ponto leva ~2 s.\n'
             'Desligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ (como antes).')
         self.chk_dual_adapt40 = QtWidgets.QCheckBox(f'só f > {LOWF_FMAX:g} Hz')
-        self.chk_dual_adapt40.setChecked(True)
+        # 2.5.0 (Marcos, 25/11): τ adaptativo em toda a faixa; a caixa fica fora da tela e sempre desmarcada
+        self.chk_dual_adapt40.setChecked(False)
+        self.chk_dual_adapt40.setParent(self)
+        self.chk_dual_adapt40.setVisible(False)
         self.chk_dual_adapt40.setToolTip(
             f'Ligado (padrão): o τ adaptativo só vale acima de {LOWF_FMAX:g} Hz. Abaixo, o τ é pré-definido\n'
             f'(o τ max do quadro; espera 7τ e média por 3τ), e acima de {LOWF_FMAX:g} Hz o\n'
@@ -189,7 +192,7 @@ class DualUiMixin:
             f'de novo (até {NB_MAX_REDO}×). Campanha de 18/11 (tarde): o desvio caiu de 27 para 15 % em 37 Hz e de 14 para 7 % em\n'
             '113 Hz; acima de ~500 Hz quase nada é descartado. À noite (19/11) não ajudou. O CSV ganha as colunas\n'
             'Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido.')
-        adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_nb), ('', self.chk_dual_adapt), ('', self.chk_dual_adapt40),
+        adapt_row = (('Repetições:', self.sp_dual_reps), ('', self.chk_dual_nb), ('', self.chk_dual_adapt),
                      ('Precisão:', self.sp_dual_adapt_tol),
                      ('', self.lbl_dual_taumax))
         # aviso em laranja ao lado do range quando ele desce abaixo de LOWF_FMAX
@@ -470,16 +473,7 @@ class DualUiMixin:
         self.btn_dual_resave.clicked.connect(lambda: self._export_dual(resave=True))
         self.btn_dual_resave.setEnabled(False)
         excl_row.addWidget(self.btn_dual_resave)
-        self.btn_dual_diag = QtWidgets.QPushButton('Diagnóstico')
-        self.btn_dual_diag.setCheckable(True)
-        self.btn_dual_diag.setToolTip(
-            'Varredura em frequência: separa o sinal fotoacústico (S ∝ f^-n, fase constante) de um fundo plano\n'
-            '(luz chegando ao microfone, chiado do driver, acoplamento elétrico), ajustando amplitude e fase juntas,\n'
-            'com o passa-alta do microfone, o atraso do sistema e a ressonância da célula. Desenha as componentes\n'
-            '(vermelho: fotoacústico; roxo: fundo; preto: soma) e diz o que encontrou. Leva alguns segundos.')
-        self.btn_dual_diag.toggled.connect(lambda _: self._show_dual_results())
-        self.btn_dual_diag.setEnabled(False)
-        excl_row.addWidget(self.btn_dual_diag)
+        # 2.5.0 (Marcos, 25/11): sem o botão Diagnóstico
         excl_row = excl_bar.group()
         self.chk_dual_norm = QtWidgets.QCheckBox('Normalizar pelo OPT101')
         self.chk_dual_norm.setChecked(True)
@@ -879,25 +873,6 @@ class DualUiMixin:
         self.lbl_dual_fit.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_fit.setWordWrap(True)
         lay.addWidget(self.lbl_dual_fit)
-        self.lbl_dual_diag = QtWidgets.QLabel('')
-        self.lbl_dual_diag.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        self.lbl_dual_diag.setWordWrap(True)
-        self.lbl_dual_diag.setVisible(False)
-        lay.addWidget(self.lbl_dual_diag)
-        self.dual_diag = None               # (chave dos dados, resultado de diagnose_freq)
-        self.dual_diag_txt = None
-        pen = lambda c, st: pg.mkPen(c, width=2, style=st)
-        D, S_ = QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.SolidLine
-        self.c_dual_diag = (self.pw_dual_a.plot([], [], pen=pen('#202020', S_)),
-                            self.pw_dual_a.plot([], [], pen=pen('#c0392b', D)),
-                            self.pw_dual_a.plot([], [], pen=pen('#8e44ad', D)),
-                            self.pw_dual_b.plot([], [], pen=pen('#202020', S_)))
-        # Legendas do Diagnóstico (só aparecem com ele ligado)
-        self.dual_diag_leg = tuple(pw.getPlotItem().addLegend(offset=(-10, 10), brush=(255, 255, 255, 220),
-                                                              pen=(160, 160, 160))
-                                   for pw in (self.pw_dual_a, self.pw_dual_b))
-        for lg in self.dual_diag_leg:
-            lg.setVisible(False)
         self.lbl_dual_cal = QtWidgets.QLabel('')
         self.lbl_dual_cal.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_cal.setWordWrap(True)
@@ -906,7 +881,7 @@ class DualUiMixin:
         # Gráficos em cima e, embaixo, os resultados em texto (os painéis abrem no topo da aba)
         idx = lay.indexOf(self.dual_plots)
         taken = [lay.takeAt(idx) for _ in range(lay.count() - idx)]
-        results = (self.lbl_dual_fit, self.lbl_dual_diag, self.lbl_dual_cal, self.lbl_dual_tau)
+        results = (self.lbl_dual_fit, self.lbl_dual_cal, self.lbl_dual_tau)
         top = QtWidgets.QWidget()
         tv = QtWidgets.QVBoxLayout(top)
         tv.setContentsMargins(0, 0, 0, 0)
