@@ -370,31 +370,12 @@ class DualMixin:
         return max(adapt_tau_min(f), self.adapt_tau_cur or self.dual_tau_w[kind].value())
 
     def _confirm_lowf(self, kind, values):
-        """Aviso no início de uma varredura em frequência que inclui pontos abaixo de LOWF_FMAX (ruído acústico)."""
-        low = [v for v in values if v < LOWF_FMAX] if kind in ('F', 'M') else []
-        if not low:
-            return True
-        fixed = self._lowf_fixed_tau(kind, min(low)) is not None
-        msg = (f'A varredura inclui {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g} a {max(low):g} Hz).\n\n'
-               'Nessa faixa o ruído acústico do ambiente (e o do próprio INMP441, especificado para f > 60 Hz) é alto:\n'
-               'a medida exige uma amostra de alto SNR (ex.: inox). Com pouco sinal (ex.: alumínio), cada ponto pode ter\n'
-               'incerteza de 5 a 10 %.\n\n'
-               + (f'τ pré-definido nessa faixa: {self._adapt_cap(kind):g} s (τ max) abaixo de {LOWF_FMAX:g} Hz.\n\n'
-                  if fixed else '')
-               + 'Continuar?')
-        print(f'Aviso: varredura com {len(low)} ponto(s) abaixo de {LOWF_FMAX:g} Hz ({min(low):g}–{max(low):g} Hz): '
-              'exige amostra de alto SNR.')
-        if getattr(self, 'series_active', False):     # medidas em série: sem janela de confirmação
-            return True
-        ans = QtWidgets.QMessageBox.warning(
-            self, f'Varredura abaixo de {LOWF_FMAX:g} Hz', msg,
-            QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
-            QtWidgets.QMessageBox.StandardButton.Ok)
-        return ans == QtWidgets.QMessageBox.StandardButton.Ok
+        """Antes avisava (janela) de varreduras abaixo de LOWF_FMAX. Desde 25/11 a célula nova mede bem em baixa
+        frequência e a varredura padrão começa em 1 Hz: sem aviso (Marcos)."""
+        return True
 
     def _update_lowf_warn(self, kind):
-        sp0, sp1 = self.dual_fw[kind][:2]
-        self.lbl_dual_lowf[kind].setVisible(min(sp0.value(), sp1.value()) < LOWF_FMAX)
+        self.lbl_dual_lowf[kind].setVisible(False)      # rótulo laranja "alto SNR em f < 40 Hz": sem aviso desde 25/11
 
     def _apply_adapt_ui(self):
         """τ adaptativo: o τ do quadro vira o τ inicial; a Precisão só vale com ele ligado."""

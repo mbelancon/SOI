@@ -254,6 +254,13 @@ Minor version: only the interface changes. The firmware is still 2.0.0 and the U
   clicked OK. They are now asked when the sweep button is clicked, before the warm-up, and the sweep starts by
   itself when the warm-up ends.
 
+#### Changed: Dual Mode frequency sweeps start at 1 Hz by default
+- **Why:** the new cell (no microphone chamber, new microphone mount, 2026-11-23) fixed the low-frequency fluctuation,
+  so the default sweep now covers the low range too (was 40 Hz). Points below 40 Hz still use τ = 4 s, so a default
+  sweep takes longer. Saved settings are moved to 1 Hz once; the start can still be changed as before.
+- The "sweep below 40 Hz" warning (dialog when starting, orange "high SNR at f < 40 Hz" notice next to the range) was
+  removed for the same reason.
+
 #### Changed: interface code split into modules (no change in behavior)
 - **Why:** `soi_controller.py` had grown to ~13,200 lines (~600 KB), hard to read and to change safely. It is also the
   first step of the planned 2.5.0 layout for small screens (1366×768), where each tab becomes a module.

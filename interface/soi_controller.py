@@ -579,6 +579,9 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                 self.chk_dual_adapt.setChecked(False)
                 tau0 = SWEEP_TAU_DEF
                 st.setValue('sweep_defaults_20261119', 1)
+            if st.value('sweep_f0_1hz_20261125') is None:     # início padrão em 1 Hz (célula nova, Marcos 25/11; uma vez)
+                self.sp_dual_f0.setValue(SWEEP_F0_DEF)
+                st.setValue('sweep_f0_1hz_20261125', 1)
             if st.value('nb_default_off_20261119') is None:   # descarte por vizinhas: desligado por padrão (uma vez)
                 self.chk_dual_nb.setChecked(False)
                 st.setValue('nb_default_off_20261119', 1)
