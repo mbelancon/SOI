@@ -621,6 +621,17 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                 self.dual_float.rel = (min(max(fx, 0.0), 1.0), min(max(fy, 0.0), 1.0))
             except (TypeError, ValueError):
                 pass
+            for key, sec in self.side_sections.items():
+                v = st.value('sec_' + key)
+                if v is not None:
+                    sec.set_open(str(v).lower() in ('1', 'true'))
+            for name in ('main_split', 'opt_split'):
+                v = st.value(name)
+                if v is not None:
+                    getattr(self, name).restoreState(v)
+            v = st.value('scope_open')
+            if v is not None:
+                self.btn_scope.setChecked(str(v).lower() in ('1', 'true'))
             geo = st.value('geometry')
             if geo is not None:
                 self.restoreGeometry(geo)
@@ -659,6 +670,13 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st.setValue('dual_layout', self.dual_layout)
         st.setValue('dual_float_rel', '%.4f,%.4f' % self.dual_float.rel)
         st.setValue('tab', self.tabs.currentIndex())
+        # 2.5.0: seções do painel lateral, osciloscópio recolhido, largura do painel e divisão da aba OPT101
+        for key, sec in self.side_sections.items():
+            st.setValue('sec_' + key, int(sec.is_open()))
+        st.setValue('scope_open', int(self.btn_scope.isChecked()))
+        st.setValue('main_split', self.main_split.saveState())
+        if self.btn_scope.isChecked():
+            st.setValue('opt_split', self.opt_split.saveState())
 
     def _measuring(self):
         '''Há uma medida em curso que a suspensão do PC interromperia?'''

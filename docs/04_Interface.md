@@ -43,31 +43,44 @@ The spec ([`packaging/soi_controller.spec`](../packaging/soi_controller.spec)) l
 - If the connection drops, the interface **tries to reconnect every 3 s** and resends the current frequency and PWM.
 - Serial reading runs in a separate thread (or process): no byte is lost if the interface lags.
 - **Modulation check:** the OPT101 PLL locks onto the real laser edges. If it stays unlocked for more than max(5 s, 5 periods), the STM32 is modulating at another frequency: the `F` command was lost, or the board reset to the 5 Hz default. In that case the interface resends the frequency by itself and reports it in the status bar. This mainly protects the INMP441 lock-in, which has no PLL and relies on the STM32 frequency matching the field. While the PLL is unlocked, the OPT101 tab status shows **"PLL unlocked"**.
-- **No sleep during measurements (Windows):** while a sweep (OPT101, INMP441 or Dual Mode) or the Resolution test is running, the interface keeps Windows from sleeping or hibernating due to inactivity, and releases it at the end. The screen may still turn off. Closing the laptop lid, or sleeping from the menu or the power button, still interrupts the measurement.
-- **Without an STM32**, the option **"Simulate sampling"** appears, which generates simulated OPT101 and INMP441 signals to try the interface.
-- Preferences (fields, options, window size, active tab) are saved on exit in the Windows registry (`HKCU\Software\LCTM\SOI Controller`). They are not saved while a sweep is running.
+- **No sleep during measurements (Windows):** while a sweep (OPT101, INMP441 or Dual Mode) or a measurement series is running, the interface keeps Windows from sleeping or hibernating due to inactivity, and releases it at the end. The screen may still turn off. Closing the laptop lid, or sleeping from the menu or the power button, still interrupts the measurement.
+- **Without an STM32**, the interface switches to **simulated mode** by itself about 2 s after opening (simulated OPT101 and INMP441 signals, to try the interface); the status bar shows **SIMULATION (no STM32)** in orange. When the board is connected it goes back to the real signals. It never switches to simulation during a measurement, so a USB drop does not turn into simulated data. (Until 2.4 this was the **Simulate sampling** box.)
+- Preferences (fields, options, window size, active tab, open/closed panel sections, collapsed oscilloscope and panel width) are saved on exit in the Windows registry (`HKCU\Software\LCTM\SOI Controller`). They are not saved while a sweep is running.
 
-## Excitation bar (common to all tabs)
+## Window layout
+
+Since 2.5.0 the window has two parts, so that it fits 1366×768 screens also at 125 % Windows scaling (minimum about
+910×450 logical pixels):
+
+- **Side panel** (left): the controls, in **sections** that open and close with a click on their header (▾ open,
+  ▸ closed). **Experiment** and **Excitation** are always there; below them come the sections of the active tab. The
+  panel scrolls when the open sections do not fit, so no combination of open sections makes the window taller. Its
+  width can be changed (or the panel hidden) by dragging the divider. Section states are saved between sessions.
+- **Tabs** (right): only the plots and the tab status line. **⚙ Settings** is at the right end of the tab row.
+- **Status bar** (bottom): messages, the measurement in progress, **SNR OPT/INMP** and the connection
+  (STM32 connected / SIMULATION / searching).
+
+### Experiment and Excitation (common to all tabs)
 
 | Control | Range | Function |
 |---|---|---|
 | Freq (Hz) | 0 – 5000 | Laser modulation frequency (0 = continuous). Also updates the automatic filter cut-offs. |
 | PWM (%) | 0 – 100 | Laser power. One-click buttons **0**, **10** and **100** sit around the field; the current value is highlighted in blue. |
-| **SNR OPT/INMP** | dB | How far each lock-in output is above its noise, over the last 10τ (4 to 30 s), updated every second: SNR = 20·log10(\|⟨Z⟩\|/σ), Z = X + jY. Green ≥ 25 dB (point error ≲ 10 %), yellow 15–25 dB (~10–25 %), red < 15 dB (≳ 40 %); see [Examples](08_Measurement_Examples.md#how-good-is-a-point-snr). OPT needs Lock-In Mode in the OPT101 tab; INMP needs the INMP441 lock-in. |
+| **SNR OPT/INMP** (status bar) | dB | How far each lock-in output is above its noise, over the last 10τ (4 to 30 s), updated every second: SNR = 20·log10(\|⟨Z⟩\|/σ), Z = X + jY. Green ≥ 25 dB (point error ≲ 10 %), yellow 15–25 dB (~10–25 %), red < 15 dB (≳ 40 %); see [Examples](08_Measurement_Examples.md#how-good-is-a-point-snr). OPT needs Lock-In Mode in the OPT101 tab; INMP needs the INMP441 lock-in. |
 | **Sample** | text | Prefix of every file saved in `Medidas/`. Characters not allowed in file names become `_`. Empty = no prefix. Saved between sessions. |
-| Calibration + Use | list | Microphone calibration applied to the Dual Mode frequency sweep. Lists the calibrations in the `Medidas/` folder from newest to oldest (by the date in the name), without the `CAL_` and `microfone_` parts; the full name, the reference and the cell appear in the tooltip. Each item starts with the cell it was made in (`[OPC]` or `[Câmara]`) and with ⚠ if it has not been verified. The list is reread when opened. On start, the newest is selected with **Use** ticked. |
-| **Cell** | OPC / Chamber | Cell configuration for the measurement: **OPC** (the sample closes the opening; light from outside, microphone on the other side) or **Chamber** (sample inside, lit through a glass window). A calibration is only valid in the configuration it was made in; if it is from the other one, a red warning appears. Written to the Dual Mode CSV header (`# Celula = …`). Choosing a calibration reference sets the cell automatically. |
-| ⚙ Settings | button | Opens the **Settings** window: lock-in trigger (**Electronic**, STM32 PWM, or **Optical**, OPT101 with a chopper; see [Optical modulation](#optical-modulation-chopper)), **OPT101 supply** and **Finish experiment**. Each option has a short explanation in the window. |
-| Finish experiment | button (Settings window) | Zips into `Medidas/<sample>_<date>.zip` all files saved during the session (since the interface opened or since the last click) and the calibration in use (CSV and PNG). The originals stay in the folder. During a sweep, it asks you to finish or cancel it first. |
+| Calibration + Use | list | Microphone calibration applied to the Dual Mode frequency sweep. Lists the calibrations in the `Medidas/` folder from newest to oldest (by the date in the name), without the `CAL_` and `microfone_` parts; the full name, the reference and the cell appear in the tooltip. Each item starts with the cell it was made in (`[Câmara]`; old OPC calibrations show `[OPC]`) and with ⚠ if it has not been verified. The list is reread when opened. On start, the newest is selected with **Use** ticked. |
+| ⚙ Settings | button (tab row) | Opens the **Settings** window: lock-in trigger (**Electronic**, STM32 PWM, or **Optical**, OPT101 with a chopper; see [Optical modulation](#optical-modulation-chopper)), **OPT101 supply** and the sweep options. Each option has a short explanation in the window. |
+| Finish experiment | button (Experiment section) | Zips into `Medidas/<sample>_<date>.zip` all files saved during the session (since the interface opened or since the last click) and the calibration in use (CSV and PNG). The originals stay in the folder. During a sweep, it asks you to finish or cancel it first. |
 
 ## OPT101 tab
 
 **Status bar:** signal state (*Signal OK*, *Low signal* with mean level < 5 % of the ceiling, *Near OPT101 saturation* / *OPT101 SATURATION* with the 3.3 V supply, *Near the ADC limit* with 5 V, or *ADC SATURATION*), the **Peak** in % of the signal ceiling with its voltage at PA0 (green < 80 %, orange from 80 %, red from 90 %; see [OPT101 supply](#opt101-supply)), the **real frequency measured by the PLL** and the rate in use (e.g. *12.5 kS/s (OSR 16)*). If USB loses optical samples, *USB losses: N samples* appears in red: the interface fills the gap by repeating the last sample, so that time and the PLL stay correct.
 
 **Oscilloscope:** raw ADC signal (0–16,380) and the laser reference (dashed green), in real time.
-- *Window (s)*: 0.005 to 30 s. Above 50 Hz the window is limited to 50 cycles ("Reduced view").
-- *60 Hz filter*: notches at 60 Hz and harmonics up to 1.5 kHz (2 Hz wide). Notches less than 5 Hz from the modulation are omitted.
-- *Oversampling*: see below. *Resolution test*: see below.
+- **▾ Oscilloscope** (header above the plot) collapses it: the lower plot gets the height, acquisition goes on and the
+  saturation warning stays in the status line. The divider between the two plots can be dragged.
+- Side panel, **Oscilloscope** section: *Window (s)* (0.005 to 30 s; above 50 Hz the window is limited to 50 cycles,
+  "Reduced view"), *Oversampling* (see below) and *Fixed scale (0 to 3.3 V)* (otherwise the axis follows the signal).
 - The oscilloscope keeps at most 120 thousand points. With a long window and a high rate (e.g. 30 s at 200 kS/s), each drawn point is the average of several, so the screen does not freeze. The lock-in, the FFT and the Average mode always use every sample.
 
 ### Oversampling
@@ -82,23 +95,12 @@ The STM32 (firmware 2.0.0) sends every ADC sample, 12 bits at 200 kS/s, and the 
 | 32 / 64 | 6.25 / 3.125 kS/s | 160 / 320 µs | Low modulation, less load on the PC |
 
 - The displayed scale is always 0–16,380 (average × 4), as in 1.0.0, whatever the OSR.
-- White noise falls as √OSR (+½ bit per doubling), but only with enough noise (dither) and while the noise stays white. The *Resolution test* shows how far this holds for your signal.
+- White noise falls as √OSR (+½ bit per doubling), but only with enough noise (dither) and while the noise stays white.
 - For the lock-in, the choice barely changes the sensitivity: the final noise depends on the τ bandwidth, not on OSR. OSR changes the rate, the usable bandwidth (FS/2) and the reference delay.
 - The lock-in magnitude is corrected for the averaging attenuation (see *Averaging correction* at the end of this page) and the phase for the reference delay of each OSR.
 - Changing OSR restarts the lock-in, oscilloscope, FFT and Average mode. It is blocked during a sweep.
 
-### Resolution test
-
-Checks whether oversampling is really delivering resolution. Keep the signal **steady** (laser off, PWM 0 %, or constant light), click **Resolution test** and then **Measure**. The interface records raw samples (0.5 to 20 s, default 4 s) and shows:
-
-1. **Noise × N** on a log-log scale: the noise of averages of N samples, in LSB of the 12-bit ADC, computed with the Allan deviation (insensitive to slow linear drift), together with the ideal 1/√N line. While the points follow the line, averaging is gaining resolution. When the curve flattens or rises, 1/f noise, interference or drift dominate, and a higher OSR no longer helps. The red circle marks the OSR in use. Values of N above 64 show the trend for longer averages, such as the lock-in's.
-2. **Table:** noise, gain in bits (measured and ideal) and **effective bits** = 12 − log₂(σ·√12), the resolution of an ideal converter with the same noise.
-3. **Histogram of raw codes:** if the samples spread over ~1 LSB or more, there is the dither averaging needs. If almost all fall on one or two codes (σ < 0.3 LSB), the average converges to the wrong code and **there is no new resolution**, even if the noise of the averages seems to fall.
-4. **Conclusion:** up to which N the gain follows the ideal (at most 0.25 bit below), and a warning if the laser was modulating during the measurement.
-
-*Save CSV and PNG* writes `Resolucao_<date>.csv` (N, kS/s, Allan σ, ordinary σ, ideal, gains and effective bits) and the window image to `Medidas/`.
-
-**Lower plot, two modes:**
+**Lower plot, two modes** (side panel, **Lock-In and Average** section):
 
 1. **Lock-In:** magnitude (blue) and phase (red) versus time. 50 points/s; the plot shows the last 200 (4 s).
    - *τ* (time constant of each low-pass pole): the arrows step through the 1–3–10 sequence (1 ms, 3 ms, 10 ms, 30 ms, 100 ms, 300 ms, 1 s, 3 s, 10 s, 30 s and 100 s), and a typed value in between (e.g. 0.5 s or 200 ms) is also accepted. When the frequency changes, τ goes back to automatic: ~3 modulation periods, rounded to 0.3 s (above ~5.8 Hz), 1 s (~1.8 to 5.8 Hz) or 3 s (below that). Next to it, computed from τ: the −3 dB cut-off of the 2-pole filter (0.644/(2πτ)), the equivalent noise bandwidth ENBW = 1/(8τ) and the 9τ wait used by sweeps.
@@ -109,15 +111,15 @@ Checks whether oversampling is really delivering resolution. Keep the signal **s
 
 *Pause* freezes the plot. **Save** writes CSV + PNG of the lower plot to `Medidas/`.
 
-**FFT** (checkbox next to *Save*): spectrum of the raw ADC signal, in a column on the right, in dBFS.
+**FFT** (checkbox next to *Save*): spectrum of the raw ADC signal, next to the lower plot, in dBFS.
 - Default: zoom around the reference, with an FFT of 4 s of history (resolution ≈ 0.25 Hz).
 - *Full spectrum*: 0 to 6.25 kHz, 4096-point FFT (≈ 3.1 Hz).
 - *Fit*: fits the peak amplitude at the real modulation frequency with the exact shape of a sine in the Hann window and shows A (in FS, dBFS and ADC counts), the peak/floor SNR and the resolution. If the peak is below the low-signal threshold, the plot warns instead of showing the fit.
 - *Click and zoom* (in both FFTs, OPT101 and INMP441): a click shows the frequency and magnitude of the nearest point; the wheel zooms, dragging pans, double-click returns to auto scale and right-click clears the marker.
 
-![OPT101 tab with the ADC FFT and the sweep panel open (simulated mode)](images/interface_opt101.png)
+![OPT101 tab with the side panel, the ADC FFT and the Sweeps section open (simulated mode, 1366×768)](images/interface_opt101.png)
 
-**Sweeps (*Sweeps ▸* button, Lock-In mode only):**
+**Sweeps (side panel, *Sweeps* section; Lock-In mode only):**
 - *Frequency sweep*: start, end and step (0.1–5000 Hz).
 - *PWM sweep*: start, end and step (0–100 %), at the current frequency.
 - At each point the sweep **waits max(1 s, 9τ) + 0.3 s** for the filter to settle and then **measures for max(1 s, 4τ)**. It shows the estimated time, the remaining time and a progress bar. The same button cancels.
@@ -130,13 +132,12 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 
 **Status:** rate of received samples and the **"LOW SIGNAL"** warning when the SNR falls below the threshold.
 
-**Display:**
-- **Sweeps ▸** (first on the row): shows the INMP441 frequency and PWM sweeps, which work like the OPT101 ones.
+**Display** (side panel; the sweeps are in the *Sweeps* section and work like the OPT101 ones):
 - Plots that can be switched on: **Lock-In**, **Noise/SNR** and **FFT**.
 - **R/θ ↔ X/Y**: magnitude and phase, or in-phase and quadrature components.
 - **Auto-phase**: zeroes the mean phase of the last 1 s (the signal goes entirely into X). *Offset (°)*: manual correction.
 
-**Lock-in:** τ, High-pass, 60 Hz filter and *Window (s)* (1–60 s displayed). 20 points/s (blocks of 2400 samples at 48 kHz).
+**Lock-in** (side panel): τ, High-pass and *Window (s)* (1–60 s displayed). 20 points/s (blocks of 2400 samples at 48 kHz).
 
 **Noise/SNR:** mean and standard deviation of the lock-in output over a moving window (the same window as the plot, up to 30 s). SNR is shown in dB. *SNR alert < (dB)* defaults to 10 dB (signal ≈ 3× noise). Use a window of at least 10τ.
 
@@ -145,7 +146,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
 - *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
-**Detect background noise...** (button after *Sweeps ▸*; the same button is also in the Dual Mode, after *Signal x t (s) ▸*) opens a window that looks for noise sources at fixed
+**Detect background noise...** (button in the *Display* section; the same button is at the top of the Dual Mode panel) opens a window that looks for noise sources at fixed
 frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the
 sweeps exclude them. The INMP441 and the OPT101 are recorded together; in the OPT101 only the mains tones (60 Hz and
 multiples) are kept, because the mains background is electrical and shows up in the OPT101 (e.g. 300 Hz).
@@ -175,11 +176,17 @@ multiples) are kept, because the mains background is electrical and shows up in 
 
 Measures both lock-ins **in the same step**. The OPT101 R (proportional to the optical intensity) is the power reference for the INMP441 R (photoacoustic signal).
 
-**Top of the tab** (from left to right: **Sweep ▸**, **Fit ▸**, **Open sweep…**, **Calibration ▸**, the last on the right):
-- **Sweep ▸** opens the **frequency sweep** (a single one, used both to calibrate and to measure), with **Refine resonance**, and the mounting diagram of the cell (Chamber or OPC); the **status bar** at the top of the tab shows the progress, the τ in use and the **fluctuation** of S and Δφ of the point being measured (updated every second) and of the last point (green within Precision, yellow up to 2×, red above). The plots show error bars (±1 SD) on S and Δφ; and, collapsed next to it under **Matched PWM ▸**, the matched PWM sweep.
-- **Calibration ▸** opens the microphone calibration panel: samples, expected curve, mounting tips and the **Generate calibration curve** and **Verify with this measurement** buttons. With it open, running the sweep first shows a warning if PWM is not at 100 %, if any 60 Hz filter is on or if **Use** is ticked (with "Fix and run", "Run anyway" or "Cancel").
-- **Fit ▸** opens the model panel (see below), including **Range with S ∝ f⁻ⁿ**.
-- The three panels start closed and their state is saved between sessions. **Double-click** on a plot resets the axes/zoom.
+**Side panel** (from top to bottom): **Open sweep…** and **Detect background noise...**, then one section per
+measurement: **Signal vs f (Hz)**, **Fit**, **Calibration**, **Signal vs PWM (%)** and **Signal vs t (s)**. Signal vs f
+and Fit start open; the state of each section is saved between sessions. **Double-click** on a plot resets the axes/zoom.
+- **Signal vs f (Hz)** is the **frequency sweep** (a single one, used both to calibrate and to measure), with **Refine
+  resonance**. The **status line** at the top of the tab shows the progress, the τ in use and the **fluctuation** of S
+  and Δφ of the point being measured (updated every second) and of the last point (green within Precision, yellow up
+  to 2×, red above). The plots show error bars (±1 SD) on S and Δφ.
+- **Calibration** is the microphone calibration with two samples (see below). With it open, running the sweep first
+  shows a warning if PWM is not at 100 % or if **Use** is ticked (with "Fix and run", "Run anyway" or "Cancel").
+- **Fit** holds the model fit (see below), including **Range with S ∝ f⁻ⁿ**.
+- **Signal vs PWM (%)** (matched PWM sweep) and **Signal vs t (s)** only exist with electronic modulation.
 - **Open sweep…** loads any Dual Mode CSV from the Medidas folder, frequency or matched PWM, including old formats. The sweep appears as if it had just run: you can apply a calibration, fit models, exclude points and generate a calibration curve (untick **Use** first).
 - **Save again** with an opened sweep writes `<original name>_editado_<time>.csv`, recording the source file in the header.
 - **Limitation:** an opened sweep does not carry the filter settings used at each point, so the optical channel bandwidth does not appear on the "Light (OPT101)" line.
@@ -190,7 +197,7 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 - At each point SOI measures the **fluctuation** of S = R_INMP441/R_OPT101 and of Δφ during the measurement: standard deviation, or, if larger, the difference between the means of the first and second half (drift). The OPT101 is interpolated at the INMP441 instants, so what is common to both channels (laser power) cancels, as in S.
 - Fluctuation well below **Precision** (default 2 % for S; the same fraction in radians for Δφ, 2 % = 1.15°): the next point uses a smaller τ, chosen for the fluctuation to sit at 70 % of Precision (it scales as 1/√τ). The estimate is the median of the last 3 points (scaled to the current τ), so one bad point does not raise τ for the following ones; τ rises at most 2× and falls at most 3× per point, down to about 3 modulation periods (minimum 100 ms).
 - Fluctuation above 2× Precision: the point is measured again with a larger τ (2–4×, up to τ max, at most twice).
-- **Allow averages × N** (off by default, N = 3): when τ is already at τ max and the fluctuation is still above Precision, the point takes up to N consecutive measurements with the same τ and records their mean, instead of a longer τ. Beyond a few seconds what remains is slow drift, which a longer τ does not remove; independent averages reduce noise ~1/√N. Below 40 Hz (preset τ) every point takes N measurements. Headless: `--medias N`.
+- (*Allow averages × N* was removed in 2.5.0: repeat separate sweeps with **Repetitions** instead; `--medias` is ignored with a notice.)
 - Each point waits 7τ + 0.3 s and averages for max(1 s, 3τ). At high frequency with a clean signal τ drops to ~0.1 s and a point takes ~2 s; at low frequency it stays at τ max (40 s per point with 4 s).
 - The status shows the τ in use and, after each point, its fluctuation. The CSV header records `tau adaptativo (precisão …, tau max … s; tau usado de … a … s; …)` (older files say `tau inicial`); the `_DP` columns keep their meaning (standard deviation during the measurement).
 - **Per point in the CSV** (all automatic sweeps): `Tau_s`, `Tempo_ponto_s` (wait + average, with redos), `Refeito` (redos), `Flutuacao_S_Pct`, `Flutuacao_Fase_Graus`; the header has `# Inicio = …; Fim = …; Duracao = … s`.
@@ -320,7 +327,7 @@ where the first term in brackets is the photoacoustic part (power law, constant 
 - **Chamber models (RG):** for test samples inside the chamber, such as glass, after calibrating. A semi-transparent sample lies between f⁻¹ and f⁻¹·⁵.
 - **Cell resonance:** without a **Range** (start/end), the peak is found automatically (largest excess over a straight line in log-log, window of ±3 widths). With **Mark peak (2 clicks)**, click on the left plot slightly below and slightly above the peak; the clicks fill in the Range. The fit uses magnitude and phase together (or just one) and draws the model on both plots, with a vertical line at f₀. Measure with **Use** unticked: the calibration removes the cell resonance. With fewer than 10 points in the window, a linear sweep around the peak is suggested (step ≤ width/5). In the new cell of 2026-11-10, the 35-point sweep gave f₀ ≈ 1.57 kHz and Q ≈ 6.5 (only 6 points in the window).
 
-**Microphone calibration** (**Calibration ▸** panel): two reference samples of different thermal diffusivity (recommended: aluminium + stainless steel in the chamber) are measured in the same mounting with **▶ Measure A** and **▶ Measure B**, and **Generate calibration** stores M(f) = √(S_A·S_B)·fⁿ and the system phase. The ratio S_A/S_B must be constant over at least one decade, which verifies the calibration without any theoretical curve. Tick **Use** on the top bar to apply it. Points outside the calibrated range are drawn hollow and left out of fits; **Show calibration error bars** and **Uncalibrated region in red** (both off by default, saved between sessions) add the calibration uncertainty and a red shade. Full description, pair choice, acceptance criteria, file format and an example: [docs/07_Calibration.md](07_Calibration.md).
+**Microphone calibration** (**Calibration ▸** panel): two reference samples of different thermal diffusivity (recommended: aluminium + stainless steel in the chamber) are measured in the same mounting with **▶ Measure A** and **▶ Measure B**, and **Generate calibration** stores M(f) = √(S_A·S_B)·fⁿ and the system phase. The ratio S_A/S_B must be constant over at least one decade, which verifies the calibration without any theoretical curve. Tick **Use** (Experiment section) to apply it. Points outside the calibrated range are drawn hollow and left out of fits; **Show calibration error bars** and **Uncalibrated region in red** (both off by default, saved between sessions) add the calibration uncertainty and a red shade. Full description, pair choice, acceptance criteria, file format and an example: [docs/07_Calibration.md](07_Calibration.md).
 
 **Sensor τ (correction; the row appears only when a value other than 0 was saved):** only needed if you change the OPT101 feedback resistor between calibration and measurement. **Measure…** compares the current sweep with another saved one (same light, different resistor) and fills in τ.
 
@@ -336,10 +343,10 @@ Choose **Optical** under **Trigger** in the **⚙ Settings** window when the lig
 - **Excitation bar.** In optical mode PWM disappears and its place shows the detected frequency (mean of the last second) with ● when locked; the tooltip gives its standard deviation and the rms phase wander. "⚠ mic" means the INMP441 is not aligned yet (it takes a few seconds after connecting). Freq shows the detected frequency and cannot be edited. The working frequency (FFT range, scope window, automatic cut-offs, oversampling gain correction) follows the detected one; the automatic cut-offs are reapplied only when it changes by more than 15 %.
 - **OPT101 tab.** The dashed green trace becomes the PLL reference (cos θ ≥ 0), so you can see the lock; Average mode folds the cycles on it. **Search again** forgets the frequency and searches again. With a fan with uneven blades the rotation frequency (f/number of blades) also shows up: narrow the search range around the blade frequency if it locks on the wrong peak.
 - **INMP441 tab.** Works as usual, with the reference from the OPT101. The OPT101 and INMP441 sweeps are disabled (the STM32 does not set the frequency).
-- **Dual Mode: manual sweep.** **Sweep ▸** shows **Manual frequency sweep (optical modulation)** instead of the automatic one. Click **▶ Start** and change the chopper frequency gradually. With **Record automatically when the frequency settles**, a point is recorded when the PLL is locked, the standard deviation of the frequency in the last second is ≤ **stable** (default 0.5 %) and the frequency is at least **minimum step** (default 5 %) away from the last point; **Record point** measures one now. Each point waits 9τ and averages for 1τ (τ of the box, default 2 s, applied to both lock-ins during the sweep); if the frequency moves more than 2× **stable** (minimum 1 %) or the PLL unlocks, the point is discarded. The recorded frequency is the mean measured during the point. **⏹ Finish** saves `DUPLO_freq_<min>_<max>Hz_optica_<date>.csv`, with `# Modulacao = optica` and a last column `Frequencia_DP_Hz` (standard deviation of the frequency during the point).
+- **Dual Mode: manual sweep.** The **Signal vs f (Hz)** section shows **Manual frequency sweep (optical modulation)** instead of the automatic one. Click **▶ Start** and change the chopper frequency gradually. With **Record automatically when the frequency settles**, a point is recorded when the PLL is locked, the standard deviation of the frequency in the last second is ≤ **stable** (default 0.5 %) and the frequency is at least **minimum step** (default 5 %) away from the last point; **Record point** measures one now. Each point waits 9τ and averages for 1τ (τ of the box, default 2 s, applied to both lock-ins during the sweep); if the frequency moves more than 2× **stable** (minimum 1 %) or the PLL unlocks, the point is discarded. The recorded frequency is the mean measured during the point. **⏹ Finish** saves `DUPLO_freq_<min>_<max>Hz_optica_<date>.csv`, with `# Modulacao = optica` and a last column `Frequencia_DP_Hz` (standard deviation of the frequency during the point).
 - **Calibration.** **▶ Measure A/B** starts a manual sweep; **Finish** stores it in the slot. A and B do not need the same frequencies (B is interpolated on A's grid).
 - **Fan noise.** A chopper or fan makes sound exactly at the modulation frequency, coherent with the reference: it adds to the photoacoustic signal. Measure it with the beam blocked after the OPT101 (the OPT101 still sees the light) and compare; **Diagnostics** helps separate a flat background.
-- **Simulation.** With **Simulate sampling**, optical mode simulates a fan with slow drift and uneven blades, trapezoidal light and the beacon; **Freq** becomes the knob of the simulated chopper.
+- **Simulation.** In simulated mode (no STM32), optical mode simulates a fan with slow drift and uneven blades, trapezoidal light and the beacon; **Freq** becomes the knob of the simulated chopper.
 
 ## OPT101 supply
 
@@ -389,7 +396,7 @@ Column glossary: Tempo = time, Fase = phase, Graus = degrees, Media = mean, Desv
 
 ## Headless sweep (command line)
 
-`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--repeticoes N`, `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar F1;F2`, `--celula Camara|OPC`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
+`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--repeticoes N`, `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar F1;F2`, `--celula Camara`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
 
 ## Signal vs t (Dual Mode)
 

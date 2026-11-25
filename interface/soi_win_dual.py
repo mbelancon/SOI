@@ -605,22 +605,24 @@ class DualMixin:
         row.addWidget(self.chk_man_auto)
         row.addStretch(1)
         lay.addLayout(row)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel('Passo mínimo:'))
+        row = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)     # 2.5.0: quebra no painel lateral
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('Passo mínimo:'))
         self.sp_man_step = self._dspin(0.1, 100.0, 5.0, 1, 1.0, None, 80, ' %')
         self.sp_man_step.setToolTip('Distância mínima (em %) entre a frequência de um ponto novo e a do último gravado.')
-        row.addWidget(self.sp_man_step)
-        row.addWidget(QtWidgets.QLabel('estável:'))
+        g.addWidget(self.sp_man_step)
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('estável:'))
         self.sp_man_tol = self._dspin(0.01, 10.0, 0.5, 2, 0.1, None, 80, ' %')
         self.sp_man_tol.setToolTip('Desvio padrão máximo da frequência (último segundo, em % dela) para considerá-la estável.\n'
                                    'Durante a espera e a medida do ponto, ela pode mudar no máximo 2× isso (mínimo 1 %).')
-        row.addWidget(self.sp_man_tol)
-        row.addWidget(QtWidgets.QLabel('τ:'))
+        g.addWidget(self.sp_man_tol)
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('τ:'))
         self.sp_man_tau = TauSpinBox(CAL_SWEEP_TAU, None, width=80)
         self.sp_man_tau.setToolTip('τ dos dois lock-ins durante a varredura manual (restaurado no fim). Cada ponto espera\n'
                                    '9τ depois que a frequência estabiliza e faz a média por 1τ.')
-        row.addWidget(self.sp_man_tau)
-        row.addStretch(1)
+        g.addWidget(self.sp_man_tau)
         lay.addLayout(row)
         row = QtWidgets.QHBoxLayout()
         self.btn_man_start = QtWidgets.QPushButton('▶ Iniciar')
@@ -638,9 +640,9 @@ class DualMixin:
         self.lbl_man = QtWidgets.QLabel('')
         self.lbl_man.setStyleSheet('font-family:Consolas,monospace;')
         self.lbl_man.setWordWrap(True)
-        row.addWidget(self.lbl_man)
         row.addStretch(1)
         lay.addLayout(row)
+        lay.addWidget(self.lbl_man)
         return box
 
     def toggle_manual_sweep(self, slot=None):

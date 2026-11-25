@@ -252,12 +252,15 @@ class CommonMixin:
                     g.addWidget(QtWidgets.QLabel(label))
                 g.addWidget(w)
             lay.addLayout(row1)
-        row2 = QtWidgets.QHBoxLayout()
+        # 2.5.0: botão e warm-up numa linha que quebra (painel lateral estreito); tempo e barra na linha de baixo
+        row2 = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)
+        row3 = QtWidgets.QHBoxLayout()
         btn = QtWidgets.QPushButton('▶ Varredura')
         btn.setStyleSheet('background:#cfe2ff;')
         btn.setMinimumWidth(110)
         btn.clicked.connect(lambda _=False, b=btn, f=on_click: self._warm_click(b, f))
         row2.addWidget(btn)
+        g_w = row2.group()
         eta = QtWidgets.QLabel('Tempo estimado: --:--')
         # O tempo fica no fim da linha (depois do warm-up): quando o texto muda, nada mais se move; com pouco
         # espaço ele quebra a linha em vez de alargar a janela. O botão tem largura para "⏹ Warm-up 0:00:00".
@@ -275,9 +278,9 @@ class CommonMixin:
         chk_w.toggled.connect(sp_w.setVisible)
         chk_w.toggled.connect(lambda _=False, e=eta: self._eta_render(e))
         sp_w.valueChanged.connect(lambda _=0.0, e=eta: self._eta_render(e))
-        row2.addWidget(chk_w)
-        row2.addWidget(sp_w)
-        row2.addWidget(eta, 4)
+        g_w.addWidget(chk_w)
+        g_w.addWidget(sp_w)
+        row3.addWidget(eta, 4)
         if not hasattr(self, 'warm_w'):
             self.warm_w = {}
         self.warm_w[btn] = (chk_w, sp_w, warm_pwm, eta)
@@ -286,8 +289,9 @@ class CommonMixin:
         bar.setTextVisible(False)
         bar.setFixedHeight(12)
         bar.setVisible(False)
-        row2.addWidget(bar, 3)
+        row3.addWidget(bar, 3)
         lay.addLayout(row2)
+        lay.addLayout(row3)
         return box, btn, eta, bar
 
     def flash(self, text, seconds=3.0):
@@ -302,7 +306,7 @@ class CommonMixin:
             conn = f"<span style='color:#1a7f1a;'>●</span> STM32 conectado ({self.link.port})"
             tip = ''
         elif self.simulating:
-            conn = "<span style='color:#1f5fbf;'>●</span> Simulação (sem STM32)"
+            conn = "<span style='color:#d07000;font-weight:bold;'>● SIMULAÇÃO (sem STM32)</span>"
             tip = ''
         else:
             conn = "<span style='color:#d07000;'>●</span> STM32 desconectado, procurando..."
@@ -456,9 +460,7 @@ class CommonMixin:
         warn.setStyleSheet('color:#b00000;background:#fdecea;border:1px solid #e0a0a0;border-radius:4px;padding:4px;')
         bl.addWidget(warn)
         warn.setVisible(self.opt_supply > 4)
-        bl.addWidget(self.chk_scope_fixed)
-        self.chk_scope_fixed.show()
-        lay.addWidget(box)
+        lay.addWidget(box)                          # 2.5.0: a escala fixa do osciloscópio foi para a seção da aba OPT101
 
         box = self._group('Varreduras')
         bl = QtWidgets.QVBoxLayout(box)
@@ -472,12 +474,7 @@ class CommonMixin:
         chk_nb.toggled.connect(self.set_show_nb)
         lay.addWidget(box)
 
-        box = self._group('Experimento')
-        bl = QtWidgets.QHBoxLayout(box)
-        bl.addWidget(self.btn_finish)
-        self.btn_finish.show()
-        bl.addWidget(info('ZIP com os arquivos salvos nesta sessão e a calibração em uso.'), 1)
-        lay.addWidget(box)
+        # 2.5.0: "Finalizar experimento" fica à vista, na seção Experimento do painel lateral
 
         def on_trigger(checked):
             if not checked:
@@ -509,15 +506,15 @@ class CommonMixin:
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         btns.rejected.connect(dlg.reject)
         btns.accepted.connect(dlg.accept)
+        soi_layout.scroll_dialog(dlg)                          # 2.5.0: rola em telas baixas (125 % em 1366×768)
         lay.addWidget(btns)
         for lbl in dlg.findChildren(QtWidgets.QLabel):        # rótulos com quebra de linha: altura certa
             if lbl.wordWrap():
                 lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 60))
+        dlg.fit_scroll()
         dlg.adjustSize()
+        soi_layout.fit_to_screen(dlg)
         dlg.exec()
-        # o botão Finalizar volta para fora da janela (sem pai visível) para não ser destruído com ela
-        self.btn_finish.setParent(None)
-        self.chk_scope_fixed.setParent(None)
 
     def set_opt_supply(self, v):
         self.opt_supply = 5.0 if v > 4 else 3.3
@@ -645,17 +642,17 @@ class CommonMixin:
         self.ext_range_w.setVisible(ext)
         self.plot_raw.getPlotItem().setTitle(
             'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico '
-            '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real' if ext else
+            '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0)' if ext else
             'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
-            '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
+            '(<span style="color:#009600;">verde tracejado</span>, 0/1)')
         for b in list(self.btn_sweeps.values()) + list(getattr(self, 'btn_sweeps_aud', {}).values()):
             b.setEnabled(not ext and not busy)
             b.setToolTip('Use o Modo Duplo (varredura manual) na modulação óptica.' if ext else '')
         if hasattr(self, 'dual_manual_box'):
             self.dual_manual_box.setVisible(ext)
             self.dual_box_f.setVisible(not ext)
-            for b in (self.btn_dual_p_panel, self.btn_dual_t_panel):     # PWM e tempo: modulação eletrônica
-                b.setVisible(not ext)
+            for b, key in ((self.btn_dual_p_panel, 'dual_p'), (self.btn_dual_t_panel, 'dual_t')):   # só modulação eletrônica
+                self.side_sections[key].setVisible(not ext)
                 if ext:
                     b.setChecked(False)
         self._update_ext_label()

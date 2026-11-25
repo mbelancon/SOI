@@ -578,8 +578,8 @@ EN = {
         'Resolution test',
     'Mede, com sinal estável (laser desligado ou luz constante), quanto a sobreamostragem\nreduz o ruído de fato: ruído × OSR comparado com o ideal 1/√OSR, bits efetivos e\nhistograma dos códigos crus do ADC.':
         'Measures, with a steady signal (laser off or constant light), how much oversampling\nactually reduces the noise: noise × OSR compared with the ideal 1/√OSR, effective bits and\nhistogram of the raw ADC codes.',
-    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser (<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real':
-        'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and laser reference (<span style="color:#009600;">green dashed</span>, 0/1) - real-time oscilloscope',
+    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser (<span style="color:#009600;">verde tracejado</span>, 0/1)':
+        'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and laser reference (<span style="color:#009600;">green dashed</span>, 0/1)',
     'Tempo (s)':
         'Time (s)',
     'Limiar de Saturação':
@@ -798,8 +798,8 @@ EN = {
         'Phase of each sensor (unwrapped)',
     'fase (graus)':
         'phase (degrees)',
-    'Sem dados: escolha uma varredura acima e clique em ▶ Varredura.':
-        'No data: choose a sweep above and click ▶ Sweep.',
+    'Sem dados: escolha uma medida no painel à esquerda e clique em ▶ Varredura.':
+        'No data: choose a measurement in the left panel and click ▶ Sweep.',
     'Calibração do microfone ▸':
         'Microphone calibration ▸',
     'Mostra ou esconde a calibração do microfone.\nEscolha a referência (padrão de calibração): ela define a curva teórica esperada e a célula (OPC ou câmara).\nCom o painel fechado, "Fitar padrão" não é aplicado.':
@@ -1324,8 +1324,8 @@ EN = {
         'Step:',
     "<span style='color:#1a7f1a;'>●</span> STM32 conectado (":
         "<span style='color:#1a7f1a;'>●</span> STM32 connected (",
-    "<span style='color:#1f5fbf;'>●</span> Simulação (sem STM32)":
-        "<span style='color:#1f5fbf;'>●</span> Simulation (no STM32)",
+    "<span style='color:#d07000;font-weight:bold;'>● SIMULAÇÃO (sem STM32)</span>":
+        "<span style='color:#d07000;font-weight:bold;'>● SIMULATION (no STM32)</span>",
     "<span style='color:#d07000;'>●</span> STM32 desconectado, procurando...":
         "<span style='color:#d07000;'>●</span> STM32 disconnected, searching...",
     'Nenhuma porta do STM32 (USB VID 0x0483) encontrada.':
@@ -1689,7 +1689,7 @@ EN = {
     'Modo Duplo, varredura manual: ': 'Dual Mode, manual sweep: ',
     ' pontos': ' points',
     'Modulação óptica: a referência é o próprio OPT101 (a fase dele fica perto de −90° por construção; S e Δφ valem como na eletrônica).': 'Optical modulation: the reference is the OPT101 itself (its phase stays near −90° by construction; S and Δφ are valid as with electronic modulation).',
-    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico (<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real': 'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and optical PLL reference (<span style="color:#009600;">dashed green</span>, cos θ ≥ 0) - real-time oscilloscope',
+    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico (<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0)': 'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and optical PLL reference (<span style="color:#009600;">dashed green</span>, cos θ ≥ 0)',
     'Eletrônica': 'Electronic',
     'Óptica': 'Optical',
     '○ procurando': '○ searching',
@@ -2117,3 +2117,23 @@ EN = {
     'Ordem em que as frequências são medidas. Crescente ou decrescente: uma deriva lenta (aquecimento)\nvira uma inclinação falsa na curva. Embaralhada (padrão): nova ordem aleatória a cada repetição, e a deriva vira\nruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\nOs CSV continuam em ordem de frequência, com as colunas Ordem_medida (posição em que o ponto foi medido)\ne Hora_ponto (fim do ponto).': 'Order in which the frequencies are measured. Ascending or descending: a slow drift (warm-up)\nbecomes a false slope in the curve. Shuffled (default): a new random order in each repetition, and the drift becomes\nnoise that the median of the repetitions reduces. The seed goes in the CSV header (the order can be rebuilt).\nThe CSVs stay in frequency order, with the columns Ordem_medida (position in which the point was measured)\nand Hora_ponto (end of the point).',
     'Monitor de ruído pelas vizinhas: a cada 1 s o SOI mede, no INMP441 bruto, q = R nas frequências vizinhas\n(f ± 7 %) / R em f. Um som do ambiente (porta, voz, carro) aparece nas vizinhas junto com o\nsinal: o trecho da média com q > 2 × a mediana de q do ponto é descartado e, com mais de\n30 % descartado, a média do ponto é refeita (até 2×). Campanha de 18/11: o desvio\ncai de 27 para 15 % em 37 Hz e de 14 para 7 % em 113 Hz; acima de ~500 Hz quase nada é descartado.\nO CSV ganha as colunas Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido (q ~ 3× o erro típico do ponto).': "Neighbour-frequency noise monitor: every 1 s the SOI measures, on the raw INMP441, q = R at the neighbouring\nfrequencies (f ± 7 %) / R at f. A room sound (door, voice, car) shows up at the neighbours together with the\nsignal: the part of the average with q > 2 × the point's median q is discarded and, with more than\n30 % discarded, the point's average is redone (up to 2×). Campaign of 2026-11-18: the deviation\ndrops from 27 to 15 % at 37 Hz and from 14 to 7 % at 113 Hz; above ~500 Hz almost nothing is discarded.\nThe CSV gets the columns Ruido_vizinhas_q, Descartado_Pct and Refeito_ruido (q ~ 3× the typical point error).",
 }
+
+
+# 2.5.0: painel lateral (seções), osciloscópio recolhível
+EN.update({
+    'Osciloscópio': 'Oscilloscope',
+    'Lock-In e Valor Médio': 'Lock-In and Average',
+    'Escala fixa (0 a 3,3 V)': 'Fixed scale (0 to 3.3 V)',
+    'Osciloscópio (sinal bruto do ADC)': 'Oscilloscope (raw ADC signal)',
+    'Mostra ou recolhe o osciloscópio (sinal bruto do ADC). A aquisição continua; o aviso de\n'
+    'saturação continua na linha de status acima.':
+        'Shows or collapses the oscilloscope (raw ADC signal). Acquisition goes on; the\n'
+        'saturation warning stays in the status line above.',
+    'Espectro do sinal bruto do ADC (ao lado do gráfico do lock-in).':
+        'Spectrum of the raw ADC signal (next to the lock-in plot).',
+    'Calibração': 'Calibration',
+    'Calibração do microfone com duas amostras (A e B) de materiais diferentes.':
+        'Microphone calibration with two samples (A and B) of different materials.',
+    'Excitação': 'Excitation',
+    'Experimento': 'Experiment',
+})

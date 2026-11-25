@@ -460,6 +460,7 @@ class AudioMixin:
     def open_noise_dialog(self):
         if getattr(self, 'noise_dlg', None) is None:
             self.noise_dlg = soi_ruido.make_dialog(self)
+            soi_layout.fit_to_screen(self.noise_dlg)          # 2.5.0: 1050×720 não cabe em 1366×768 a 125 %
         self.noise_dlg.show()
         self.noise_dlg.raise_()
     nb_buf = np.empty(0, dtype=np.float32)

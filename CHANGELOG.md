@@ -15,6 +15,26 @@ The interface and the firmware share the same version number. It appears in `__v
 Minor version: only the interface changes (firmware 2.0.0, same USB protocol). Goal: a cleaner window that fits
 1366×768 screens (also at 125 % Windows scaling). Plan approved by Marcos on 2026-11-24/25.
 
+### Changed: window layout for 1366×768
+- **Side panel with collapsible sections** on the left, plots on the right. The old top bar became the
+  **Experiment** (sample, calibration + Use, Finish experiment) and **Excitation** (Freq, PWM) sections; below them
+  come the sections of the active tab. The panel scrolls, so open sections never make the window taller; its width
+  can be dragged. Section states, panel width and the oscilloscope state are saved between sessions.
+- **OPT101:** sections *Oscilloscope* (window, oversampling, fixed 0–3.3 V scale, optical search range), *Lock-In and
+  Average* (mode, pause, save, FFT, τ/high-pass or pulses) and *Sweeps*; the curve fit sits below them. The
+  **oscilloscope collapses** with the header above it, and a divider sets its height against the lower plot. The FFT
+  now sits next to the lower plot.
+- **INMP441:** sections *Display*, *Lock-In* and *Sweeps*.
+- **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
+  so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
+- **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**
+  in orange in the status bar. The *Fixed oscilloscope scale* option moved from Settings to the Oscilloscope section.
+- Sweep boxes, the manual sweep, the Measurement Series buttons and the "No data" / "Peak not found" notices wrap
+  instead of widening the window. The Settings window scrolls on short screens and the background-noise window is
+  limited to the screen size. Shorter oscilloscope title.
+- Minimum window size went from about 1270×650 (2.4) to about 910×450 logical pixels (1366×768 at 125 % gives
+  ~1090×585).
+
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
   opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB

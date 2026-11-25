@@ -62,6 +62,21 @@ class OptMixin:
         '''τ do passa-baixas, valores derivados dele (−3 dB, ENBW, espera) e passa-altas de um lock-in, com
         dicas. Devolve o rótulo dos valores derivados.'''
         lbl_tau = QtWidgets.QLabel()
+        if isinstance(lay, QtWidgets.QGridLayout):     # 2.5.0: painel lateral (τ, valores derivados, passa-altas)
+            lbl_tau.setWordWrap(True)
+            lbl_tau.setStyleSheet('color:#555;')
+            for r, (text, w, tip) in enumerate((('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
+                                                 ('Passa-Altas (Hz):', sp_hp, HP_TIP))):
+                w.setToolTip(tip)
+                if text:
+                    lbl = QtWidgets.QLabel(text)
+                    lbl.setToolTip(tip)
+                    lay.addWidget(lbl, r, 0)
+                    lay.addWidget(w, r, 1)
+                else:
+                    lay.addWidget(w, r, 0, 1, 2)
+            lay.setColumnStretch(1, 1)
+            return lbl_tau
         lbl_tau.setMinimumWidth(250)
         for text, w, tip in (('τ:', sp_tau, TAU_TIP), (None, lbl_tau, LP_INFO_TIP),
                              ('Passa-Altas (Hz):', sp_hp, HP_TIP)):
@@ -745,8 +760,26 @@ class OptMixin:
     # ------------------------------------------------------------ Laço GUI
 
     def on_opt_sweeps_panel(self, checked):
-        self.opt_sweeps_panel.setVisible(checked)
         self.btn_opt_sweeps.setText('Varreduras ▾' if checked else 'Varreduras ▸')
+
+    def on_scope_toggle(self, shown):
+        '''Mostra ou recolhe o osciloscópio do OPT101 (2.5.0). Recolhido, sobra só o cabeçalho e a divisória
+        devolve a altura ao gráfico de baixo; ao mostrar de novo, volta a divisão anterior.'''
+        from soi_i18n import tr
+        self.btn_scope.setText(('▾ ' if shown else '▸ ') + tr('Osciloscópio (sinal bruto do ADC)'))
+        split = getattr(self, 'opt_split', None)
+        self.plot_raw.setVisible(shown)
+        if split is None:
+            return
+        if shown:
+            self.scope_box.setMaximumHeight(16777215)
+            sizes = getattr(self, '_scope_sizes', None)
+            if sizes:
+                split.setSizes(sizes)
+        else:
+            if self.plot_raw.height() > 0 and split.sizes()[0] > self.btn_scope.sizeHint().height() + 4:
+                self._scope_sizes = split.sizes()
+            self.scope_box.setMaximumHeight(self.btn_scope.sizeHint().height())
 
     def on_opt_fft(self, checked):
         self.opt_fft_enabled = checked
@@ -754,10 +787,6 @@ class OptMixin:
         self.opt_write_index = 0
         self.last_opt_fft_t = 0.0
         self.opt_fft_panel.setVisible(checked)
-        # Com a FFT visível ela ocupa a sobra da coluna; sem ela, o espaço vazio fica embaixo
-        side = self.side_layout
-        side.setStretch(side.indexOf(self.opt_fft_panel), 1 if checked else 0)
-        side.setStretch(side.count() - 1, 0 if checked else 1)
         if not checked:
             self.curve_opt_fft.setData([], [])
             self.curve_opt_fft_fit.setData([], [])
@@ -892,6 +921,7 @@ class OptMixin:
 
         def center():
             r = item.vb.rect()
+            lbl.setTextWidth(max(120.0, r.width() - 16.0))     # quebra no gráfico estreito (2.5.0)
             lbl.setPos(r.width() / 2.0, r.height() / 2.0)
         item.vb.sigResized.connect(center)
         center()
@@ -903,7 +933,7 @@ class OptMixin:
         show_missing = fit_checked and missing is not None
         if show_missing:
             missing_lbl.setHtml('<div style="text-align:center;color:#d00000;">'
-                                '<span style="font-size:18pt;font-weight:bold;">Pico em f0 não encontrado</span><br>'
+                                '<span style="font-size:15pt;font-weight:bold;">Pico em f0 não encontrado</span><br>'
                                 f'<span style="font-size:11pt;">{missing}</span></div>')
         missing_lbl.setVisible(show_missing)
         fit_on = fit_checked and not show_missing and html is not None

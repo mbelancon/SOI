@@ -10,17 +10,39 @@ class UiMixin:
         pg.setConfigOptions(antialias=False, background='w', foreground='k')
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
-        central_layout = QtWidgets.QVBoxLayout(central)
-        central_layout.setContentsMargins(6, 6, 6, 6)
+        central_layout = QtWidgets.QHBoxLayout(central)
+        central_layout.setContentsMargins(6, 6, 6, 2)
+        # 2.5.0: painel lateral (seções recolhíveis numa área com rolagem) à esquerda e as abas com os gráficos à
+        # direita; a antiga barra de cima foi para as seções Experimento e Excitação, o SNR para a barra de status e
+        # Configurações para o canto das abas. Nenhuma seção aberta aumenta o tamanho mínimo da janela.
+        self.side = soi_layout.SidePanel()
+        self.side_sections = {}
+
+        def section(title, key, opened=True, page=None):
+            sec = soi_layout.Section(title, key, opened)
+            self.side_sections[key] = sec
+            # Ao abrir uma seção, a rolagem do painel a traz para a vista (cabeçalho e o máximo do conteúdo)
+            sec.head.clicked.connect(lambda on, s=sec: on and QtCore.QTimer.singleShot(
+                0, lambda: (self.side.scroll.ensureWidgetVisible(s.body, 0, 0),
+                            self.side.scroll.ensureWidgetVisible(s.head, 0, 0))))
+            if page is None:
+                self.side.add(sec)
+            else:
+                page.addWidget(sec)
+            return sec
+        self._side_section = section
+        sec_exp = section('Experimento', 'exp')
+        sec_exc = section('Excitação', 'exc')
+        # Seções de cada aba: uma página por aba, trocada junto com a aba
+        self.side_pages = soi_layout.CurrentStack()
+        self.side.add(self.side_pages)
+        self.side_page_lay = []
 
         # Excitação (comum a todas as abas): frequência e potência
         self.sp_freq = self._dspin(0.0, 5000.0, self.ref_freq, 3, 0.1, self.on_freq)
         self.sp_power = self._dspin(0.0, 100.0, self.laser_power, 1, 0.1, self.on_power)
-        top_bar = soi_layout.FlowBar()
-        excitation = top_bar.group()
-        lbl_exc = QtWidgets.QLabel('Excitação:')
-        lbl_exc.setStyleSheet('font-weight:bold;')
-        excitation.addWidget(lbl_exc)
+        exc_row = sec_exc.row()
+        excitation = exc_row.group()
         self.cmb_mod = QtWidgets.QComboBox()
         self.cmb_mod.addItems(['Eletrônica', 'Óptica'])
         self.cmb_mod.setToolTip(
@@ -34,6 +56,8 @@ class UiMixin:
         # O seletor fica na janela Configurações (trigger eletrônico ou óptico); este combo guarda o estado
         for label, w in (('Freq (Hz):', self.sp_freq), ('PWM (%):', self.sp_power)):
             lbl = QtWidgets.QLabel(label)
+            if w is self.sp_power:
+                excitation = exc_row.group()
             excitation.addWidget(lbl)
             if w is self.sp_power:
                 self._add_pwm_presets(excitation)
@@ -45,33 +69,35 @@ class UiMixin:
         self.lbl_ext = QtWidgets.QLabel('')
         self.lbl_ext.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_ext.setVisible(False)
-        excitation.addWidget(self.lbl_ext)
-        excitation = top_bar.group()
-        lbl_sample = QtWidgets.QLabel('Amostra:')
-        lbl_sample.setStyleSheet('font-weight:bold;')
-        excitation.addWidget(lbl_sample)
+        sec_exc.add(self.lbl_ext)
+        exp_grid = QtWidgets.QGridLayout()
+        exp_grid.setContentsMargins(0, 0, 0, 0)
+        exp_grid.setHorizontalSpacing(6)
+        exp_grid.setVerticalSpacing(4)
+        exp_grid.setColumnStretch(1, 1)
+        sec_exp.add(exp_grid)
+        exp_grid.addWidget(QtWidgets.QLabel('Amostra:'), 0, 0)
         self.ed_sample = QtWidgets.QLineEdit()
         self.ed_sample.setPlaceholderText('nome da amostra')
-        self.ed_sample.setFixedWidth(130)
+        self.ed_sample.setMinimumWidth(100)
         self.ed_sample.setToolTip('Todos os arquivos salvos na pasta Medidas começam com este nome.\n'
                                   'Caracteres inválidos em nomes de arquivo viram "_". Vazio = sem prefixo.')
-        excitation.addWidget(self.ed_sample)
+        exp_grid.addWidget(self.ed_sample, 0, 1, 1, 2)
         # Calibração do microfone: começa na mais recente da pasta, marcada para uso
-        excitation = top_bar.group()
-        lbl_cal = QtWidgets.QLabel('Calibração:')
-        lbl_cal.setStyleSheet('font-weight:bold;')
-        excitation.addWidget(lbl_cal)
+        exp_grid.addWidget(QtWidgets.QLabel('Calibração:'), 1, 0)
         self.cmb_mic_cal = RefreshComboBox(self.refresh_mic_cal)
-        self.cmb_mic_cal.setFixedWidth(190)
+        self.cmb_mic_cal.setMinimumWidth(100)
+        self.cmb_mic_cal.setMinimumContentsLength(12)
+        self.cmb_mic_cal.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.cmb_mic_cal.currentIndexChanged.connect(lambda _: self._show_dual_results())
-        excitation.addWidget(self.cmb_mic_cal)
+        exp_grid.addWidget(self.cmb_mic_cal, 1, 1)
         self.chk_mic_cal = QtWidgets.QCheckBox('Usar')
         self.chk_mic_cal.setChecked(True)
         self.chk_mic_cal.setToolTip('Corrige a varredura em frequência do Modo Duplo pela calibração escolhida:\n'
                                     'S é dividido pela sensibilidade relativa e Δφ é descontado da fase do sistema.\n'
                                     'Desmarque para gerar uma calibração nova (ela usa os dados brutos).')
         self.chk_mic_cal.toggled.connect(lambda _: self._show_dual_results())
-        excitation.addWidget(self.chk_mic_cal)
+        exp_grid.addWidget(self.chk_mic_cal, 1, 2)
         # Configuração da célula: a calibração só vale na configuração em que foi feita (acústica diferente)
         # 2.5.0: só a Câmara (modo OPC removido, Marcos 25/11). O combo continua fora da tela: vai para os CSV
         # ("# Celula = Camara") e as funções da calibração o leem.
@@ -84,7 +110,6 @@ class UiMixin:
                                  + '\nA calibração do microfone só vale na configuração em que foi feita (o volume de gás e a\n'
                                    'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
-        excitation = top_bar.group()
         # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
         # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
         self.lbl_snr_top = QtWidgets.QLabel('SNR OPT/INMP: — / — dB')
@@ -99,11 +124,10 @@ class UiMixin:
             f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (erro do ponto ≲ 10 %, perto do piso de ~7 % em baixa frequência),\n'
             f'amarelo {SNR_TOP_OK_DB:g}–{SNR_TOP_GOOD_DB:g} dB (bem detectado, erro ~10 a 25 %), vermelho abaixo (≳ 40 %).\n'
             'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.')
-        excitation.addWidget(self.lbl_snr_top)
+        self.lbl_snr_top.setStyleSheet('padding:0 8px;')     # 2.5.0: na barra de status (montada no fim de _build_ui)
         self.snr_top_timer = QtCore.QTimer(self)
         self.snr_top_timer.timeout.connect(self._update_snr_top)
         self.snr_top_timer.start(1000)
-        excitation = top_bar.group()          # último grupo: encostado à direita
         self.chk_sim = QtWidgets.QCheckBox('Simular amostragem')
         self.chk_sim.setStyleSheet('QCheckBox{font-weight:bold;color:#006400;}')
         self.chk_sim.setToolTip('Gera um sinal simulado (com ruído) quando não há STM32 conectado.')
@@ -125,8 +149,7 @@ class UiMixin:
         self.btn_settings.setToolTip('Trigger dos lock-ins (eletrônico pelo STM32 ou óptico pelo OPT101), alimentação do\n'
                                      'OPT101 (3,3 V ou 5 V) e Finalizar experimento.')
         self.btn_settings.clicked.connect(self.open_settings)
-        excitation.addWidget(self.btn_settings)
-        # "Finalizar experimento" agora fica dentro de Configurações
+        # 2.5.0: Configurações no canto das abas; "Finalizar experimento" na seção Experimento
         self.btn_finish = QtWidgets.QPushButton('Finalizar experimento')
         self.btn_finish.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;background:#d4edda;'
                                       'border:1px solid #2e7d32;border-radius:4px;}'
@@ -135,12 +158,21 @@ class UiMixin:
                                    'desde que a interface abriu (ou desde o último "Finalizar experimento"),\n'
                                    'junto com a calibração do microfone em uso.')
         self.btn_finish.clicked.connect(self.finish_experiment)
-        central_layout.addLayout(top_bar)
+        sec_exp.add(self.btn_finish)
 
         tabs = QtWidgets.QTabWidget()
         self.tabs = tabs
-        central_layout.addWidget(tabs)
+        tabs.setCornerWidget(self.btn_settings, QtCore.Qt.Corner.TopRightCorner)
+        self.main_split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.main_split.setChildrenCollapsible(True)
+        self.main_split.addWidget(self.side)
+        self.main_split.addWidget(tabs)
+        self.main_split.setStretchFactor(0, 0)
+        self.main_split.setStretchFactor(1, 1)
+        self.main_split.setSizes([320, 1000])
+        central_layout.addWidget(self.main_split)
         tabs.currentChanged.connect(self.refresh_mic_cal)
+        tabs.currentChanged.connect(lambda i: self.side_pages.setCurrentIndex(i) if i < self.side_pages.count() else None)
 
         optical_page = QtWidgets.QWidget()
         tabs.addTab(optical_page, 'OPT101')
@@ -153,12 +185,17 @@ class UiMixin:
         self.lbl_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
         root.addWidget(soi_layout.no_widen(self.lbl_status))
 
-        # Janela do osciloscópio (topo da aba OPT101); Freq e PWM ficam na linha "Excitação"
-        top = QtWidgets.QHBoxLayout()
+        # 2.5.0: controles da aba no painel lateral (página 0); à direita só os gráficos
+        opt_side = self._side_page(0)
+        sec_scope = self._side_section('Osciloscópio', 'opt_scope', True, opt_side)
+        scope_grid = QtWidgets.QGridLayout()
+        scope_grid.setContentsMargins(0, 0, 0, 0)
+        scope_grid.setHorizontalSpacing(6)
+        scope_grid.setColumnStretch(1, 1)
+        sec_scope.add(scope_grid)
         self.sp_window = self._dspin(0.005, 30.0, self.raw.window, 3, 0.5, self.on_window)
-        for label, w in (('Janela (s):', self.sp_window),):
-            top.addWidget(QtWidgets.QLabel(label))
-            top.addWidget(w)
+        scope_grid.addWidget(QtWidgets.QLabel('Janela (s):'), 0, 0)
+        scope_grid.addWidget(self.sp_window, 0, 1)
         self.chk_mains = QtWidgets.QCheckBox('Filtro 60 Hz')
         self.chk_mains.setToolTip('Rejeita 60 Hz e múltiplos (até 1,5 kHz) no sinal bruto e no lock-in.\n'
                                   'Notches que caem sobre a frequência de modulação são omitidos.')
@@ -170,8 +207,7 @@ class UiMixin:
         # 2.5.0 (Marcos, 25/11): sem o Filtro 60 Hz na tela; a caixa fica escondida e sempre desmarcada
         self.chk_mains.setParent(self)
         self.chk_mains.setVisible(False)
-        top.addSpacing(16)
-        top.addWidget(QtWidgets.QLabel('Sobreamostragem:'))
+        scope_grid.addWidget(QtWidgets.QLabel('Sobreamostragem:'), 1, 0)
         self.cmb_osr = QtWidgets.QComboBox()
         for osr in OSR_CHOICES:
             self.cmb_osr.addItem(f'{osr}x  ({RAW_FS / osr / 1000:g} kS/s)', osr)
@@ -182,40 +218,41 @@ class UiMixin:
             'cai para 200/OSR kS/s. 16x reproduz a versão 1.0.0 (12,5 kS/s).\n'
             'Bloqueado durante varreduras.')
         self.cmb_osr.currentIndexChanged.connect(lambda i: self.set_osr(self.cmb_osr.itemData(i)))
-        top.addWidget(self.cmb_osr)
+        scope_grid.addWidget(self.cmb_osr, 1, 1)
+        self.chk_scope_fixed.setText('Escala fixa (0 a 3,3 V)')
+        scope_grid.addWidget(self.chk_scope_fixed, 2, 0, 1, 2)
         # Faixa em que a frequência do chopper é procurada (modulação óptica)
         self.ext_range_w = QtWidgets.QWidget()
-        er = QtWidgets.QHBoxLayout(self.ext_range_w)
-        er.setContentsMargins(0, 0, 0, 0)
+        er = QtWidgets.QGridLayout(self.ext_range_w)
+        er.setContentsMargins(0, 4, 0, 0)
+        er.setHorizontalSpacing(4)
         lbl = QtWidgets.QLabel('Busca da modulação óptica:')
         lbl.setStyleSheet('font-weight:bold;')
-        er.addWidget(lbl)
+        er.addWidget(lbl, 0, 0, 1, 4)
         self.sp_ext_fmin = self._dspin(1.0, 5000.0, EXT_FMIN_DEFAULT, 1, 5.0, self.on_ext_range, 90, ' Hz')
         self.sp_ext_fmax = self._dspin(1.0, 5000.0, EXT_FMAX_DEFAULT, 1, 50.0, self.on_ext_range, 100, ' Hz')
         for w in (self.sp_ext_fmin, self.sp_ext_fmax):
             w.setToolTip('Faixa em que a frequência do chopper é procurada na FFT do OPT101 (o maior pico).\n'
                          'Com um ventilador de pás desiguais aparece também a frequência de rotação (f/nº de pás):\n'
                          'estreite a faixa em volta da frequência das pás se a busca travar na errada.')
-        er.addWidget(QtWidgets.QLabel('de'))
-        er.addWidget(self.sp_ext_fmin)
-        er.addWidget(QtWidgets.QLabel('a'))
-        er.addWidget(self.sp_ext_fmax)
+        er.addWidget(QtWidgets.QLabel('de'), 1, 0)
+        er.addWidget(self.sp_ext_fmin, 1, 1)
+        er.addWidget(QtWidgets.QLabel('a'), 1, 2)
+        er.addWidget(self.sp_ext_fmax, 1, 3)
+        er.setColumnStretch(4, 1)
         self.btn_ext_search = QtWidgets.QPushButton('Procurar de novo')
         self.btn_ext_search.setToolTip('Esquece a frequência atual e procura de novo na FFT do OPT101.')
         self.btn_ext_search.clicked.connect(lambda: self.on_ext_range(force=True))
-        er.addWidget(self.btn_ext_search)
+        er.addWidget(self.btn_ext_search, 2, 0, 1, 4)
         self.ext_range_w.setVisible(False)
-        er.addStretch(1)
-        top.addStretch(1)
-        root.addLayout(top)
-        root.addWidget(self.ext_range_w)      # linha própria: não alarga a janela
+        sec_scope.add(self.ext_range_w)
 
         # Osciloscópio
         self.plot_raw = pg.PlotWidget()
         pi = self.plot_raw.getPlotItem()
         # Legenda no título: dentro do gráfico ela ficava em cima do traço
         pi.setTitle('Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
-                    '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
+                    '(<span style="color:#009600;">verde tracejado</span>, 0/1)')
         pi.setLabel('left', 'Tensão no PA0 (V)')
         pi.setLabel('bottom', 'Tempo (s)')
         pi.getAxis('bottom').enableAutoSIPrefix(False)
@@ -277,7 +314,28 @@ class UiMixin:
         self.cursor = pg.InfiniteLine(pos=0, angle=90,
                                       pen=pg.mkPen((255, 0, 0, 200), style=QtCore.Qt.PenStyle.DashLine))
         pi.addItem(self.cursor)
-        root.addWidget(self.plot_raw, 3)
+        # Osciloscópio recolhível (Marcos, 25/11): cabeçalho com botão em cima do gráfico; recolhido, o espaço vai
+        # para o gráfico do lock-in/valor médio. A altura entre os dois se ajusta arrastando a divisória.
+        self.scope_box = QtWidgets.QWidget()
+        sc_lay = QtWidgets.QVBoxLayout(self.scope_box)
+        sc_lay.setContentsMargins(0, 0, 0, 0)
+        sc_lay.setSpacing(0)
+        self.btn_scope = QtWidgets.QToolButton()
+        self.btn_scope.setCheckable(True)
+        self.btn_scope.setChecked(True)
+        self.btn_scope.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self.btn_scope.setStyleSheet('QToolButton{text-align:left;padding:1px 6px;border:none;border-bottom:1px solid #d6d9df;'
+                                     'font-weight:bold;color:#333;}QToolButton:hover{background:#eef2f8;}')
+        self.btn_scope.setToolTip('Mostra ou recolhe o osciloscópio (sinal bruto do ADC). A aquisição continua; o aviso de\n'
+                                  'saturação continua na linha de status acima.')
+        self.btn_scope.toggled.connect(self.on_scope_toggle)
+        sc_lay.addWidget(self.btn_scope)
+        sc_lay.addWidget(self.plot_raw, 1)
+        self.on_scope_toggle(True)
+        self.opt_split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.opt_split.setChildrenCollapsible(False)
+        self.opt_split.addWidget(self.scope_box)
+        root.addWidget(self.opt_split, 1)
 
         # Magnitude (esquerda, azul) e Fase (direita, vermelho) no mesmo gráfico, na metade esquerda
         self.plot1 = pg.PlotWidget(axisItems={'bottom': TimeAxis(orientation='bottom')})
@@ -323,11 +381,24 @@ class UiMixin:
         p1.vb.sigResized.connect(sync_phase)
         sync_phase()
 
-        bottom = QtWidgets.QHBoxLayout()
-        left = QtWidgets.QVBoxLayout()
+        # Parte de baixo: Lock-In/Valor Médio à esquerda e a FFT (opcional) à direita
+        lower = QtWidgets.QWidget()
+        bottom = QtWidgets.QHBoxLayout(lower)
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.addWidget(self.plot1, 1)
+        self.opt_split.addWidget(lower)
+        self.opt_split.setStretchFactor(0, 1)
+        self.opt_split.setStretchFactor(1, 2)
+        self.opt_split.setSizes([300, 600])
+        side = opt_side
+        self.side_layout = side
+        self.opt_lower_lay = bottom
         self.paused = False
-        view_row = QtWidgets.QHBoxLayout()
-        # Modo do gráfico inferior: botões lado a lado (antes era uma chave vertical no rodapé)
+        sec_view = self._side_section('Lock-In e Valor Médio', 'opt_view', True, opt_side)
+        view_row = sec_view.row()
+        g = view_row.group()
+        g.setSpacing(0)
+        # Modo do gráfico inferior: botões lado a lado
         self.btn_mode_li = QtWidgets.QPushButton('Lock-In')
         self.btn_mode_avg = QtWidgets.QPushButton('Valor Médio')
         self.btn_mode_li.setToolTip('Magnitude e fase do lock-in ao longo do tempo.')
@@ -340,40 +411,32 @@ class UiMixin:
                             'QPushButton:checked{background:#1f5fbf;color:white;font-weight:bold;}')
             b.clicked.connect(lambda _=False, a=avg: self.set_display_mode(a))
             mode_group.addButton(b)
-            view_row.addWidget(b)
-        view_row.setSpacing(0)
+            g.addWidget(b)
         self.btn_mode_li.setChecked(True)
-        view_row.addSpacing(24)
-        view_row.addWidget(QtWidgets.QLabel('Pausa:'))
+        g = view_row.group()
+        g.addWidget(QtWidgets.QLabel('Pausa:'))
         self.sw_pause = ToggleSwitch()
         self.sw_pause.toggled.connect(self.on_pause)
-        view_row.addWidget(self.sw_pause)
+        g.addWidget(self.sw_pause)
+        g = view_row.group()
         self.btn_save_view = QtWidgets.QPushButton('Salvar')
         self.btn_save_view.setToolTip('CSV e PNG serão salvos na pasta Medidas')
         self.btn_save_view.clicked.connect(self.save_view)
-        view_row.addSpacing(6)
-        view_row.addWidget(self.btn_save_view)
-        view_row.addSpacing(16)
+        g.addWidget(self.btn_save_view)
         self.chk_opt_fft = QtWidgets.QCheckBox('FFT')
-        self.chk_opt_fft.setToolTip('Espectro do sinal bruto do ADC (coluna da direita).')
+        self.chk_opt_fft.setToolTip('Espectro do sinal bruto do ADC (ao lado do gráfico do lock-in).')
         self.chk_opt_fft.toggled.connect(self.on_opt_fft)
-        view_row.addWidget(self.chk_opt_fft)
-        view_row.addStretch(1)
+        g.addWidget(self.chk_opt_fft)
+        # Varreduras: seção própria do painel; o botão antigo fica escondido e acompanha a seção
         self.btn_opt_sweeps = QtWidgets.QPushButton('Varreduras ▸')
         self.btn_opt_sweeps.setCheckable(True)
-        self.btn_opt_sweeps.setToolTip('Mostra ou esconde as varreduras em frequência e PWM do OPT101.')
         self.btn_opt_sweeps.toggled.connect(self.on_opt_sweeps_panel)
-        view_row.addWidget(self.btn_opt_sweeps)
-        left.addLayout(view_row)
+        self.btn_opt_sweeps.setParent(self)
+        self.btn_opt_sweeps.setVisible(False)
         # Parâmetros do modo ativo (preenchidos mais abaixo, depois de criar os controles)
-        self.mode_params = QtWidgets.QHBoxLayout()
-        left.addLayout(self.mode_params)
-        left.addWidget(self.plot1, 1)
-        bottom.addLayout(left, 1)
-        side = QtWidgets.QVBoxLayout()
-        self.side_layout = side
-        bottom.addLayout(side, 1)
-        root.addLayout(bottom, 4)
+        self.mode_params = QtWidgets.QVBoxLayout()
+        self.mode_params.setContentsMargins(0, 0, 0, 0)
+        sec_view.add(self.mode_params)
 
         self.sp_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_tau)
         self.sp_hp = self._dspin(0.0001, 500.0, self.cutoff_hp, 4, 0.01, self.on_hp)
@@ -389,6 +452,7 @@ class UiMixin:
         hint_lay = QtWidgets.QHBoxLayout(self.fit_hint_row)
         hint_lay.setContentsMargins(0, 0, 0, 0)
         self.lbl_fit_hint = QtWidgets.QLabel('Para ajustar exponenciais, pause o gráfico:')
+        self.lbl_fit_hint.setWordWrap(True)
         hint_lay.addWidget(self.lbl_fit_hint)
         self.btn_fit_pause = QtWidgets.QPushButton('⏸ Pausar e ajustar')
         self.btn_fit_pause.setStyleSheet('background:#cfe2ff;')
@@ -410,10 +474,13 @@ class UiMixin:
         self.btn_fit = QtWidgets.QPushButton('Fit')
         self.btn_fit.setToolTip('Plota o modelo com os parâmetros atuais (de t=0 até o fim do pulso)')
         self.btn_fit.clicked.connect(self.fit_current)
-        row_a.addWidget(self.btn_fit)
         self.btn_opt = QtWidgets.QPushButton('Otimizar')
         self.btn_opt.setToolTip('Ajusta por mínimos quadrados usando os valores atuais como ponto de partida')
         self.btn_opt.clicked.connect(self.fit_optimize)
+        row_a.addStretch(1)
+        fit_lay.addLayout(row_a)
+        row_a = QtWidgets.QHBoxLayout()      # 2.5.0: duas linhas (painel lateral estreito)
+        row_a.addWidget(self.btn_fit)
         row_a.addWidget(self.btn_opt)
         row_a.addStretch(1)
         self.sw_t0 = ModeSwitch('Clique para alternar: cima = Fit do On, baixo = Fit do Off')
@@ -426,21 +493,22 @@ class UiMixin:
         row_a.addLayout(t0_lbls)
         fit_lay.addLayout(row_a)
         big = 1e9
-        self.sp_fy = self._dspin(-big, big, 0.0, 3, 1.0, None, 100)
-        self.sp_fa1 = self._dspin(-big, big, 0.0, 3, 1.0, None, 100)
-        self.sp_ft1 = self._dspin(1e-4, 1e6, 1.0, 4, 0.1, None, 100)
-        self.sp_fa2 = self._dspin(-big, big, 0.0, 3, 1.0, None, 100)
-        self.sp_ft2 = self._dspin(1e-4, 1e6, 1.0, 4, 0.1, None, 100)
-        # Parâmetros em duas linhas (numa linha só o quadro ocupava ~720 px)
+        self.sp_fy = self._dspin(-big, big, 0.0, 3, 1.0, None, 80)
+        self.sp_fa1 = self._dspin(-big, big, 0.0, 3, 1.0, None, 80)
+        self.sp_ft1 = self._dspin(1e-4, 1e6, 1.0, 4, 0.1, None, 80)
+        self.sp_fa2 = self._dspin(-big, big, 0.0, 3, 1.0, None, 80)
+        self.sp_ft2 = self._dspin(1e-4, 1e6, 1.0, 4, 0.1, None, 80)
+        # Parâmetros em três linhas de dois (cabe no painel lateral)
         row_b = QtWidgets.QGridLayout()
-        for i, (label, w) in enumerate((('y∞:', self.sp_fy), ('A1:', self.sp_fa1), ('τ1 (ms):', self.sp_ft1),
-                                        (None, None), ('A2:', self.sp_fa2), ('τ2 (ms):', self.sp_ft2))):
+        for i, (label, w) in enumerate((('y∞:', self.sp_fy), (None, None), ('A1:', self.sp_fa1),
+                                        ('τ1 (ms):', self.sp_ft1), ('A2:', self.sp_fa2), ('τ2 (ms):', self.sp_ft2))):
             if w is None:
                 continue
-            r, c = divmod(i, 3)
+            r, c = divmod(i, 2)
             row_b.addWidget(QtWidgets.QLabel(label), r, 2 * c)
             row_b.addWidget(w, r, 2 * c + 1)
-        row_b.setColumnStretch(6, 1)
+        row_b.setColumnStretch(1, 1)
+        row_b.setColumnStretch(3, 1)
         fit_lay.addLayout(row_b)
         self.sp_fa2.setEnabled(False)
         self.sp_ft2.setEnabled(False)
@@ -500,8 +568,10 @@ class UiMixin:
         self.lbl_eta_p = self.eta_labels['P']
         self._set_eta_style(False)
         self.update_eta_idle()
-        self.opt_sweeps_panel.setVisible(False)
-        side.addWidget(self.opt_sweeps_panel)
+        sec_sw = self._side_section('Varreduras', 'opt_sweeps', False, opt_side)
+        sec_sw.add(self.opt_sweeps_panel)
+        sec_sw.toggled.connect(self.btn_opt_sweeps.setChecked)
+        self.btn_opt_sweeps.toggled.connect(sec_sw.set_open)
 
         # FFT do sinal bruto do ADC: opções abaixo do gráfico, como no INMP441
         self.opt_fft_panel = QtWidgets.QWidget()
@@ -556,17 +626,15 @@ class UiMixin:
         self.opt_fft_cursor = self._make_fft_interactive(self.plot_opt_fft, self.curve_opt_fft,
                                                          self.update_opt_fft_range)
         self.opt_fft_panel.setVisible(False)
-        side.addWidget(self.opt_fft_panel, 0)
-        side.addStretch(1)          # some quando a FFT está visível (on_opt_fft)
+        bottom.addWidget(self.opt_fft_panel, 1)
         self.update_opt_fft_range()
 
         # Parâmetros de cada modo, logo acima do gráfico; só o do modo ativo fica visível
         self.li_group = QtWidgets.QWidget()
-        li_lay = QtWidgets.QHBoxLayout(self.li_group)
+        li_lay = QtWidgets.QGridLayout(self.li_group)
         li_lay.setContentsMargins(0, 0, 0, 0)
         self.lbl_tau = self._filter_row(li_lay, self.sp_tau, self.sp_hp)
         self.update_tau_labels()
-        li_lay.addStretch(1)
         self.mode_params.addWidget(self.li_group)
 
         self.avg_group = QtWidgets.QWidget()
@@ -604,16 +672,16 @@ class UiMixin:
         self.audio_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.audio_status.setTextFormat(QtCore.Qt.TextFormat.RichText)
         audio_layout.addWidget(soi_layout.no_widen(self.audio_status))
-        # Exibição: gráficos, R/θ ou X/Y e fase
-        view_box = self._group('Exibição')
-        audio_mode = QtWidgets.QHBoxLayout(view_box)
-        audio_mode.setContentsMargins(6, 2, 6, 2)
-        # Varreduras à esquerda, no começo da linha (à direita ficava escondido em telas largas)
+        # 2.5.0: controles da aba no painel lateral (página 1)
+        aud_side = self._side_page(1)
+        sec_aview = self._side_section('Exibição', 'aud_view', True, aud_side)
+        aview_row = sec_aview.row()
+        # Varreduras: seção própria; o botão antigo fica escondido e acompanha a seção
         self.btn_audio_sweeps = QtWidgets.QPushButton('Varreduras ▸')
         self.btn_audio_sweeps.setCheckable(True)
-        self.btn_audio_sweeps.setToolTip('Mostra ou esconde as varreduras em frequência e PWM do INMP441.')
         self.btn_audio_sweeps.toggled.connect(self.on_audio_sweeps_panel)
-        audio_mode.addWidget(self.btn_audio_sweeps)
+        self.btn_audio_sweeps.setParent(self)
+        self.btn_audio_sweeps.setVisible(False)
         self.btn_noise_detect = QtWidgets.QPushButton('Detectar ruídos de fundo...')
         self.btn_noise_detect.setToolTip(
             'Abre uma janela que grava alguns segundos do INMP441 e do OPT101 com o laser parado e procura frequências\n'
@@ -621,9 +689,8 @@ class UiMixin:
             'Rápido ou comparativo (sem e com a fonte de ruído). Os tons encontrados são excluídos das próximas\n'
             'varreduras do Modo Duplo (caixa "Excluir ruídos detectados").')
         self.btn_noise_detect.clicked.connect(self.open_noise_dialog)
-        audio_mode.addWidget(self.btn_noise_detect)
-        audio_mode.addSpacing(16)
-        audio_mode.addWidget(QtWidgets.QLabel('Gráficos:'))
+        g = aview_row.group()
+        g.addWidget(QtWidgets.QLabel('Gráficos:'))
         self.chk_audio_lockin = QtWidgets.QCheckBox('Lock-In')
         self.chk_audio_lockin.setChecked(True)
         self.chk_audio_noise = QtWidgets.QCheckBox('Ruído/SNR')
@@ -632,37 +699,38 @@ class UiMixin:
         self.chk_audio_fft = QtWidgets.QCheckBox('FFT')
         for chk in (self.chk_audio_lockin, self.chk_audio_noise, self.chk_audio_fft):
             chk.toggled.connect(self.on_audio_views)
-            audio_mode.addWidget(chk)
-        audio_mode.addSpacing(16)
+            g.addWidget(chk)
 
         # Chave R/Fase <-> X/Y, com auto-fase e offset de fase manual
         self.audio_xy_group = QtWidgets.QWidget()
-        xy_lay = QtWidgets.QHBoxLayout(self.audio_xy_group)
-        xy_lay.setContentsMargins(0, 0, 0, 0)
-        xy_lay.addWidget(QtWidgets.QLabel('R/θ'))
+        xy_lay = soi_layout.FlowBar(hspace=8, vspace=4, last_right=False)
+        self.audio_xy_group.setLayout(xy_lay)
+        xy_g = xy_lay.group()
+        xy_g.addWidget(QtWidgets.QLabel('R/θ'))
         self.sw_audio_xy = ToggleSwitch()
         self.sw_audio_xy.setToolTip('Exibição do lock-in: R e Fase (esquerda) ou X e Y (direita).\n'
                                     'Ao passar para X/Y a auto-fase é aplicada.')
         self.sw_audio_xy.toggled.connect(self.on_audio_xy)
-        xy_lay.addWidget(self.sw_audio_xy)
-        xy_lay.addWidget(QtWidgets.QLabel('X/Y'))
+        xy_g.addWidget(self.sw_audio_xy)
+        xy_g.addWidget(QtWidgets.QLabel('X/Y'))
         self.btn_audio_autophase = QtWidgets.QPushButton('Auto-fase')
         self.btn_audio_autophase.setToolTip(f'Ajusta o offset de fase para que o sinal fique todo em X (θ ≈ 0),\n'
                                             f'usando a média do último {AUTO_PHASE_SPAN:g} s.')
         self.btn_audio_autophase.clicked.connect(self.audio_auto_phase)
         xy_lay.addWidget(self.btn_audio_autophase)
-        xy_lay.addWidget(QtWidgets.QLabel('Offset (°):'))
+        xy_g = xy_lay.group()
+        xy_g.addWidget(QtWidgets.QLabel('Offset (°):'))
         self.sp_audio_phase_off = self._dspin(-180.0, 180.0, 0.0, 1, 1.0, self.on_audio_phase_offset, width=70)
         self.sp_audio_phase_off.setWrapping(True)
-        xy_lay.addWidget(self.sp_audio_phase_off)
-        audio_mode.addWidget(self.audio_xy_group)
-        audio_mode.addStretch(1)
-        audio_layout.addWidget(view_box)
+        xy_g.addWidget(self.sp_audio_phase_off)
+        sec_aview.add(self.audio_xy_group)
+        sec_aview.add(self.btn_noise_detect)
 
         # Parâmetros do lock-in do INMP441 (mesmos do OPT101, porém independentes)
-        self.audio_li_group = self._group('Lock-in')
-        audio_params = QtWidgets.QHBoxLayout(self.audio_li_group)
-        audio_params.setContentsMargins(6, 2, 6, 2)
+        sec_ali = self._side_section('Lock-In', 'aud_li', True, aud_side)
+        self.audio_li_group = QtWidgets.QWidget()
+        audio_params = QtWidgets.QGridLayout(self.audio_li_group)
+        audio_params.setContentsMargins(0, 0, 0, 0)
         self.sp_audio_tau = TauSpinBox(auto_tau(self.ref_freq), self.on_audio_tau)
         self.sp_audio_hp = self._dspin(0.0001, 500.0, self.audio_cutoff_hp, 4, 0.01, self.on_audio_hp)
         self.lbl_audio_tau = self._filter_row(audio_params, self.sp_audio_tau, self.sp_audio_hp)
@@ -674,20 +742,18 @@ class UiMixin:
         self.chk_audio_mains.toggled.connect(self.on_audio_mains)
         self.chk_audio_mains.setParent(self)            # 2.5.0: sem o Filtro 60 Hz na tela (sempre desligado)
         self.chk_audio_mains.setVisible(False)
-        audio_params.addSpacing(12)
-        audio_params.addWidget(QtWidgets.QLabel('Janela (s):'))
+        audio_params.addWidget(QtWidgets.QLabel('Janela (s):'), 3, 0)
         self.sp_audio_span = self._dspin(1.0, AUDIO_NOISE_SPAN, self.audio_span, 0, 1.0, self.on_audio_span, width=60)
         self.sp_audio_span.setToolTip(f'Tempo exibido nos gráficos do lock-in e do ruído/SNR (até {AUDIO_NOISE_SPAN:g} s).\nA estatística de ruído/SNR usa esta mesma janela (até {AUDIO_NOISE_SPAN / 2:g} s).')
-        audio_params.addWidget(self.sp_audio_span)
-        audio_params.addStretch(1)
-        audio_layout.addWidget(self.audio_li_group)
+        audio_params.addWidget(self.sp_audio_span, 3, 1)
+        sec_ali.add(self.audio_li_group)
 
         # Varreduras do INMP441: painel recolhível (na linha dos controles ele obrigava a janela a ter ~1500 px)
         self.btn_sweeps_aud = {}
         self.eta_labels_aud = {}
         self.sweep_spins_aud = {}
         self.audio_sweeps_panel = QtWidgets.QWidget()
-        sw_lay = QtWidgets.QHBoxLayout(self.audio_sweeps_panel)
+        sw_lay = QtWidgets.QVBoxLayout(self.audio_sweeps_panel)
         sw_lay.setContentsMargins(0, 0, 0, 0)
 
         def build_audio_sweep_box(kind, title, fields):
@@ -712,9 +778,10 @@ class UiMixin:
         self.sp_aud_dp = self._dspin(0.1, 100.0, 10.0, 1, 1.0, None, 110, ' %')
         build_audio_sweep_box('P', 'Varredura em PWM (INMP441)',
                               (('Início:', self.sp_aud_p0), ('Fim:', self.sp_aud_p1), ('Passo:', self.sp_aud_dp)))
-        sw_lay.addStretch(1)
-        self.audio_sweeps_panel.setVisible(False)
-        audio_layout.addWidget(self.audio_sweeps_panel)
+        sec_asw = self._side_section('Varreduras', 'aud_sweeps', False, aud_side)
+        sec_asw.add(self.audio_sweeps_panel)
+        sec_asw.toggled.connect(self.btn_audio_sweeps.setChecked)
+        self.btn_audio_sweeps.toggled.connect(sec_asw.set_open)
 
         # Sinal, ruído e SNR sempre visíveis enquanto o lock-in roda (atualizam junto com o status, a cada 2 s)
         self.lbl_audio_noise = QtWidgets.QLabel('Ruído/SNR: aguardando dados')
@@ -887,7 +954,23 @@ class UiMixin:
         self.lbl_sb_conn = QtWidgets.QLabel('')
         self.lbl_sb_conn.setStyleSheet('padding:0 8px;')
         sb.addPermanentWidget(self.lbl_sb_task)
+        sb.addPermanentWidget(self.lbl_snr_top)
         sb.addPermanentWidget(self.lbl_sb_conn)
+        # Uma página de seções do painel lateral por aba (as abas que não criaram seções ficam com página vazia)
+        while self.side_pages.count() < tabs.count():
+            self._side_page(self.side_pages.count())
+        self.side_pages.setCurrentIndex(tabs.currentIndex())
         self.last_sb_state = None
 
     # ------------------------------------------------------------ Modo Duplo
+
+    def _side_page(self, idx):
+        '''Layout da página do painel lateral da aba idx (criada na primeira vez).'''
+        while self.side_pages.count() <= idx:
+            w = QtWidgets.QWidget()
+            lay = soi_layout.PageLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(2)
+            self.side_pages.addWidget(w)
+            self.side_page_lay.append(lay)
+        return self.side_page_lay[idx]

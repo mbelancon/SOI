@@ -13,21 +13,17 @@ class DualPanelsMixin:
         (self.btn_mode_avg if self.average_mode else self.btn_mode_li).setChecked(True)
 
     def on_audio_sweeps_panel(self, checked):
-        self.audio_sweeps_panel.setVisible(checked)
         self.btn_audio_sweeps.setText('Varreduras ▾' if checked else 'Varreduras ▸')
 
     def on_dual_sweeps_panel(self, checked):
         '''Painel "Executar varreduras" do Modo Duplo (quadros das varreduras casada e em frequência).'''
-        self.dual_cal_scroll.setVisible(checked)
-        if checked:
-            QtCore.QTimer.singleShot(0, self._fit_dual_cal_scroll)
         self.btn_dual_sweeps_panel.setText('Calibração ' + ('▾' if checked else '▸'))
         self.btn_dual_cal_panel.setChecked(checked)
 
     def _fit_dual_cal_scroll(self):
         '''Altura da área do painel Calibração = altura do conteúdo (+ barra horizontal, se aparecer).'''
         sc = self.dual_cal_scroll
-        if not sc.isVisible():
+        if sc is None or not sc.isVisible():      # 2.5.0: sem a área própria (painel lateral)
             return
         panel = self.dual_sweeps_panel
         w = max(sc.viewport().width(), panel.minimumSizeHint().width())
@@ -48,7 +44,6 @@ class DualPanelsMixin:
 
     def on_dual_pwm_panel(self, checked):
         '''Painel "Varreduras" do Modo Duplo (medidas: em frequência e casada em PWM).'''
-        self.dual_pwm_panel.setVisible(checked)
         self.btn_dual_pwm_panel.setText('Sinal x f (Hz) ' + ('▾' if checked else '▸'))
 
     def open_dual_sweep(self):

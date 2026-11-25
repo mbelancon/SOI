@@ -1181,7 +1181,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.tbl.itemSelectionChanged.connect(self._on_select)
         self.tbl.itemChanged.connect(self._on_item_changed)
         lv.addWidget(self.tbl, 1)
-        add = QtWidgets.QHBoxLayout()
+        add = soi_layout.FlowBar(hspace=6, vspace=4, last_right=False)   # 2.5.0: quebra em telas estreitas
         self.btn_add = QtWidgets.QPushButton('＋ Configurar nova medida...')
         self.btn_add.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;}')
         self.btn_add.setToolTip('Abre a janela de configuração: sensor, o que variar, tempo, repetições e médias.\n'
@@ -1190,9 +1190,10 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_edit = QtWidgets.QPushButton('Editar...')
         self.btn_edit.setToolTip('Abre a medida selecionada na janela de configuração (ou dê um duplo clique na linha).')
         self.btn_edit.clicked.connect(lambda: self.open_step_dialog(self._sel()))
-        add.addWidget(self.btn_add)
-        add.addWidget(self.btn_edit)
-        add.addSpacing(10)
+        g = add.group()
+        g.addWidget(self.btn_add)
+        g.addWidget(self.btn_edit)
+        g = add.group()
         self.btn_dup = QtWidgets.QPushButton('Duplicar')
         self.btn_up = QtWidgets.QPushButton('▲')
         self.btn_down = QtWidgets.QPushButton('▼')
@@ -1204,8 +1205,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_down.clicked.connect(lambda: self.move_step(1))
         self.btn_del.clicked.connect(self.del_step)
         for b in (self.btn_dup, self.btn_up, self.btn_down, self.btn_del):
-            add.addWidget(b)
-        add.addStretch(1)
+            g.addWidget(b)
         lv.addLayout(add)
         self.lbl_total = QtWidgets.QLabel('')
         self.lbl_total.setStyleSheet('color:#555;')
@@ -1245,7 +1245,7 @@ class SeriesTab(QtWidgets.QWidget):
         split.setStretchFactor(1, 38)
         split.setSizes([900, 560])
 
-        ctl = QtWidgets.QHBoxLayout()
+        ctl = soi_layout.FlowBar(hspace=6, vspace=4, last_right=False)   # 2.5.0: quebra em telas estreitas
         self.btn_start = QtWidgets.QPushButton('▶ Iniciar série')
         self.btn_start.setStyleSheet('QPushButton{font-weight:bold;background:#cfe2ff;padding:3px 12px;}')
         self.btn_pause = QtWidgets.QPushButton('⏸ Pausar após esta etapa')
@@ -1263,7 +1263,6 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_skip.setToolTip('Encerra a etapa atual (salva o que já foi medido) e segue para a próxima.')
         for b in (self.btn_start, self.btn_cont, self.btn_pause, self.btn_skip, self.btn_stop):
             ctl.addWidget(b)
-        ctl.addSpacing(12)
         self.bar = QtWidgets.QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setFixedWidth(240)
@@ -1271,8 +1270,8 @@ class SeriesTab(QtWidgets.QWidget):
         ctl.addWidget(self.bar)
         self.lbl_folder = QtWidgets.QLabel('')
         self.lbl_folder.setStyleSheet('color:#555;')
-        ctl.addWidget(self.lbl_folder, 1)
         root.addLayout(ctl)
+        root.addWidget(soi_layout.no_widen(self.lbl_folder))
         self._apply_run_ui()
 
     def _dsp(self, lo, hi, val, dec, suffix, step=1.0, width=95):
