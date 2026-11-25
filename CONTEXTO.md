@@ -19,7 +19,9 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 ## Estrutura
 - `firmware/` — STM32Cube (HAL + USB Device da ST em `src/usb`), PlatformIO com `framework = stm32cube`.
   OPT101 bruto a 200 kS/s com o estado do laser no bit 15; INMP441 a 48 kHz. Binário em `binarios/`.
-- `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, lock-in em software, modo simulado.
+- `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, lock-in em software, modo simulado. É o arquivo que se
+  roda (janela principal, main()); código dividido em soi_const/analise/dsp/serial/sim/widgets/headless + soi_win_*
+  (métodos da janela por assunto).
   `interface/soi_i18n.py` — idioma (pt/en pelo Windows, `SOI_LANG` força) e tabela pt→en.
 - `rodar_interface.bat`, `varredura.bat`, `campanha_deriva.bat` — atalhos (miniconda).
 - Pasta local do PC (`Projetos\Claude\SOI`) agora é um clone git do repositório: atualiza com `git pull` do
