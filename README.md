@@ -79,7 +79,10 @@ PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET o
 
 ```
 ├── interface/
-│   └── soi_controller.py         Interface + lock-in (PySide6/PyQt + pyqtgraph + NumPy/SciPy)
+│   ├── soi_controller.py         Interface (run this file): main window and main()
+│   ├── soi_win_*.py              Window parts by subject (tabs, Dual Mode, calibration, settings)
+│   ├── soi_dsp.py, soi_analise.py  Lock-in and analysis (NumPy/SciPy, no Qt windows)
+│   └── soi_serie.py, soi_serial.py, soi_sim.py, ...  Series, serial link, simulated mode, constants
 ├── firmware/                     STM32 firmware (PlatformIO, STM32Cube framework, ST USB stack)
 │   ├── platformio.ini
 │   ├── include/                  HAL and USB configuration

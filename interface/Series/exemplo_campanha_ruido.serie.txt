@@ -1,0 +1,15 @@
+# SOI - medidas em série (versão 1)
+# Campanha de ruído 18/11 (era campanha_ruido_20261118.bat). Começar com a peça recém-montada, na
+# temperatura da sala, laser parado. Duração estimada ~4,5 h.
+nome_base = Al_30x20x18
+repetir = 1
+fim = laser_parado
+sinal-t --nome 0_frio_fundo_f17 --f 17 --pwm 0 --tau 1 --dt 1 --duracao 15
+sinal-t --nome 1_warmup_f17 --f 17 --pwm 100 --tau 1 --dt 1 --duracao 30
+sinal-t --nome 2_f{f} --f 37;113;487 --pwm 100 --tau 1 --dt 5 --duracao 20
+sinal-t --nome 3_fundo_f{f} --f 17;37;113;487 --pwm 0 --tau 1 --dt 5 --duracao 10
+varredura --nome 4a_taufixo1 --fmin 20 --fmax 2440 --n 25 --tau 1 --tau-fixo --pwm 100 --aquecer 600
+varredura --nome 4b_taufixo2 --fmin 20 --fmax 2440 --n 25 --tau 2 --tau-fixo --pwm 100
+varredura --nome 4c_taufixo4 --fmin 20 --fmax 2440 --n 25 --tau 4 --tau-fixo --pwm 100
+varredura --nome 4d_adapt2 --fmin 20 --fmax 2440 --n 25 --tau 4 --precisao 2 --pwm 100
+varredura --nome 4e_adapt2_rep --fmin 20 --fmax 2440 --n 25 --tau 4 --precisao 2 --pwm 100 --desligar

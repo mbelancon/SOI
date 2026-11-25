@@ -1,6 +1,6 @@
 # 4. PC interface – SOI Controller
 
-File: [`interface/soi_controller.py`](../interface/soi_controller.py). Built with PyQt/PySide + pyqtgraph. The lock-in is computed in Python (numpy/scipy), in the same file.
+File to run: [`interface/soi_controller.py`](../interface/soi_controller.py) (the window's parts are in `interface/soi_win_*.py`). Built with PyQt/PySide + pyqtgraph. The lock-in is computed in Python (numpy/scipy), in [`interface/soi_dsp.py`](../interface/soi_dsp.py).
 
 **Language.** The interface is bilingual (Portuguese and English) and picks the language from the Windows display language: Portuguese if Windows is in Portuguese, English otherwise. The environment variable `SOI_LANG=pt` or `SOI_LANG=en` forces one of them. The labels in this document are the English ones. File names, CSV column names and CSV header keys stay the same in both languages, so files from either language open in the other.
 
@@ -145,6 +145,32 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 - *Full spectrum*: 0 to 24 kHz, 4096-point FFT (≈ 11.7 Hz), in dBFS.
 - *Fit*: fits the peak near the reference with the exact shape of a sine in the Hann window. Corrects frequency and amplitude even when the tone falls between two bins.
 
+**Detect background noise...** (button after *Sweeps ▸*; the same button is also in the Dual Mode, after *Signal x t (s) ▸*) opens a window that looks for noise sources at fixed
+frequencies, such as the laser fan (a series at ~170.2 Hz: 170, 340, 510, 681, 851 Hz on 2026-11-19), so that the
+sweeps exclude them. The INMP441 and the OPT101 are recorded together; in the OPT101 only the mains tones (60 Hz and
+multiples) are kept, because the mains background is electrical and shows up in the OPT101 (e.g. 300 Hz).
+- **Detect (quick):** the laser goes to PWM 0 (restored at the end) and the INMP441 is recorded for *Duration* (default
+  20 s). Spectrum: Welch PSD with 4 s Hann windows (0.25 Hz resolution); background = running median of the dB
+  spectrum over ±20 Hz; a **tone** is a peak more than *Threshold* (default 10 dB) above the background, from 20 Hz to
+  5 kHz. A **series** is an f0 with at least 3 peaks at k·f0 (within 0.5 %, k ≤ 10), found even without the
+  fundamental. Peaks at multiples of 60 Hz are marked *mains*; mains tones seen only in the OPT101 are listed as
+  *mains (OPT101)*. Mains tones are excluded like the others (only the multiples of 60 Hz found).
+- **Comparative** (like the two-sample calibration): *1. Record without the source* (fan or other source off), then
+  *2. Record with the source*; only the tones at least *Comparative* dB (default 6) higher in the second recording
+  are listed. Use it when the room has other tones that the source should not be blamed for.
+- **Result:** table (frequency, dB above background, series f0, k, type) and INMP441 spectrum with its tones marked
+  (the selected rows are circled). **The tones found are used right away:** with *Exclude detected noise* ticked
+  (Dual Mode, on by default) the next frequency sweeps exclude them (each series as a whole, k·f0 for k = 1…10 up
+  to 5 kHz), until the next detection or until the interface is closed; the box shows how many bands and the time
+  of the detection. **Write to Excluded bands (Hz)** copies the selected rows (all if none is selected) to the
+  *Excluded bands (Hz)* field, which is saved and always applies; with *Whole series* it adds k·f0.
+- **Files** (in `Medidas`): `<sample>_Ruido_fundo_<date>.csv` (`_comparativo` in the comparative mode) with the tones
+  in the header and the columns `Frequencia_Hz`, `PSD_dB`, `Fundo_dB` (plus `PSD_sem_fonte_dB`), and the raw audio
+  `.bin` (12 kS/s float32, same format as the `SOI_GRAVAR_AUDIO` recording).
+- **Headless:** `python interface\soi_controller.py --detectar-ruido [--duracao 20] [--comparar] [--limiar 10]`
+  prints the tones and a ready `--evitar "…"` list for the sweeps (`--comparar` waits for Enter between the two
+  recordings).
+
 ## Dual Mode tab
 
 Measures both lock-ins **in the same step**. The OPT101 R (proportional to the optical intensity) is the power reference for the INMP441 R (photoacoustic signal).
@@ -160,7 +186,7 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 
 **τ of the frequency sweeps** (calibration and measurements): there is no "Measurement" choice. They always use long integration: during the sweep both low-pass filters take this τ (the values are restored at the end), and at each point the sweep waits 9τ and averages over 1τ. The τ field is the INMP441 τ: it starts with the INMP441 tab value, and changing τ in any of the places (INMP441 tab or sweep panel) changes the others. Changing the excitation frequency sets the INMP441 τ to the automatic value, and the sweeps follow. The field is labelled **τ** with adaptive τ off and **τ max** with it on; its last value is saved and comes back when the interface reopens.
 
-**Adaptive τ** (frequency sweeps, on by default). The acoustic noise of the cell is slow and strong at low frequency and small at high frequency (sweeps of 2026-11-16: below 40 Hz the scatter between neighbouring points was 5–35 % even with τ = 2 s, while above 400 Hz the signal was clean and the 18 s wait was wasted). With **adaptive τ** on, the field becomes **τ max** (default 4 s): the sweep starts there and τ changes along it, never above τ max:
+**Adaptive τ** (frequency sweeps; off by default since 2026-11-18, see *Recommended sweep settings* below). The acoustic noise of the cell is slow and strong at low frequency and small at high frequency (sweeps of 2026-11-16: below 40 Hz the scatter between neighbouring points was 5–35 % even with τ = 2 s, while above 400 Hz the signal was clean and the 18 s wait was wasted). With **adaptive τ** on, the field becomes **τ max** (default 4 s): the sweep starts there and τ changes along it, never above τ max:
 - At each point SOI measures the **fluctuation** of S = R_INMP441/R_OPT101 and of Δφ during the measurement: standard deviation, or, if larger, the difference between the means of the first and second half (drift). The OPT101 is interpolated at the INMP441 instants, so what is common to both channels (laser power) cancels, as in S.
 - Fluctuation well below **Precision** (default 2 % for S; the same fraction in radians for Δφ, 2 % = 1.15°): the next point uses a smaller τ, chosen for the fluctuation to sit at 70 % of Precision (it scales as 1/√τ). The estimate is the median of the last 3 points (scaled to the current τ), so one bad point does not raise τ for the following ones; τ rises at most 2× and falls at most 3× per point, down to about 3 modulation periods (minimum 100 ms).
 - Fluctuation above 2× Precision: the point is measured again with a larger τ (2–4×, up to τ max, at most twice).
@@ -168,11 +194,83 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 - Each point waits 7τ + 0.3 s and averages for max(1 s, 3τ). At high frequency with a clean signal τ drops to ~0.1 s and a point takes ~2 s; at low frequency it stays at τ max (40 s per point with 4 s).
 - The status shows the τ in use and, after each point, its fluctuation. The CSV header records `tau adaptativo (precisão …, tau max … s; tau usado de … a … s; …)` (older files say `tau inicial`); the `_DP` columns keep their meaning (standard deviation during the measurement).
 - **Per point in the CSV** (all automatic sweeps): `Tau_s`, `Tempo_ponto_s` (wait + average, with redos), `Refeito` (redos), `Flutuacao_S_Pct`, `Flutuacao_Fase_Graus`; the header has `# Inicio = …; Fim = …; Duracao = … s`.
-- **Measure A/B** of the calibration uses it too (the calibration preset sets τ max to 4 s with adaptive τ on, τ to 2 s with it off). With adaptive τ off the sweep works as before (fixed τ, 9τ wait, 1τ average). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
+- **Measure A/B** of the calibration uses it too (the calibration preset sets τ max to 4 s with adaptive τ on, τ to 2 s with it off). With adaptive τ off the sweep uses a fixed τ (9τ wait, 1τ average); below 40 Hz τ is at least 4 s (7τ wait, 3τ average). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
 
-**Low frequency (only f > 40 Hz, on by default).** Below ~40 Hz the room's acoustic noise dominates (it does not depend on the laser), and the fluctuation measured within a point underestimates the real error (drift campaign, 2026-11-16/17: sweeps at 1/2/4 % Precision agreed within ~2 % above 40 Hz but differed by 5–11 % below). With the box on, adaptive τ applies only above 40 Hz; below, every point uses τ max (7τ wait and 3τ average), and above 40 Hz adaptive τ restarts from 1 s. When the range goes below 40 Hz an orange **high SNR at f < 40 Hz** appears next to it, and starting the sweep shows a warning: use a sample with a strong signal (e.g. stainless steel). Headless: `--adapt-tudo` uses adaptive τ at all frequencies.
+**Low frequency (only f > 40 Hz, on by default).** Below ~40 Hz the room's acoustic noise dominates (it does not depend on the laser), and the fluctuation measured within a point underestimates the real error (drift campaign, 2026-11-16/17: sweeps at 1/2/4 % Precision agreed within ~2 % above 40 Hz but differed by 5–11 % below). With the box on, adaptive τ applies only above 40 Hz; below, every point uses τ max (7τ wait and 3τ average), and above 40 Hz adaptive τ restarts from 1 s. (Until 2026-11-25 an orange **high SNR at f < 40 Hz** notice and a warning when starting the sweep appeared for ranges below 40 Hz; the new cell measures well there, so both were removed.) Headless: `--adapt-tudo` uses adaptive τ at all frequencies.
 
-**Wait for warm-up** (every sweep box: OPT101, INMP441, Dual Mode frequency/PWM/Signal vs t). When checked, a time field appears (default 300 s): clicking the button turns the laser on at the measurement PWM (the highest PWM of a PWM sweep) and waits; the button shows the countdown and a second click cancels. After the laser turns on the photoacoustic signal drops ~14 % with a ~4.4 min time constant at 10 Hz. Headless: `--aquecer S`.
+**Recommended sweep settings (noise campaign, 2026-11-18).** Defaults: fixed τ = 1 s at f ≥ 40 Hz (τ = 4 s below),
+**3 repetitions combined by the point-by-point median**, 600 s warm-up, start at 1 Hz (40 Hz until 2026-11-25; the new cell fixed the low-frequency fluctuation). Measured with an
+aluminium sample in the Camara cell (τ = 1 s): microphone SNR 0 dB at 17 Hz, 14 dB at 37 Hz, 20 dB at 113 Hz and
+29 dB at 487 Hz. Above 200 Hz every setting tested (τ = 1, 2, 4 s fixed, adaptive 2 %) agreed within ~1 %. Between
+40 and 200 Hz the errors are isolated points off by 8–15 %, caused by intermittent room sounds lasting a few seconds;
+a longer τ does not remove them (rms deviation from the median of five sweeps: 1.5 % with τ = 1 s, 3.8 % with τ = 4 s,
+6 % with adaptive τ), while the median of sweeps taken minutes apart rejects them. **The largest useful τ is 4 s**:
+the Allan deviation of S stops falling after ~1 min of averaging at 113 Hz and ~3–4 min at 37 Hz (cell warm-up drift
+takes over), so time is better spent on repetitions than on τ; above 4 s an orange *τ > 4 s does not help: use
+repetitions* appears next to the field (it does not block). Warm-up: the laser power (OPT101) drops 3.6 % with a
+1 min time constant; the cell heats with τ ≈ 8–9 min, so 10 min of warm-up leaves ~1–3 % drift of S below 100 Hz and
+< 1 % above. Avoid fixed frequencies within a few Hz of multiples of 60 Hz. Headless: `--repeticoes N`
+(`--adaptativo` turns adaptive τ back on; `--precisao` also does, so older command lines keep working).
+
+**Repetitions** (frequency sweeps, default 3; 1 = a single sweep). The sweep runs N times in a row with the laser on
+(warm-up only before the first). Each repetition saves the usual CSV with the suffix `_rep1`, `_rep2`…, and at the end
+a `_mediana` CSV with the same columns (OPT101/INMP441 R and phases: median over the repetitions; `_DP`: standard
+deviation between them) plus `S` (median of R_INMP441/R_OPT101), `N_repeticoes`, `Incerteza_S_Pct` =
+100·1.25·SD(S)/√N/median(S) and `Incerteza_Fase_Graus` = 1.25·SD(Δφ)/√N (1.25 = efficiency of the median). The plot
+shows the repetitions in light grey and the median with error bars of u. The estimated time includes the repetitions.
+The repetitions are matched by frequency: if one repetition lost a point (a sensor sent no data even after 2 new
+tries; the point is listed in that CSV header as `# Pontos pulados`), the median of that point uses only the
+repetitions that have it, and `N_repeticoes` shows how many.
+In a Measurement Series, `varredura … --repeticoes N` does the same (older series files without the option keep a
+single sweep and adaptive τ, as they were written).
+
+**Order** (next to Repetitions): Shuffled (default since 2026-11-19), Ascending or Descending. With an ascending sweep a slow drift
+(warm-up) becomes a false slope of the curve; Shuffled measures the frequencies in a new random order in each
+repetition, so the drift becomes scatter that the median reduces. Each repetition is a complete sweep (a block of a
+randomized complete block design): the repetitions of a frequency fall in different parts of the session and an
+interrupted run still leaves complete curves, which a full randomization of all points would not guarantee. Example:
+`--varredura --tau 1 --repeticoes 15 --ordem embaralhada --aquecer 900`. The seed is written in the header
+(`# Ordem = embaralhada; semente = …`; repetition k uses seed + k − 1, `random.Random(seed).shuffle` of the ascending
+indices), so the order can be rebuilt; `--semente N` fixes it. Plots and CSVs stay in frequency order, with the
+columns `Ordem_medida` (position in which the point was measured) and `Hora_ponto` (end time of the point); in the
+`_mediana` CSV, `Ordem_medida` lists one position per repetition separated by ";". The box also applies to sweeps of a
+Measurement Series.
+
+**Excluded bands (Hz)** (before 2026-11-19 *Avoid (Hz)*): frequencies of known noise sources (on 2026-11-19 a source
+at ~170 Hz, the laser fan), separated by ";". No point is measured within an exclusion band of ±2 % around each
+frequency (at least ±3 Hz; the band grows with frequency because harmonic k of a source that drifts by δ drifts by
+k·δ): a point that would fall inside moves 1 Hz beyond the band edge, on the side it was on, and is listed in the CSV
+header. The field is saved with the settings and also applies to Measurement Series sweeps. Headless:
+`--excluir "170.7;341.4"` (`--evitar` still works).
+
+**Exclude detected noise** (next to the field, on by default). The sweep also excludes, without changing the field:
+the tones of the last *Detect background noise* window (see above) and, with *Wait for warm-up* checked, the tones in
+the INMP441 audio of the warm-up (the last 3 min at most), ignoring the laser frequency and its harmonics within
+±0.15 Hz (the modulation is exact in the microphone clock; ±1 Hz would hide 40 % of the spectrum with the laser at
+5 Hz). During the warm-up the OPT101 is analysed too, for the mains tones, unless the laser harmonics cover the
+multiples of 60 Hz (laser at 5 Hz, for example). The list is fixed when the sweep starts and kept for its repetitions;
+it is written in the CSV header (`# Ruidos detectados = …`). Unticked, no detection is used. The headless
+`--aquecer S` analyses the warm-up; `--sem-detectar-ruido` turns it off.
+
+**Discard stretches with room sounds** (frequency sweeps; shown only when *Settings → Sweeps → Show "Discard stretches with room sounds"* is on, off by default since 2026-11-19 because it brought no gain with τ = 1 s; it may help with longer τ; hover for details). Every second the SOI computes, on the raw INMP441 signal
+(2 s Hann window), q = rms(R at f·0.93, R at f·1.07) / R at f, with the neighbours moved away from multiples of 60 Hz.
+A room sound (door, voice, traffic) raises the neighbours together with the signal. The part of a point's average with
+q > 2 × the median q of that point is discarded; if more than 30 % is discarded, the average is redone (up to twice).
+In the 2026-11-18 heating campaign this cut the rms deviation from 27 to 15 % at 37 Hz and from 14 to 7 % at 113 Hz,
+discarding 7–15 % of the data (removing the same fraction at random changed nothing); at 487 Hz and above it discards
+≤ 1.4 % and changes nothing. With the laser off q ≈ 1. The CSV gets `Ruido_vizinhas_q` (median q of the point; the
+typical |error| of the point is ~0.3·q), `Descartado_Pct` and `Refeito_ruido`. Headless: `--descartar` turns it on.
+
+**Mains harmonics.** Frequencies within ±3 Hz of a multiple of 60 Hz pick up mains background (the OPT101 showed it
+at 300 Hz in the 2026-11-16 campaign, and on 2026-11-18 the sweep point at 121.2 Hz, next to 120 Hz, beat with the
+mains in the temperature logger). Fixed-frequency fields (excitation bar, Signal vs t, Measurement Series steps and
+frequency lists) show an orange warning with a **Shift** button that moves the value 5 Hz away. In sweeps the mains
+is part of the noise detection since 2026-11-19 (the *Avoid multiples of 60 Hz* box was removed): when a detection in
+use analysed the OPT101, only the multiples of 60 Hz it found are excluded (`# Rede = …` in the header); with no such
+detection, every multiple of 60 Hz is excluded for safety (points within ±3 Hz move 4 Hz away; a grey note next to the
+field and the file header list them). Headless: `--sem-evitar-rede` turns that safety rule off.
+
+**Wait for warm-up** (every sweep box: OPT101, INMP441, Dual Mode frequency/PWM/Signal vs t). When checked, a time field appears (default 600 s): clicking the button turns the laser on at the measurement PWM (the highest PWM of a PWM sweep) and waits; the button shows the countdown and a second click cancels. After the laser turns on the photoacoustic signal drops ~14 % with a ~4.4 min time constant at 10 Hz. The laser power (OPT101) drops 3.6 % with a 1 min time constant and the cell heats with τ ≈ 8–9 min, so 10 min of warm-up leaves ~1–3 % drift of S below 100 Hz and < 1 % above. Headless: `--aquecer S`.
 
 **Measurement** for the matched PWM sweep:
 - *Time average (current τ)*: uses the current filters. Waits 9τ of the slower lock-in and averages over 4τ.
@@ -291,7 +389,7 @@ Column glossary: Tempo = time, Fase = phase, Graus = degrees, Media = mean, Desv
 
 ## Headless sweep (command line)
 
-`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--celula Camara|OPC`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
+`python interface\soi_controller.py --varredura …` (or `varredura.bat …`) runs a Dual Mode frequency sweep without the window, with the same code as the interface. Close the interface first: only one program can open the serial port, and the command stops with a message if it is busy. The laser PWM is set to 100 % (`--pwm` to change) and the modulation to Electronic. Options: `--amostra`, `--fmin`, `--fmax`, `--n` (log spacing), `--tau` (initial τ, or fixed τ with `--tau-fixo`), `--precisao`, `--repeticoes N`, `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar F1;F2`, `--celula Camara|OPC`, `--cal CAL_….csv|nenhuma`, `--porta COMx`, `--simulado`; anything left out uses the interface's saved values, which the command does not change. Each point prints S, Δφ, τ, time and fluctuation; the CSV and PNG go to `Medidas` with the usual name. Ctrl+C cancels. `--help` lists everything.
 
 ## Signal vs t (Dual Mode)
 

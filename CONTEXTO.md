@@ -15,85 +15,60 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - Modulação do laser: PWM em PA8 (via driver); sincronismo em PB0. Laser 532 nm.
 - Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura (INMP441
   com o-rings de um lado, furo de equalização do outro, fechado nas medidas), janela de lâmina de 1 mm.
+  Estado baixo em 19/11: f0 = 1052 Hz, Q ≈ 4,2.
+- Peças de Al (todas termicamente grossas): disco "pequena" ~12–15 × ~5 mm (~2 g, medir exato), 30×20×18 mm
+  (~29 g) e 120×20×18 mm (~117 g).
+- A ventoinha do laser gera 170,2 Hz + harmônicos (340, 510, 681, 851, 1021 Hz; f0 varia 169,6–171,8 Hz), que
+  chegam ao INMP441 também pela bancada.
 
 ## Estrutura
 - `firmware/` — STM32Cube (HAL + USB Device da ST em `src/usb`), PlatformIO com `framework = stm32cube`.
   OPT101 bruto a 200 kS/s com o estado do laser no bit 15; INMP441 a 48 kHz. Binário em `binarios/`.
-- `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, lock-in em software, modo simulado.
+- `interface/soi_controller.py` — PySide6/PyQt + pyqtgraph, lock-in em software, modo simulado. É o arquivo que se
+  roda (janela principal, main()); código dividido em soi_const/analise/dsp/serial/sim/widgets/headless + soi_win_*
+  (métodos da janela por assunto).
   `interface/soi_i18n.py` — idioma (pt/en pelo Windows, `SOI_LANG` força) e tabela pt→en.
+  Na 2.4.0: `interface/soi_serie.py` (aba Medidas em Série) e `interface/soi_ruido.py` (detectar ruídos de fundo).
 - `rodar_interface.bat`, `varredura.bat`, `campanha_deriva.bat` — atalhos (miniconda).
-- Pasta local do PC (`Projetos\Claude\SOI`) agora é um clone git do repositório: atualiza com `git pull` do
-  `main`. Medidas, dados e backups ficam fora do git (não versionados).
+- Pasta local do PC padrão (sbook2, `Projetos\Claude\SOI`) é um clone git e se atualiza só por git (checkout da
+  branch em teste ou `git pull`), sem cópias de arquivos. Medidas e dados ficam fora do git.
 - `docs/01..08` (inglês; 07 = calibração, 08 = exemplos com medidas reais), `examples/` (CSVs + script das
   figuras), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
 
 ## Versões
 - `main`: 2.3.0 (PR #5, 17/11), firmware 2.0.0. v1.0.0 publicada em 2026-10-27; v2.3.0 publicada em 17/11 (Releases, exe + zip).
+- Em desenvolvimento: interface 2.4.0 (firmware 2.0.0 intacto) na branch `claude/project-thread-nvsgcv`, sem PR;
+  no sbook2 desde 19/11 (commit 9af511b). Testada no modo simulado e em medidas reais de 19/11.
 - Versões de firmware e interface são independentes (ver CLAUDE.md).
 
-## Próximo PR (só quando o Marcos pedir)
-Na branch da thread "Criar aba Medidas em Série": aba Medidas em Série e descarte automático por frequências
-vizinhas (lock-in em f·0,93 e f·1,07; descarta o segundo com q > 2× a mediana; refaz o ponto se > 30 %; colunas
-Ruido_vizinhas_q, Descartado_Pct, Refeito_ruido).
+## Próximo PR (só quando o Marcos pedir; tudo aprovado, Marcos ainda quer mexer antes)
+Interface 2.4.0, branch `claude/project-thread-nvsgcv` (lista completa no CHANGELOG, seção 2.4.0): aba Medidas em
+Série, varredura embaralhada com mediana, faixas excluídas e "Detectar ruídos de fundo", descarte por vizinhas opcional.
+Depois do merge: PR só de reorganização dividindo o `soi_controller.py` em módulos (aprovado 20/11; ver relatório
+"SOI — como gastar menos tokens").
 
-## Campanha de deriva (16–17/11, alumínio) — descobertas
-Dados + relatório: `interface\Medidas\Campanha_deriva_20261116\Campanha_deriva_20261116.zip`
-(relatório: Claude Doc "Campanha de deriva 16-17/11").
-- Abaixo de ~30–40 Hz domina ruído acústico do ambiente, aditivo e independente do laser (fundo a 10 Hz ≈ 1/3 do
-  sinal no Al; a ≥ 100 Hz, 1–5 %). Baixar o PWM só piora o SNR: medir a 100 %. Inox dá mais sinal (melhor no grave).
-- Deriva = aquecimento depois que o laser liga: S −14 % com T ≈ 4,4 min a 10 Hz (OPT101 −4 %, T ≈ 1 min); depois
-  estável por 1 h. Pouco efeito a 300–1000 Hz. Daí o "Aguardar warm-up" (300 s).
-- Ruído branco até ~4 min de média (Allan 12 % em 5 s → 1,7 % em 4 min a 10 Hz; piso ~1,4 %).
-- Varreduras a 1/2/4 %: concordam em ~2 % acima de 40 Hz; 5–11 % abaixo. A flutuação da janela não é a incerteza
-  do ponto (subestima no grave, superestima no agudo). Proposta de regra com blocos e incerteza u: no relatório,
-  ainda não implementada.
-- 300 Hz (harmônico de 60 Hz) tem fundo no OPT101: evitar múltiplos de 60 Hz em frequência fixa.
+## Descobertas principais (detalhes em NOTAS_MEDIDAS.md)
+- < 30–40 Hz domina ruído acústico da sala (fundo diurno 3–5× o noturno): medir com PWM 100 %, grave à noite.
+- Deriva de S ao ligar o laser: aquecimento local sob o feixe (não a T média da peça); some após ~11 min. Warm-up 10–15 min.
+- Evitar múltiplos de 60 Hz e a série da ventoinha (170,2 Hz + harmônicos).
+- Varredura recomendada: τ 1 s, 3 repetições, mediana, ordem embaralhada.
+- SNR do ponto: verde ≥ 25 dB (erro ≲ 10 %), amarelo 15–25, vermelho < 15 dB.
+- Calibração por duas amostras (Al + Inox, sempre a mesma face); conferir f0 da célula (estados ~1,05/1,54/1,79 kHz) antes de aplicar.
 
-## Campanhas de ruído e aquecimento (18/11) — descobertas
-Relatório: Claude Doc "SOI noise and drift study (Nov 2026)". Peças de Al 30×20×18 mm e Al pequena.
-- Deriva de S ao ligar o laser é maior em baixa f e na peça menor (que aquece ~2× mais rápido). O efeito direto
-  da temperatura do gás (1/T0) explica só ~0,3–0,5 %. Hipóteses: vazamento da célula deslocando o corte de baixa f
-  (testar pela deriva da fase e com o furo vedado) e contato/bordas da peça.
-- OPT101: queda rápida de ~4 % ao ligar é potência real do laser. Oscilação lenta de ~1 % (período ~36 min) em
-  aberto: ar-condicionado (liga 8h–18h) ou speckle da luz espalhada no espelho que alimenta o OPT101 (solução:
-  lamínula como divisor de feixe + difusor; diagnóstico com webcam).
-- Termopar: o salto ao ligar o laser é interferência do PWM pelo contato com o Al (teflon reduz).
-- Noite 18→19/11 (até ~9h40, ar-condicionado desligado): fundo com PWM 0, varreduras crescente + 12 frequências
-  embaralhadas e 90 min a 487 Hz desde frio.
-
-## INMP441 em baixa frequência
-- Datasheet: especificado para f > 60 Hz. Mede abaixo, mas com mais ruído próprio, somado ao ruído da sala.
-- Ruído da sala varia com o horário (aulas até 23h; depois, tráfego na rodovia em frente ao laboratório).
-- Dois microfones (em breve): um segundo INMP441 de referência (fora da célula, ou numa célula cega) permite
-  subtrair o ruído ambiente coerente; dois na célula, em média, reduzem o ruído próprio ~√2. Os dois cabem no
-  mesmo barramento I2S (pino L/R: canal esquerdo e direito); o firmware passa a ler os dois canais.
-
-## SNR e incerteza por ponto (análise de 17/11, `dados_artigo/ANALISE_20261117.md`)
-- Ruído do INMP441 ~10⁻⁵ FS em todas as amostras; o que muda é o sinal (Al/Inox ~10⁻³ FS, acrílico/OPC ~10⁻⁴).
-- Erro do ponto (f < 500 Hz): < 15 dB ~44 %, 15–25 dB 10–25 %, ≥ 25 dB ≲ 10 % (piso ~7 %, ruído acústico/deriva).
-  Cores do SNR na interface: verde ≥ 25, amarelo 15–25, vermelho < 15 dB. Reavaliar com τ maior (τ = 2 s dá +3 dB).
-
-## Calibração (notas)
-- Calibração da câmara por duas amostras grossas (Al + Inox 316L; latão/grafite como alternativas): razão S_A/S_B
-  plana (±1 dB, ±10°, ≥ 1 década) verifica; H = média geométrica de S·f das duas; f0 iguais (±3 %). Modo OPC
-  mantido, com duas folhas finas (nunca folha de inox). A calibração da câmara não serve para o OPC.
-- O f⁻² visto no Inox/Al em 13/11 vinha da calibração com negro de fumo (o negro de fumo bruto sobe ~f^+0,9),
-  não da amostra. Não usar aquela calibração.
-- Inox lado B dá 0,57× o lado A e só concorda com o Al até ~130 Hz: usar sempre a mesma face.
-
-## Ressonância da célula (notas, 16/11)
-- f0 salta entre estados por montagem: ~1,05–1,12 kHz (todas de 13/11, latão e Ni+filme de 16/11),
-  ~1,53–1,55 kHz (Al e Inox de 16/11 de manhã) e ~1,79 kHz (Ni 10h11). Mesmas peças mudam de estado entre dias:
-  é montagem/geometria acústica, não material nem temperatura; não tem assinatura de vazamento.
-- A CAL Al-Inox de 16/11 09h16 foi feita no estado alto e não vale acima de ~500 Hz para medidas no estado baixo.
-  Conferir f0 antes de aplicar uma calibração (a interface avisa "Ressonância deslocada"). Gráfico: `analises/ressonancia_estados_20261116.png` (pasta do projeto).
+## Planos próximos
+- Semana de 23/11 (SOI volta da apresentação): melhorias mecânicas medidas antes/depois (isopor sob o board de metal,
+  laser fora do board parafusado na madeira; detector rápido, fundo em 170/681/851/160 Hz, varredura τ 1 s);
+  15 repetições embaralhadas na peça de 120 mm à noite; aquecimento noturno; medir o disco pequeno.
+- Avaliar offline a correção de deriva entre blocos (normalizar cada repetição) com as 15 repetições.
+- PC Ubuntu com tela 1366×768 para deixar o SOI no lab: testar layout (rolagem/compacto), `rodar_interface.sh`,
+  `/dev/ttyACM0` + grupo dialout, dependências. Não iniciado.
+- Apresentação: slides "SOI — fotoacústica portátil com STM32" (ênfase em portátil, sem lock-in/chopper).
 
 ## Pendências / ideias
 - LEMBRETE: medida de 24 h do ruído acústico (fundo com PWM 0, Sinal x t em ~10, 30 e 100 Hz) para ver a
   variação com o horário (aulas, rodovia).
 - Segundo INMP441 de referência fora da célula (L/R no mesmo I2S): subtração no PC com H calibrado ou LMS;
   calibrar com chirp numa caixa de som em várias posições. Verificar banda USB para 2 canais a 48 kHz.
-- Isolar a mesa: isopor ou espuma sob o board onde se monta a PAS (massa + amortecedor).
 - Sensor NTC na parede da célula lido pelo ADC1 (canal injetado no PA1, sem perder amostras) — proposta,
   aguarda aprovação (muda firmware e interface).
 - Célula diferencial (tipo Miklós) para cancelar ruído ambiente — ideia futura.

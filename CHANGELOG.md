@@ -10,6 +10,277 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-18
+
+Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.
+
+### Interface (`interface/soi_controller.py`, new `interface/soi_serie.py`, `interface/soi_layout.py` and the modules listed under "Changed")
+
+#### Added: Measurement Series tab ("Medidas em Série")
+- **Why:** long campaigns (drift, noise, repeated sweeps) were run from .bat files with the headless mode, with
+  nothing to watch on screen. The new tab builds, saves and runs the same sequences inside the interface.
+- Step types: **Sweep f** (the Dual Mode frequency sweep: start/end f, log points, τ max + precision or fixed τ,
+  allow averages, PWM, warm-up), **Signal vs t** (frequency, PWM, τ, point every, duration, warm-up; the frequency
+  accepts a list such as `37;113;487`, one measurement per frequency, `{f}` in the name), **Pause** (PWM 0 for N
+  minutes, not recorded) and **Notice** (shows a text and waits for Continue, e.g. to change the sample).
+- Each step can be repeated N times (`_rep1`, `_rep2`...), the whole series N times (`_ciclo1`...), and the series
+  can wait for a start time (laser stopped meanwhile; the next time the clock shows it). Optional PWM 0 at the end
+  of each step and of the series.
+- Measurements are added with a single **"＋ Configure new measurement..."** button that opens a configuration window:
+  choose the sensor (Dual Mode, OPT101, INMP441, Pause/notice), what to vary (frequency, time, PWM) and the
+  parameters (time, repetitions, averages). Double-click a row (or Edit...) to change it; the panel on the right
+  shows the selected measurement.
+- Run controls: Start, Pause after this step, Continue, Skip step and Stop (the measurement in progress is ended
+  and saved with the points already measured). Status line with the remaining time of the step and of the series
+  and the expected end time; a plot of the measurement in progress; the other tabs and the top bar are locked
+  while the series runs. Closing the window during a series asks first and saves what was measured.
+- Each run gets its own folder `Medidas\Serie_<base name>_<date_time>\` with the CSV/PNG files (names: base name +
+  step name, same formats and columns as before), a copy of the series file (open it again to repeat the run)
+  and `resumo.csv` (one line per measurement: start, end, status, file).
+- Series file `*.serie.txt` (UTF-8 text, default folder `interface\Series`): one step per line with the same
+  options as the headless command line (`sinal-t --nome 2_f{f} --f 37;113;487 --duracao 20`, `varredura --fmin 20
+  --fmax 2440 --n 25 --tau 4 --precisao 2 --repetir 3`, `pausa --duracao 10`, `aviso "text"`), header keys
+  `nome_base`, `inicio`, `repetir`, `fim`; `#!` marks an unchecked step. Keys stay in Portuguese in both languages.
+- **Transient (OPT101)** step: the OPT101 Mean Value mode run unattended. One average of N pulses every
+  interval (e.g. 64 pulses every 60 s or every 10 s; 0 = back to back) for a total duration. Saves `<stem>.csv`
+  (time + one column per average, start time of each in the header), `<stem>_medias.csv` (one line per average:
+  time, min, max, amplitude and, optionally, a 1- or 2-exponential fit of the laser-on half period: τ, A, R²), a PNG
+  and, optionally, the individual transients (`<stem>_individuais/M001.csv`...: the N pulses of each average). The
+  tab goes back to Lock-In mode at the end. Options `--pulsos`, `--intervalo`, `--duracao`, `--ajuste 0|1|2`,
+  `--individuais`.
+- PWM list (power scan) in Signal vs t and Transient: `--pwm 25;50;100`, one measurement per power (`{pwm}` in the
+  name), combined with the frequency list and with Repeat.
+- Sweeps of the other tabs as steps: **OPT101 × f**, **OPT101 × PWM**, **INMP441 × f**, **INMP441 × PWM** (the
+  lock-in sweeps of the OPT101 and INMP441 tabs, linear start/end/step, with the filters set in that tab) and
+  **Dual Mode × PWM** (the "Signal vs PWM" panel: S and Δφ at each PWM, fixed frequency, τ > 0 = long
+  integration). Options `--inicio`, `--fim`, `--passo` (plus `--pwm` or `--f`, `--tau`, `--aquecer`). Same files
+  and columns as the sweeps started from the tabs, saved in the series folder; the result window is not opened
+  during a series.
+- Completed measurements on the tab plot: after a series (or when a series file is opened from the folder of a
+  run, using its `resumo.csv`), clicking a completed step draws its saved data in the tab plot: S vs f / t / PWM
+  for Dual Mode steps, R vs f / PWM for OPT101/INMP441 sweeps, and every average (first blue to last red) for a
+  Transient. Steps with several measurements (frequency/PWM lists, Repeat) show one curve each, with a legend.
+  The Status column shows the states from `resumo.csv`. During a series, clicking a completed step shows it; clicking
+  the running step goes back to the live plot.
+- Headless: `soi_controller.py --serie file.serie.txt [--amostra name] [--simulado]` runs the same file without
+  a window (a Notice waits for Enter in the terminal).
+- Simulated mode works as usual (same sweep and Signal vs t code).
+
+#### Added: sweep repetitions with median (noise campaign, 2026-11-18)
+- **Why:** between 40 and 200 Hz the sweep errors are isolated points off by 8–15 % (room sounds lasting a few
+  seconds), at different frequencies in each sweep; a longer τ does not remove them, the median of separate sweeps does.
+- Dual Mode frequency sweeps: **Repetitions** field (default 3). Each repetition saves its CSV (`_rep1`, `_rep2`…);
+  at the end a `_mediana` CSV with the point-by-point median and the new columns `S`, `N_repeticoes`,
+  `Incerteza_S_Pct` (100·1.25·SD/√N/median) and `Incerteza_Fase_Graus`. The plot shows the repetitions in grey and the
+  median with error bars of u. Headless `--repeticoes N`; series step option `--repeticoes N`.
+- Mains harmonics: fixed-frequency fields within ±3 Hz of a multiple of 60 Hz (excitation bar, Signal vs t, series
+  steps and lists) show an orange warning with a **Shift** button (k·60 ± 5 Hz); sweeps move such points to k·60 ± 4 Hz
+  by default (*Avoid multiples of 60 Hz*), listed in the CSV header. Headless `--sem-evitar-rede`.
+
+#### Added: room-noise rejection by the neighbouring frequencies (approved 2026-11-18)
+- **Why:** intermittent room sounds (seconds long) leave isolated points off by 8–15 % between 40 and 200 Hz; the
+  lock-in fluctuation catches only a few of them. A sound shows up at the neighbouring frequencies at the same time.
+- Every 1 s, on the raw INMP441 (2 s Hann window): q = rms(R at f·0.93, R at f·1.07) / R at f, neighbours moved away
+  from multiples of 60 Hz. In the Dual Mode frequency sweeps (*Discard stretches with room sounds*; off by default since 2026-11-19, because the offline test with the night audio showed no gain) the part of a
+  point's average with q > 2 × the point's median q is discarded; with more than 30 % discarded the average is redone
+  (up to 2×). Limits from the 2026-11-18 heating campaign: rms deviation 27 → 15 % at 37 Hz and 14 → 7 % at 113 Hz,
+  discarding 7–15 %; ≥ 487 Hz discards ≤ 1.4 %. Broadband energy did not correlate and is not used.
+- New CSV columns `Ruido_vizinhas_q` (median q of the point; the typical |error| is ~0.3·q), `Descartado_Pct`,
+  `Refeito_ruido`. Headless `--descartar` turns it on (`--sem-descarte` is kept and is now the default).
+
+#### Added: shuffled measurement order and extra frequencies to avoid (approved 2026-11-19)
+- **Why:** with an ascending sweep a slow drift (cell warm-up) turns into a false slope of the curve. Measuring the
+  frequencies in a new random order in each repetition turns the drift into scatter that the median of the
+  repetitions reduces. The 2026-11-19 noise study also found a noise source at ~170 Hz (probably the laser fan).
+- *Order* box next to *Repetitions* in the Dual Mode frequency sweep: Ascending (default), Descending or Shuffled.
+  Shuffled draws a new permutation in each repetition (`random.Random(seed).shuffle` of the ascending indices; seed
+  + k − 1 in repetition k), written in the CSV header (`# Ordem = embaralhada; semente = …`). The plot and the CSVs
+  stay in frequency order.
+- New CSV columns `Ordem_medida` (position in which the point was measured) and `Hora_ponto` (end time of the
+  point) in every frequency sweep CSV; in the `_mediana` CSV, `Ordem_medida` lists one position per repetition
+  separated by ";".
+- *Avoid (Hz)* field: frequencies of known noise sources (e.g. `170,7`); sweep points within ±2 % of them (at least ±3 Hz, proportional window approved 2026-11-19) move 1 Hz beyond the window edge,
+  on the side they were on, and are listed in the CSV header. Saved with the settings.
+- Headless: `--ordem crescente|decrescente|embaralhada`, `--semente N`, `--evitar "170.7;341.4"`.
+
+#### Added: Detect background noise (approved 2026-11-19)
+- **Why:** the 2026-11-19 noise study found a tone series at ~170.2 Hz (probably the laser fan: 170, 340, 510, 681,
+  851 Hz). Sweep points on such tones pick up noise unrelated to the sample.
+- *Detect background noise...* button in the INMP441 tab opens its own window (new `interface/soi_ruido.py`). Quick
+  mode: laser at PWM 0, records the INMP441 (default 20 s, 12 kS/s), Welch PSD with 4 s Hann windows (0.25 Hz),
+  background = running median of the dB spectrum (±20 Hz), tones > 10 dB above it (adjustable), harmonic series =
+  f0 with ≥ 3 peaks at k·f0 (0.5 %, k ≤ 10), 60 Hz and multiples marked as mains. Comparative mode (like the
+  two-sample calibration): record without the noise source, then with it; the source's tones are those ≥ 6 dB
+  higher in the second recording. Table + spectrum with marks; *Send to Avoid (Hz)* adds the selected tones (or the
+  whole series, k·f0 up to k = 10) to the sweep's *Avoid (Hz)* field. Each analysis saves
+  `<sample>_Ruido_fundo_<date>.csv` (header with the tones; columns `Frequencia_Hz,PSD_dB,Fundo_dB`, plus
+  `PSD_sem_fonte_dB` in the comparative mode) and the raw audio `.bin` (AudioRecorder format) in `Medidas`.
+- *Detect noise during warm-up* (Dual Mode frequency sweep, on by default): with *Wait for warm-up*, the audio of the
+  last 3 min of the warm-up is analysed the same way, ignoring the laser frequency and its harmonics (±0.15 Hz: the
+  modulation is exact in the I2S clock; ±1 Hz would hide 40 % of the spectrum with the laser at 5 Hz). The tones and
+  series found are avoided in that sweep and its repetitions (the *Avoid (Hz)* field is not changed) and are written in
+  the CSV header (`# Ruidos detectados = …`). Headless `--aquecer` does the same; `--sem-detectar-ruido` turns it off.
+- Headless: `--detectar-ruido [--duracao S] [--comparar] [--limiar DB]` prints the tones and a ready `--evitar` list.
+- Simulation: `SOI_SIM_RUIDO=<f0>` adds a fan-like harmonic series to the simulated INMP441.
+
+#### Fixed: raw audio blocks not multiple of 4
+- The 4-sample average of the raw audio recording dropped the remainder of each block, which made phase jumps when
+  a block length was not a multiple of 4. The remainder now goes to the next contiguous block. The board always sends
+  256-sample blocks, so only the simulation was affected.
+
+#### Added: optional raw INMP441 audio recording
+- **Why:** offline analysis of the room's acoustic noise (neighbouring frequencies, broadband energy) to define a rule
+  for discarding noisy points. Off by default; turned on with the environment variable `SOI_GRAVAR_AUDIO=<folder>`
+  (GUI or headless). One file per run, `audio_<sample or soi>_<YYYYMMDD_HHMMSS>.bin`: per block a little-endian header
+  `uint32 sequence` (I2S index of the first sample), `uint32 n_out`, `float64 t_pc` (time.time() on arrival), then
+  `n_out` float32 = mean of every 4 samples / 8388608 (12 kS/s, ~170 MB/h). Written by its own thread (flush every
+  ~1 s); the file name goes to the log. Headless `--amostra` renames the file if it was already open with the
+  sample name saved in the interface.
+
+#### Changed: sweep defaults reviewed on 2026-11-19 (approved)
+- *Order* is **Shuffled** by default (and saved with the settings): each repetition is a complete sweep in a new
+  random order, a randomized complete block design, so a slow drift spreads evenly over the frequencies instead of
+  becoming a slope. τ = 1 s fixed and 3 repetitions with median stay. Headless `--ordem` defaults to `embaralhada`.
+  The interface applies these defaults once on the first start of this version.
+- *Discard stretches with room sounds* moved to **Settings → Sweeps** ("Show … in the frequency sweep", off by
+  default): off, the box disappears from the Dual Mode sweep and the discard stays off; on, the box shows as before.
+  With τ = 1 s it brought no gain in the 2026-11-18/19 tests; it may help with longer τ. Headless `--descartar`
+  still turns it on.
+- *Avoid (Hz)* window proportional to frequency (±2 %, at least ±3 Hz) instead of a fixed ±3 Hz → ±4 Hz, also for
+  the tones found during the warm-up.
+
+#### Changed: noise detection excludes bands by itself, mains included (approved 2026-11-19)
+- **Detected noise is used without "Send":** the tones of the last *Detect background noise* window are excluded from
+  the next Dual Mode frequency sweeps (whole series, k·f0, k ≤ 10) until the next detection or until the interface is
+  closed, together with the warm-up detection. The box *Exclude detected noise* (was *Detect noise during warm-up*)
+  turns both off; it shows how many bands and the time of the last detection. The window button became *Write to
+  Excluded bands (Hz)* (to keep them in the saved field). On 2026-11-19 the sweep at 15:22 used the old field and not
+  the 15:19 detection (117 Hz and 497 Hz were left in).
+- **Mains in the detection:** the detection records the OPT101 together with the INMP441 and keeps its mains tones
+  (60 Hz and multiples; the mains background is electrical, in the OPT101), listed as *mains (OPT101)*. Mains tones
+  found in either sensor are excluded like the others. The *Avoid multiples of 60 Hz* box was removed: with no
+  detection that analysed the OPT101, every multiple of 60 Hz is excluded for safety (as before); the CSV header says
+  which rule applied (`# Rede = …`). The warm-up detection also analyses the OPT101 when the laser harmonics do not
+  cover the multiples of 60 Hz. Simulation: the simulated OPT101 also has a small 300 Hz tone.
+- **"Exclude" instead of "Avoid":** *Avoid (Hz)* became **Excluded bands (Hz)** (no point is measured in the band of
+  ±2 %, at least ±3 Hz, around each frequency). Headless `--excluir` (alias of `--evitar`); CSV header
+  `# Faixas excluidas …` (was `# Frequências evitadas …`; old files keep opening, the line is informative).
+
+#### Changed: no sleep and log of every point during measurements (approved 2026-11-19)
+- The sbook2 entered Modern Standby several times during the 2026-11-19 sweeps (Kernel-Power 506/507). On such PCs
+  Windows goes to standby when the screen turns off, even with `ES_SYSTEM_REQUIRED`, so the interface now also keeps
+  the screen on (`ES_DISPLAY_REQUIRED`) while a measurement runs. "Measurement running" now also covers the warm-up,
+  the gap between repetitions and the whole Measurement Series (also between steps). The log records when the block
+  starts and ends.
+- Every Dual Mode point also goes to `soi.log` when using the window (frequency, S, Δφ, τ, time, fluctuation), as the
+  headless mode already printed, so a lost point can be traced.
+
+#### Changed: narrower Dual Mode window (Marcos's test, 2026-11-19)
+- The *Signal x f (Hz)* box was wider than the screen. *Spacing*, *N points* and *Order* moved to the first row,
+  right after *Start*/*End*; the second row has *Avoid multiples of 60 Hz*, *Avoid (Hz)* and *Detect noise during
+  warm-up*; the third has τ, *Repetitions* and the adaptive options. The fit *Model* list is narrower (the drop-down
+  still shows the full names). Dual Mode tab minimum width 2021 → 1534 px.
+- A second *Detect background noise…* button after *Signal x t (s)* in the Dual Mode (same window as the INMP441 tab).
+
+#### Fixed: median of the repetitions matched points by position (found in the 2026-11-19 sweep)
+- `_mediana` paired the repetitions by row position, so a repetition with missing points mixed different
+  frequencies, cut the range (the file name came out "40_1333.03Hz") and gave false uncertainties up to 114 %. The
+  repetitions are now matched by frequency (0.01 Hz); a point missing in one repetition uses only the ones that exist
+  (`N_repeticoes` per point, `Ordem_medida` shows `-` for the missing one) and the header lists
+  `# Repetições incompletas: …`.
+
+#### Fixed: points without data were skipped silently
+- A point where one of the sensors sent no data (USB/serial stall) was skipped with only a 3 s status message, so a
+  repetition could lose points with nothing in `soi.log`. Now the point is measured again up to 2 times; the log
+  says how many OPT101/INMP441 blocks arrived; if it still fails the point is skipped and listed in the CSV header
+  (`# Pontos pulados …`).
+
+#### Changed: sweep defaults from the 2026-11-18 noise campaign
+- Fixed τ = 1 s (adaptive τ off by default, still available), τ = 4 s below 40 Hz (7τ wait, 3τ average),
+  3 repetitions + median, 600 s warm-up (was 300 s), start at 40 Hz, avoid multiples of 60 Hz. Above τ = 4 s an orange
+  "τ > 4 s does not help: use repetitions" appears (largest useful τ, from the Allan deviation). Saved preferences are
+  switched to the new defaults once. Headless: adaptive τ only with `--adaptativo` or `--precisao`; series files
+  written before keep their meaning (a `varredura` line without `--tau-fixo` is still adaptive, one sweep).
+
+#### Changed
+- Unattended runs: during a series the "below 40 Hz" confirmation and the calibration-conditions check of the
+  frequency sweep do not open dialogs (the warning goes to the log).
+- The Dual Mode PNG is drawn at screen size even when the Dual Mode tab is hidden.
+
+#### Fixed
+- Window opened maximized with the top bar (Excitation, Calibration, Simulate sampling, Settings) cut off on the
+  right and the rest of the window badly sized, until it was restored and maximized again (seen on a laptop with
+  high Windows display scaling). Two causes, both fixed:
+  - The top bar was a single row about 1600 px wide, which set the window's minimum width. With 125–200 % scaling
+    that is wider than the screen, so the maximized window could not fit its content. The top bar now wraps into
+    two rows when the window is narrow (groups: excitation, sample, calibration, cell, SNR, and Simulate/Settings
+    kept at the right). The row at the top of the Measurement Series tab wraps the same way. Minimum window width
+    went from ~1600 to ~960 px.
+  - A window closed maximized was restored already maximized, before it existed on screen. It now opens at its
+    saved normal size (fitted to the screen) and is maximized right after `show()`. This replaces an
+    earlier workaround (restore + maximize again on a timer), which did not help on that laptop.
+- "Detect background noise" window: dragging or zooming the spectrum could run off to absurd scales (frequency axis
+  from 10^-307 to 10^308 Hz, PSD around 10^9 dB), and the long axis labels made the plot much wider. The view is now
+  limited to the measured spectrum (±0.1 decade, PSD ±40 dB), the left axis has a fixed width, near-zero bins (the
+  -300 dB log floor) are clipped 30 dB below the 1st percentile so they no longer stretch the y axis, and a double
+  click on the plot goes back to the full spectrum, as in the other plots.
+- Sweep boxes (Dual Mode "Signal vs f", Calibration, PWM and the OPT101/INMP441 sweep panels): when the window was
+  narrower than a row of fields (high Windows scaling, or after the orange "high SNR at f < 40 Hz" notice appeared),
+  the spin boxes overlapped the labels "End:" and "Spacing:" and the notice was cut. Each label + field pair is now a
+  group and the row wraps onto a new line instead of overlapping.
+- Dual Mode plots: the y axis was fitted to the points drawn before the newest one (the curves were updated after
+  the fit), so the point just measured could stay off the scale. It showed up with shuffled sweeps that go below
+  40 Hz, whose low-frequency points have much smaller S and Δφ (e.g. 4 points measured, 2 visible; the 5 Hz point in
+  the CSV but not in the plot). The axes are now fitted after the curves are updated.
+- Warnings and status texts made the window wider than the screen when they appeared (e.g. the red "Resonance
+  shifted" badge, "⚠ N warning(s)", "ℹ Results", a long file name in the status bar of a tab). The row under the
+  Dual Mode controls now wraps onto a second line, and the status bars of the OPT101, INMP441 and Dual Mode tabs, the
+  refine note and the manual-sweep readout shrink (cut at the edge or wrap) instead of raising the window's minimum
+  width.
+  (A first version of these wrapping rows left an empty group, one whose only label was hidden, as an invisible
+  640×480 widget over the top of the Dual Mode tab, so no field there reacted to clicks. Empty groups now get zero
+  size; a test clicks every button, field and box of all tabs.)
+- Window and panels resized badly during use until the window was restored and maximized again. The wrapping rows
+  above reported, as their minimum, the height of one group per line, which pushed the window's minimum height to
+  ~990 px (more than a 1080p screen at 125 % scaling, or a Surface Book at 200 %); they now report one line and get
+  their real height from the width they receive. The Calibration panel of the Dual Mode is capped at 40 % of the
+  screen height (with a vertical scroll bar), and the estimated-time label no longer widens the sweep box when
+  "Wait for warm-up" is ticked. Measured offscreen at 1500×950: minimum window size 1119×654 (was 1668×654 in
+  the first 2.4.0 build), 1119×840 with the Calibration panel open. As a safety net, a maximized window whose frame
+  ends up larger than the screen after a layout change is restored and maximized again automatically (once every
+  3 s at most, and only if its minimum size fits the screen).
+- Dual Mode sweeps with "Wait for warm-up": the confirmations ("sweep below 40 Hz" and the calibration conditions
+  check) opened only at the end of the warm-up, and the measurement waited there, with the laser on, until someone
+  clicked OK. They are now asked when the sweep button is clicked, before the warm-up, and the sweep starts by
+  itself when the warm-up ends.
+
+#### Changed: Dual Mode frequency sweeps start at 1 Hz by default
+- **Why:** the new cell (no microphone chamber, new microphone mount, 2026-11-23) fixed the low-frequency fluctuation,
+  so the default sweep now covers the low range too (was 40 Hz). Points below 40 Hz still use τ = 4 s, so a default
+  sweep takes longer. Saved settings are moved to 1 Hz once; the start can still be changed as before.
+- The "sweep below 40 Hz" warning (dialog when starting, orange "high SNR at f < 40 Hz" notice next to the range) was
+  removed for the same reason.
+
+#### Changed: interface code split into modules (no change in behavior)
+- **Why:** `soi_controller.py` had grown to ~13,200 lines (~600 KB), hard to read and to change safely. It is also the
+  first step of the planned 2.5.0 layout for small screens (1366×768), where each tab becomes a module.
+- `soi_controller.py` is still the file to run (`rodar_interface.bat`, the executable and the headless commands do not
+  change) and keeps `__version__`, the main window class (`LockInWindow`: start-up, timer, status, settings, close),
+  the log and `main()`.
+- New modules without Qt windows: `soi_const.py` (constants), `soi_analise.py` (calibration, fits, diagnosis, CSV
+  reading), `soi_dsp.py` (lock-ins, external reference, buffers, resolution test, raw audio recorder), `soi_serial.py`
+  (port detection and serial reader), `soi_sim.py` (simulated mode), `soi_widgets.py` (custom widgets), `soi_headless.py`
+  (`--varredura`, `--sinal-t`, `--serie`, `--detectar-ruido`) and `soi_comum.py` (imports all of them).
+- The window methods moved, unchanged, to mixin classes by subject: `soi_win_ui.py` (top bar, OPT101 and INMP441
+  tabs), `soi_win_dual_ui.py` (Dual Mode tab), `soi_win_cal.py` (two-sample calibration), `soi_win_dual.py` and
+  `soi_win_dual_sweep.py` (Dual Mode sweeps, results, export), `soi_win_dual_fit.py` (panels, model fits),
+  `soi_win_comum.py` (shared controls, Settings), `soi_win_opt.py`, `soi_win_audio.py` and `soi_win_series.py`.
+- Only real code change: the OPT101 rate after oversampling (`FS`, `DECIMATION`), which changes with the OSR, is now
+  `RATE.FS` / `RATE.DECIMATION` (one shared object) instead of module globals, so every module sees the current value.
+- Checked in simulated mode: screenshots of every tab and panel identical to the previous build (except live data),
+  same minimum window sizes, OSR change, Settings dialog, and the headless `--varredura`, `--sinal-t`, `--serie` and
+  `--detectar-ruido` with `--simulado`.
+
 ## [2.3.0] - 2026-11-17
 
 Minor version: only the interface changes. The firmware is still 2.0.0 (`binarios/soi_firmware_v2.0.0.bin`) and the USB protocol is the same.
