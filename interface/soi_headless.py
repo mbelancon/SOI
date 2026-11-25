@@ -31,7 +31,7 @@ def _headless_args(argv):
     ap.add_argument('--tau', type=float, default=None, help='τ max em s (τ adaptativo) ou τ fixo (padrão: o da interface)')
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
     ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (padrão desde 18/11; espera 9τ, média 1τ; '
-                    '4 s abaixo de 40 Hz)')
+                    'em toda a faixa)')
     ap.add_argument('--descartar', action='store_true',
                     help='liga "Descartar trechos com som da sala" (monitor das vizinhas f ± 7 %%; desligado por padrão)')
     ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
@@ -389,7 +389,7 @@ def run_headless(argv, LockInWindow):
           + (f'τ adaptativo (τ max {win.dual_tau_w["F"].value():g} s, precisão {win.sp_dual_adapt_tol.value():g} %'
              + (f'; τ fixo por faixa abaixo de {LOWF_FMAX:g} Hz' if win.chk_dual_adapt40.isChecked() else '')
              + (f'; até {win.sp_dual_blocks.value()} médias por ponto' if win.chk_dual_blocks.isChecked() else '') + ')'
-             if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s ({LOWF_TAU_FIXED:g} s abaixo de {LOWF_FMAX:g} Hz)')
+             if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s')
           + (f'; {win.sp_dual_reps.value()} repetições + mediana' if win.sp_dual_reps.value() > 1 else '')
           + (f'; ordem {a.ordem}' + (f' (semente {win.dual_seed_fixed})' if a.ordem == 'embaralhada' else '')
              if a.ordem != 'crescente' else '')

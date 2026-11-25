@@ -1204,9 +1204,6 @@ class DualSweepMixin:
             blk = (f", permitir médias: até {q['blocks']} medidas com o mesmo tau" if q.get('blocks', 1) > 1 else '')
             tau = (f"tau adaptativo (precisão {q['adapt'][0]:g} %, tau max {q['adapt'][1]:g} s{rng}; "
                    f"espera 7tau, média por max(1 s, 3tau){low}{blk})")
-        elif q['tau'] and q['kind'] == 'F' and min(v) < LOWF_FMAX:
-            tau += (f"; abaixo de {LOWF_FMAX:g} Hz tau = {max(q['tau'], LOWF_TAU_FIXED):g} s "
-                    f"(espera 7tau, média por 3tau)")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"

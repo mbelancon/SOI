@@ -351,12 +351,9 @@ class DualMixin:
         return None if lowf_band_tau(f) is None else self._adapt_cap(kind)
 
     def _fixed_tau_at(self, kind, f):
-        """τ do ponto f com o τ adaptativo desligado: o do campo; nas varreduras em frequência, abaixo de LOWF_FMAX,
-        pelo menos LOWF_TAU_FIXED (espera 7τ, média 3τ)."""
-        tau = float(self.dual_tau_w[kind].value())
-        if kind in ('F', 'M') and f < LOWF_FMAX:
-            return max(tau, LOWF_TAU_FIXED)
-        return tau
+        """τ do ponto f com o τ adaptativo desligado: o do campo em toda a faixa (desde 2.5.0 sem os 4 s abaixo de
+        40 Hz; a célula nova mede bem em baixa frequência)."""
+        return float(self.dual_tau_w[kind].value())
 
     def _adapt_cap(self, kind):
         """τ max do τ adaptativo: o valor do campo "τ max" do quadro."""
@@ -394,7 +391,7 @@ class DualMixin:
             self.dual_tau_lbl[k].setText('τ max:' if on else 'τ:')
             self.dual_tau_w[k].setToolTip(
                 'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\n'
-                'sem passar desse valor (abaixo de 40 Hz, com "só f > 40 Hz", é o τ usado).\n'
+                'sem passar desse valor.\n'
                 'É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa.' if on else
                 'τ dos dois lock-ins durante a varredura (integração longa): espera 9τ e faz a média por 1τ em\n'
                 'cada ponto. É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa (e na outra varredura).')
@@ -418,8 +415,6 @@ class DualMixin:
             return adapt_times(tau)
         if self.dual_mode_w[kind].currentIndex() == 1:
             tau = self.dual_tau_w[kind].value()
-            if kind in ('F', 'M') and value < LOWF_FMAX:
-                return adapt_times(self._fixed_tau_at(kind, value))
             return 9.0 * tau + 0.3, max(0.5, tau)
         if kind in ('F', 'M'):
             # A troca de frequência aplica os cortes automáticos nos dois lock-ins (apply_frequency)

@@ -41,7 +41,7 @@ class SeriesMixin:
         lo = hi = 0.0
         for v in vals:
             if p.get('tau_fixo'):
-                t = sum(adapt_times(max(tau, LOWF_TAU_FIXED))) if v < LOWF_FMAX else 9.0 * tau + 0.3 + max(0.5, tau)
+                t = 9.0 * tau + 0.3 + max(0.5, tau)
                 lo, hi = lo + t, hi + t
             else:                                   # 2.5.0: adaptativo em toda a faixa
                 lo += sum(adapt_times(adapt_tau_min(v)))

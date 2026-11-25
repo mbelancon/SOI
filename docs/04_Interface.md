@@ -200,11 +200,11 @@ and Fit start open; the state of each section is saved between sessions. **Doubl
 - Each point waits 7τ + 0.3 s and averages for max(1 s, 3τ). At high frequency with a clean signal τ drops to ~0.1 s and a point takes ~2 s; at low frequency it stays at τ max (40 s per point with 4 s).
 - The status shows the τ in use and, after each point, its fluctuation. The CSV header records `tau adaptativo (precisão …, tau max … s; tau usado de … a … s; …)` (older files say `tau inicial`); the `_DP` columns keep their meaning (standard deviation during the measurement).
 - **Per point in the CSV** (all automatic sweeps): `Tau_s`, `Tempo_ponto_s` (wait + average, with redos), `Refeito` (redos), `Flutuacao_S_Pct`, `Flutuacao_Fase_Graus`; the header has `# Inicio = …; Fim = …; Duracao = … s`.
-- **Measure A/B** of the calibration uses it too (the calibration preset sets τ max to 4 s with adaptive τ on, τ to 2 s with it off). With adaptive τ off the sweep uses a fixed τ (9τ wait, 1τ average); below 40 Hz τ is at least 4 s (7τ wait, 3τ average). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
+- **Measure A/B** of the calibration uses it too (the calibration preset sets τ max to 4 s with adaptive τ on, τ to 2 s with it off). With adaptive τ off the sweep uses a fixed τ over the whole range (9τ wait, 1τ average; until 2.4, τ was at least 4 s below 40 Hz). The manual sweep (optical modulation) and the matched PWM sweep do not use it.
 
 **Low frequency.** Until 2.4, an *only f > 40 Hz* box (on by default) kept a preset τ below 40 Hz, where the room's acoustic noise used to dominate. With the new cell (2026-11-23) the low frequencies measure well, so since 2.5.0 adaptive τ works the same over the whole range; the only limit is the minimum τ of about 3 modulation periods (3 s at 1 Hz), which keeps the 2f ripple out of the lock-in output.
 
-**Recommended sweep settings (noise campaign, 2026-11-18).** Defaults: fixed τ = 1 s at f ≥ 40 Hz (τ = 4 s below),
+**Recommended sweep settings (noise campaign, 2026-11-18).** Defaults: fixed τ = 1 s (τ = 4 s below 40 Hz until 2.4),
 **3 repetitions combined by the point-by-point median**, 600 s warm-up, start at 1 Hz (40 Hz until 2026-11-25; the new cell fixed the low-frequency fluctuation). Measured with an
 aluminium sample in the Camara cell (τ = 1 s): microphone SNR 0 dB at 17 Hz, 14 dB at 37 Hz, 20 dB at 113 Hz and
 29 dB at 487 Hz. Above 200 Hz every setting tested (τ = 1, 2, 4 s fixed, adaptive 2 %) agreed within ~1 %. Between

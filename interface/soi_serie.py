@@ -40,7 +40,7 @@ SIMPLES = ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm')   
 LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista (uma medida por combinação)
 
 DEFAULTS = {
-    # padrão da campanha de ruído de 18/11: τ fixo 1 s (4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
+    # padrão da campanha de ruído de 18/11: τ fixo 1 s (até 2.4: 4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
     'varredura': {'nome': 'varredura', 'fmin': 40.0, 'fmax': 2440.0, 'n': 25, 'tau': 1.0, 'tau_fixo': True,
                   'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 600.0,
                   'repeticoes': 3, 'desligar': False, 'repetir': 1},
@@ -1520,7 +1520,7 @@ class SeriesTab(QtWidgets.QWidget):
         g.addWidget(f['adapt_tudo'], 5, 0, 1, 3)
         f['adapt_tudo'].setVisible(False)               # 2.5.0: τ adaptativo sempre em toda a faixa
         g.addWidget(f['desligar'], 5, 3, 1, 3)
-        f['tau_note'] = QtWidgets.QLabel('τ fixo: 4 s abaixo de 40 Hz (espera 7τ, média 3τ). τ > 4 s não melhora: '
+        f['tau_note'] = QtWidgets.QLabel('τ fixo: espera 9τ, média 1τ em toda a faixa. τ > 4 s não melhora: '
                                          'use repetições.')
         f['tau_note'].setStyleSheet('color:#777;')
         f['tau_note'].setWordWrap(True)

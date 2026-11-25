@@ -2137,3 +2137,9 @@ EN.update({
     'Excitação': 'Excitation',
     'Experimento': 'Experiment',
 })
+EN.update({
+    'τ fixo: espera 9τ, média 1τ em toda a faixa. τ > 4 s não melhora: use repetições.':
+        'Fixed τ: wait 9τ, average 1τ over the whole range. τ > 4 s does not help: use repetitions.',
+    'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\nsem passar desse valor.\nÉ o mesmo τ do INMP441: mudar aqui muda lá e vice-versa.':
+        'τ max of the sweep (adaptive τ on): the sweep starts at it and τ changes according to the fluctuation,\nnever above this value.\nIt is the same τ as the INMP441: changing it here changes it there and vice versa.',
+})

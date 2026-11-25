@@ -39,6 +39,9 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
 - **Adaptive τ over the whole range** (Marcos, 2026-11-25): the "only f > 40 Hz" box is gone and adaptive τ now works
   the same at every frequency (headless `--adapt-tudo` is now the default and kept only for compatibility). The
   minimum τ of about 3 modulation periods stays (3 s at 1 Hz), so the lock-in still rejects the 2f ripple.
+- **Fixed τ over the whole range** (Marcos, 2026-11-25): with adaptive τ off, the sweep uses the τ of the field at every
+  frequency (9τ wait, 1τ average); the rule of τ ≥ 4 s below 40 Hz (7τ wait, 3τ average) is gone, also in the
+  series, the headless sweep and the CSV header.
 - **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
   so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
 - **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**
