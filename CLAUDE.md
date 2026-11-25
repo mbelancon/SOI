@@ -14,6 +14,8 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
 - Interface Python (`interface/soi_controller.py`): o modo simulado tem que continuar funcionando sempre.
   Testar sem janela (`QT_QPA_PLATFORM=offscreen`, `find_arduino_port` sem porta, modo simulado) e conferir
   capturas de tela antes de entregar.
+- A janela tem que caber em 1366×768 a 125 % (laptop do lab): rodar `docs/tests/check_window_size.py` quando
+  mudar o layout.
 - Texto novo na interface: string em português no código e tradução em `EN` de `interface/soi_i18n.py`.
 - Arquivos de dados mantêm nomes, colunas e chaves de cabeçalho em português (`Medidas/`, `Frequencia_Hz`,
   `# Celula = …`), em qualquer idioma da interface, para os arquivos antigos continuarem abrindo.
@@ -36,6 +38,7 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
   arquivos. Antes, anotar o commit anterior (é o backup: voltar = checkout dele). Nunca atualizar durante medidas.
 - PC padrão do projeto: sbook2. Na pasta SOI dele nunca usar `git push --tags` nem `--mirror` (tags antigas
   apagadas voltariam ao GitHub): empurrar só branches ou tags específicas.
+- No sbook2, cada atualização da pasta SOI é feita só a pedido do Marcos e com a interface fechada.
 
 ## Medidas
 - Grade de frequências: evitar múltiplos de 60 Hz e a série da ventoinha do laser (170 Hz × k).

@@ -13,13 +13,17 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - OPT101 → PA0 (ADC, 0–3,3 V). Saída de ~7,5 mV a Vs − 1,3 V: com Vs = 3,3 V, máx. ~2,0 V.
 - INMP441 (I2S): SCK PB13, WS PB12, SD PB15.
 - Modulação do laser: PWM em PA8 (via driver); sincronismo em PB0. Laser 532 nm.
-- Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura (INMP441
-  com o-rings de um lado, furo de equalização do outro, fechado nas medidas), janela de lâmina de 1 mm.
-  Estado baixo em 19/11: f0 = 1052 Hz, Q ≈ 4,2.
+- Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura (furo de
+  equalização do outro lado, fechado nas medidas), janela de lâmina de 1 mm. Desde 23/11: sem a câmara do
+  microfone e com nova fixação do INMP441 (acabou o vazamento que prejudicava a baixa frequência).
+  Estado baixo em 19/11 (célula antiga): f0 = 1052 Hz, Q ≈ 4,2.
 - Peças de Al (todas termicamente grossas): disco "pequena" ~12–15 × ~5 mm (~2 g, medir exato), 30×20×18 mm
   (~29 g) e 120×20×18 mm (~117 g).
 - A ventoinha do laser gera 170,2 Hz + harmônicos (340, 510, 681, 851, 1021 Hz; f0 varia 169,6–171,8 Hz), que
   chegam ao INMP441 também pela bancada.
+- 2º SOI montado (em uso desde 24/11); o 1º foi para teste de um amigo.
+- PC do lab (fica com o SOI): laptop Windows 10, tela 1366×768 (Ubuntu descartado em 23/11). PC padrão de
+  desenvolvimento e testes: sbook2.
 
 ## Estrutura
 - `firmware/` — STM32Cube (HAL + USB Device da ST em `src/usb`), PlatformIO com `framework = stm32cube`.
@@ -28,7 +32,8 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
   roda (janela principal, main()); código dividido em soi_const/analise/dsp/serial/sim/widgets/headless + soi_win_*
   (métodos da janela por assunto).
   `interface/soi_i18n.py` — idioma (pt/en pelo Windows, `SOI_LANG` força) e tabela pt→en.
-  Na 2.4.0: `interface/soi_serie.py` (aba Medidas em Série) e `interface/soi_ruido.py` (detectar ruídos de fundo).
+  `soi_serie.py` (aba Medidas em Série), `soi_ruido.py` (detectar ruídos de fundo), `soi_layout.py` (2.5.0:
+  painel lateral com seções recolhíveis, ajuste à tela). `docs/tests/check_window_size.py` confere 1366×768 a 125 %.
 - `rodar_interface.bat`, `varredura.bat`, `campanha_deriva.bat` — atalhos (miniconda).
 - Pasta local do PC padrão (sbook2, `Projetos\Claude\SOI`) é um clone git e se atualiza só por git (checkout da
   branch em teste ou `git pull`), sem cópias de arquivos. Medidas e dados ficam fora do git.
@@ -36,19 +41,22 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
   figuras), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
 
 ## Versões
-- `main`: 2.3.0 (PR #5, 17/11), firmware 2.0.0. v1.0.0 publicada em 2026-10-27; v2.3.0 publicada em 17/11 (Releases, exe + zip).
-- Em desenvolvimento: interface 2.4.0 (firmware 2.0.0 intacto) na branch `claude/project-thread-nvsgcv`, sem PR;
-  no sbook2 desde 19/11 (commit 9af511b). Testada no modo simulado e em medidas reais de 19/11.
+- `main`: interface 2.4.0 (PR #8, 25/11; inclui a divisão em módulos), firmware 2.0.0. Releases publicadas:
+  v1.0.0 (27/10) e v2.3.0 (17/11). A 2.4.0 não terá release.
+- Em desenvolvimento: interface 2.5.0 (firmware intacto) na branch `claude/project-thread-2v4sgr`, sem PR;
+  no sbook2 desde 25/11. Testada no modo simulado; teste com experimentos em 26/11. Se passar, vira a próxima
+  release (pulando a 2.4); release e PR só a pedido.
 - Versões de firmware e interface são independentes (ver CLAUDE.md).
 
-## Próximo PR (só quando o Marcos pedir; tudo aprovado, Marcos ainda quer mexer antes)
-Interface 2.4.0, branch `claude/project-thread-nvsgcv` (lista completa no CHANGELOG, seção 2.4.0): aba Medidas em
-Série, varredura embaralhada com mediana, faixas excluídas e "Detectar ruídos de fundo", descarte por vizinhas opcional.
-Depois do merge: PR só de reorganização dividindo o `soi_controller.py` em módulos (aprovado 20/11; ver relatório
-"SOI — como gastar menos tokens").
+## Próximo PR (só quando o Marcos pedir)
+Interface 2.5.0, branch `claude/project-thread-2v4sgr` (lista no CHANGELOG, seção 2.5.0): janela para 1366×768
+(painel lateral com seções, osciloscópio recolhível, cabe a 125 %); simulado automático sem STM32; saem Célula/modo
+OPC, imagens, Teste de resolução, Filtro 60 Hz, Refinar ressonância, Diagnóstico, quadros de fit nas FFTs,
+passa-altas manual; τ adaptativo e τ fixo iguais em toda a faixa; varredura começa em 1 Hz.
 
 ## Descobertas principais (detalhes em NOTAS_MEDIDAS.md)
-- < 30–40 Hz domina ruído acústico da sala (fundo diurno 3–5× o noturno): medir com PWM 100 %, grave à noite.
+- Até 23/11, < 30–40 Hz dominava o ruído acústico (fundo diurno 3–5× o noturno); com a célula nova a baixa
+  frequência mede bem (rever com a bateria de 26/11). Dados até 23/11 não confiáveis (arquivados).
 - Deriva de S ao ligar o laser: aquecimento local sob o feixe (não a T média da peça); some após ~11 min. Warm-up 10–15 min.
 - Evitar múltiplos de 60 Hz e a série da ventoinha (170,2 Hz + harmônicos).
 - Varredura recomendada: τ 1 s, 3 repetições, mediana, ordem embaralhada.
@@ -56,13 +64,11 @@ Depois do merge: PR só de reorganização dividindo o `soi_controller.py` em m�
 - Calibração por duas amostras (Al + Inox, sempre a mesma face); conferir f0 da célula (estados ~1,05/1,54/1,79 kHz) antes de aplicar.
 
 ## Planos próximos
-- Semana de 23/11 (SOI volta da apresentação): melhorias mecânicas medidas antes/depois (isopor sob o board de metal,
-  laser fora do board parafusado na madeira; detector rápido, fundo em 170/681/851/160 Hz, varredura τ 1 s);
-  15 repetições embaralhadas na peça de 120 mm à noite; aquecimento noturno; medir o disco pequeno.
-- Avaliar offline a correção de deriva entre blocos (normalizar cada repetição) com as 15 repetições.
-- PC Ubuntu com tela 1366×768 para deixar o SOI no lab: testar layout (rolagem/compacto), `rodar_interface.sh`,
-  `/dev/ttyACM0` + grupo dialout, dependências. Não iniciado.
-- Apresentação: slides "SOI — fotoacústica portátil com STM32" (ênfase em portátil, sem lock-in/chopper).
+- 26/11: teste da 2.5.0 com experimentos; bateria consolidada (ruído, parâmetros do lock-in, τ adaptativo);
+  fixar a reflexão da lamínula do OPT101. A otimização de parâmetros espera esses dados.
+- Avaliar offline a correção de deriva entre blocos com os dados novos; medir o disco pequeno.
+- Laptop do lab (Windows 10, 1366×768): validar a 2.5.0 nele.
+- Medir o trimpot de ganho do OPT101 (500k em paralelo com o 1M interno).
 
 ## Pendências / ideias
 - LEMBRETE: medida de 24 h do ruído acústico (fundo com PWM 0, Sinal x t em ~10, 30 e 100 Hz) para ver a
@@ -78,4 +84,8 @@ Depois do merge: PR só de reorganização dividindo o `soi_controller.py` em m�
 - Entrada limitada a 0–3,3 V (avaliar condicionamento de sinal).
 - Aba HP 34401A (RS-232/SCPI) — ideia, não iniciada.
 - Lâmpada flash Hamamatsu L9456-01 (trigger pelo STM32), pulsos lidos pelo OPT101 a ~200 kS/s.
+- Aguardam OK: firmware 2.0.1 com desligamento automático do laser; chopper mecânico com cooler 4 pinos;
+  célula com espaçador; célula de volume mínimo (resina); duas camadas de eletrodos; requisitos da PCB.
+- Separar ruído da sala × vibração por coerência entre dois INMP441 (Marcos testará).
+- Atualização de firmware pela interface (liberada depois do PR da 2.4.x).
 - Esta interface é a referência de estilo para QuadPV e TipGas.
