@@ -508,52 +508,6 @@ class DualMixin:
         self.sp_tau.setValue(tau)
         self.sp_audio_tau.setValue(tau)
 
-    def refine_dual_resonance(self):
-        '''Ajusta a ressonância na varredura em frequência atual e mede mais pontos em volta do f0 ajustado.'''
-        if self.dual_active:
-            self.flash('Espere a varredura atual terminar (ou cancele) antes de refinar.')
-            return
-        if self.ext_mode:
-            self.flash('Modulação óptica: meça os pontos da ressonância na varredura manual.')
-            return
-        if not getattr(self, 'dual_results', None) or self.dual_kind != 'F':
-            self.flash('Rode (ou abra) uma varredura em frequência antes de refinar a ressonância.')
-            return
-        x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
-        keep = np.ones(x.size, dtype=bool)
-        keep[[i for i in self.dual_excluded if i < x.size]] = False
-        ok = keep & (ro > 0) & (ra > 0) & (x >= 250.0)
-        k = np.flatnonzero(ok)[np.argsort(x[ok])]
-        f, s = x[k], ra[k] / ro[k]
-        s_rel = np.sqrt((ra_e[k] / ra[k]) ** 2 + (ro_e[k] / ro[k]) ** 2)
-        dphi = np.degrees(np.unwrap(np.radians(pa[k] - po[k])))
-        dphi_e = np.hypot(pa_e[k], po_e[k])
-        found = find_resonance(f, s) if f.size >= 6 else None
-        if found is None:
-            self.flash('Não achei um pico de ressonância acima de 250 Hz nesta varredura.')
-            self.lbl_dual_refine.setText('sem pico claro acima de 250 Hz')
-            return
-        f0, width, how = found[1], found[2], 'pelo pico'
-        fit = fit_resonance(f, s, s_rel, dphi, dphi_e, target='mag', window=found[3])
-        if fit is not None and found[3][0] <= fit['f0'] <= found[3][1] and np.isfinite(fit['fwhm']) and fit['fwhm'] > 0:
-            f0, width, how = fit['f0'], fit['fwhm'], f"ajuste: Q = {fit['q']:.3g}"
-        half = float(np.clip(0.5 * width, 0.02 * f0, 0.25 * f0))   # banda de meia potência (f0 ± f0/2Q)
-        lo, hi = max(0.1, f0 - half), min(5000.0, f0 + half)
-        n = int(round(self.sp_dual_refine_n.value()))
-        new = [round(float(v), 2) for v in np.linspace(lo, hi, n)]
-        have = np.sort(x)
-        new = [v for v in new if have.size == 0 or np.min(np.abs(have - v)) > 0.005 * v]
-        if not new:
-            self.flash('Os pontos em volta da ressonância já foram medidos.')
-            return
-        kind = self.dual_src if self.dual_src in ('F', 'M') else 'F'
-        info = (f'Refino da ressonância: +{len(new)} pontos de {new[0]:g} a {new[-1]:g} Hz em torno de '
-                f'f0 = {f0:.4g} Hz (largura {width:.3g} Hz, {how}); medidos com {DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()]}'
-                + (f', τ = {self.dual_tau_w[kind].value():g} s' if self.dual_mode_w[kind].currentIndex() == 1 else ''))
-        self.lbl_dual_refine.setText(f'f0 ≈ {f0:.4g} Hz ({new[0]:.4g}–{new[-1]:.4g} Hz)')
-        self.lbl_dual_refine.setToolTip(info)
-        self.toggle_dual_sweep(kind, refine=(new, info))
-
     def _check_cal_conditions(self):
         '''Antes da varredura da calibração: avisa se o PWM não está em 100 %, se algum filtro de 60 Hz está ligado
         ou se "Usar" (calibração aplicada) está marcado. Devolve False se o usuário cancelar.'''

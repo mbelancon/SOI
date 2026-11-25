@@ -230,25 +230,7 @@ class DualUiMixin:
                 w.valueChanged.connect(lambda _=0, k=k: self._update_lowf_warn(k))
             self._update_lowf_warn(k)
         self.dual_btns = {'P': btn_p, 'F': btn_f, 'M': btn_m}
-        # Refinar ressonância: ajusta a ressonância na varredura atual e mede mais pontos em volta do f0 ajustado
-        row_ref = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)
-        self.btn_dual_refine = QtWidgets.QPushButton('Refinar ressonância')
-        self.btn_dual_refine.setToolTip(
-            'Ajusta a ressonância da célula (oscilador amortecido + fundo, acima de 250 Hz) na varredura atual\n'
-            'e mede mais pontos, igualmente espaçados, dentro do pico, f0 ± f0/(2Q). Os pontos novos entram na\n'
-            'mesma varredura (em ordem de frequência) e o CSV é gravado de novo com todos. Usa a Medida e o τ\n'
-            'deste quadro. Serve também para uma varredura aberta do disco.')
-        self.btn_dual_refine.clicked.connect(self.refine_dual_resonance)
-        row_ref.addWidget(self.btn_dual_refine)
-        g_ref = row_ref.group()
-        g_ref.addWidget(QtWidgets.QLabel('Pontos novos:'))
-        self.sp_dual_refine_n = self._dspin(3.0, 100.0, 12.0, 0, 1.0, None, 70)
-        g_ref.addWidget(self.sp_dual_refine_n)
-        self.lbl_dual_refine = QtWidgets.QLabel('')
-        self.lbl_dual_refine.setStyleSheet('color:#606060;')
-        self.lbl_dual_refine.setWordWrap(True)
-        box_f.layout().addLayout(row_ref)
-        box_f.layout().addWidget(self.lbl_dual_refine)
+        # 2.5.0 (Marcos, 25/11): sem "Refinar ressonância" (células não ressonantes na maior parte do tempo)
         self.dual_etas = {'P': eta_p, 'F': eta_f, 'M': eta_m}
         # Topo da aba: "Calibração" (referência, esquema da célula, passos e a varredura em frequência),
         # "Varredura" (casada em PWM, pouco usada) e abrir uma varredura salva para analisar

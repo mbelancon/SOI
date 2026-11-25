@@ -114,7 +114,7 @@ The STM32 (firmware 2.0.0) sends every ADC sample, 12 bits at 200 kS/s, and the 
 **FFT** (checkbox next to *Save*): spectrum of the raw ADC signal, next to the lower plot, in dBFS.
 - Default: zoom around the reference, with an FFT of 4 s of history (resolution ≈ 0.25 Hz).
 - *Full spectrum*: 0 to 6.25 kHz, 4096-point FFT (≈ 3.1 Hz).
-- *Fit*: fits the peak amplitude at the real modulation frequency with the exact shape of a sine in the Hann window and shows A (in FS, dBFS and ADC counts), the peak/floor SNR and the resolution. If the peak is below the low-signal threshold, the plot warns instead of showing the fit.
+- *Fit*: fits the peak amplitude at the real modulation frequency with the exact shape of a sine in the Hann window and draws the fitted curve (since 2.5.0 without the values box). If the peak is below the low-signal threshold, the plot warns instead.
 - *Click and zoom* (in both FFTs, OPT101 and INMP441): a click shows the frequency and magnitude of the nearest point; the wheel zooms, dragging pans, double-click returns to auto scale and right-click clears the marker.
 
 ![OPT101 tab with the side panel, the ADC FFT and the Sweeps section open (simulated mode, 1366×768)](images/interface_opt101.png)
@@ -179,8 +179,7 @@ Measures both lock-ins **in the same step**. The OPT101 R (proportional to the o
 **Side panel** (from top to bottom): **Open sweep…** and **Detect background noise...**, then one section per
 measurement: **Signal vs f (Hz)**, **Fit**, **Calibration**, **Signal vs PWM (%)** and **Signal vs t (s)**. Signal vs f
 and Fit start open; the state of each section is saved between sessions. **Double-click** on a plot resets the axes/zoom.
-- **Signal vs f (Hz)** is the **frequency sweep** (a single one, used both to calibrate and to measure), with **Refine
-  resonance**. The **status line** at the top of the tab shows the progress, the τ in use and the **fluctuation** of S
+- **Signal vs f (Hz)** is the **frequency sweep** (a single one, used both to calibrate and to measure). The **status line** at the top of the tab shows the progress, the τ in use and the **fluctuation** of S
   and Δφ of the point being measured (updated every second) and of the last point (green within Precision, yellow up
   to 2×, red above). The plots show error bars (±1 SD) on S and Δφ.
 - **Calibration** is the microphone calibration with two samples (see below). With it open, running the sweep first
@@ -299,7 +298,6 @@ z(f) = e^(−2πi·f·td) · HP(f) · R(f) · [A·(f/100 Hz)^−n·e^(iα) + B·
 
 where the first term in brackets is the photoacoustic part (power law, constant phase) and the second is a flat background (amplitude and phase that do not change with frequency: scattered light reaching the microphone, laser driver noise coherent with the modulation, electrical coupling). HP is the microphone high-pass, td the system delay and R the cell resonance (included only if there is a peak). The fit is done with and without the background, and the background is only accepted if it really improves the fit (BIC criterion). The plot shows, with a legend, the model (black), the photoacoustic component (dashed red) and the flat, non-photoacoustic background (dashed purple). The "microphone channel delay" is the pure delay of the microphone chain relative to the OPT101 chain, almost entirely from the INMP441 digital filter (~0.35 ms at 48 kHz); it is neither the sound flight time nor the thermal delay of the sample (that is in the phase of the photoacoustic component), and the driver/laser delay cancels in Δφ. The text is short: n, fc, delay, f₀ and Q and, if there is background, a red warning of where it dominates, asking you to check the setup and not generate a calibration. Details (background/photoacoustic ratio at several frequencies, phase difference, uncertainties and residual) are in the tooltip and in the CSV. It uses the same points as the fit (respects exclusions, calibration and normalization) and goes into the CSV header on "Save again". It takes a few seconds and does not run during the sweep. It needs at least 12 points covering one decade.
 
-**Refine resonance** (in the frequency sweep panel): fits the cell resonance (damped oscillator + background, above 250 Hz only) on the current sweep or an opened one and measures more points, evenly spaced, within the peak width: f0 ± f0/(2Q) (between 2 % and 25 % of f0). "New points" sets how many (12 by default); points within 0.5 % of an existing one are skipped. It uses the panel's τ. The new points are inserted in frequency order into the same sweep, excluded points stay excluded, and at the end the CSV is written again (new file) with all points and the line `# Refino da ressonância: …` in the header.
 
 **Excluding points from the fit:** click a point on the left (magnitude) plot to remove it from the fit. It turns hollow and grey, and the fit is redone immediately; click again to include it, or use **Include all**. When points overlap, the one nearest the cursor is used. Excluded points are listed below the plot, in the Dual Mode CSV header (the data stay complete) and, in the calibration, with `Valido = 0` and a header line. A new sweep starts with no exclusions.
 

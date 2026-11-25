@@ -293,14 +293,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             text = getattr(self, 'audio_noise_text', None)
             if text and self.lbl_audio_noise.text() != soi_i18n.tr(text):
                 self.lbl_audio_noise.setText(text)
-            # 2.5.0 (Marcos, 25/11): sem o quadro de valores do fit na FFT do INMP441 (o SNR pico/piso dele não é o
+            # 2.5.0 (Marcos, 25/11): sem o quadro de valores do fit nas FFTs do INMP441 e do OPT101 (o SNR pico/piso dele não é o
             # do lock-in e confundia); ficam a curva do fit e o aviso de pico ausente
             self._show_fft_fit(self.txt_audio_fft_fit, self.lbl_audio_fft_missing,
                                self.audio_fft_enabled and self.chk_audio_fft_fit.isChecked(),
                                None, self.audio_fft_missing)
             self._show_fft_fit(self.txt_opt_fft_fit, self.lbl_opt_fft_missing,
                                self.opt_fft_enabled and self.chk_opt_fft_fit.isChecked(),
-                               self.opt_fft_fit_html, self.opt_fft_missing)
+                               None, self.opt_fft_missing)      # 2.5.0: sem o quadro de valores (como no INMP441)
 
         # 2. Resultados do lock-in do OPT101 e atualização dos buffers
         raw_dirty = False

@@ -30,7 +30,10 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   the −3 dB cut-off, ENBW and 9τ wait moved to the τ tooltip.
 - **INMP441, Marcos 2026-11-25:** the noise line above the plots (signal, noise, SNR, density) and the values box of
   the FFT fit are no longer shown. The SNR stays in the status bar and in the Noise/SNR plot; the fit curve and the
-  "peak not found" notice stay. (The box's peak/floor SNR is a different quantity from the lock-in SNR.)
+  "peak not found" notice stay. (The box's peak/floor SNR is a different quantity from the lock-in SNR.) The OPT101
+  FFT lost the same box.
+- **Refine resonance** (Dual Mode, Signal vs f) removed: most measurements will use non-resonant cells (Marcos,
+  2026-11-25). The *Cell resonance* fit model stays.
 - **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
   so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
 - **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**
