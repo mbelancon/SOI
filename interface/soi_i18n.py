@@ -2154,3 +2154,4 @@ EN.update({
     'Sem áudio do INMP441: conecte o SOI (sem ele, a interface simula).':
         'No INMP441 audio: connect the SOI (without it, the interface simulates).',
 })
+EN.update({'S calibrado': 'Calibrated S'})

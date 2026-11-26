@@ -64,6 +64,10 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   the chosen cell ("None") and the CSV headers got `# Celula = None`. The cell is no longer restored from the
   settings, an empty selector falls back to Câmara, and the cell-mismatch warning is gone. The calibration was
   applied anyway; only the warning and the header were wrong.
+- **"Use" calibration during a measurement series** (Marcos, 2026-11-26): the *Measurement series* plot showed the
+  raw S even with "Use" checked, and the checkbox was locked while the series ran. Now it stays enabled and the
+  live plot of a frequency sweep shows the calibrated S when it is checked, changing at once when toggled (the
+  Dual Mode plot already did). Saved files are not changed.
 
 ### Added (practical test, 2026-11-26)
 - **Light mode** (Settings → Performance, off by default, remembered): for slow computers (the lab laptop-class i3

@@ -2388,14 +2388,30 @@ class SeriesTab(QtWidgets.QWidget):
         if not res:
             self.curve.setData([], [])
             return
-        x = [q[0] for q in res]
-        s = [q[3] / max(q[1], 1e-30) for q in res]
+        x = np.array([q[0] for q in res], dtype=float)
+        s = np.array([q[3] / max(q[1], 1e-30) for q in res])
         sweep = w.dual_src != 'T'
+        # 2.5.0: com "Usar" marcado, a varredura em frequência aparece calibrada (como no Modo Duplo); marcar ou
+        # desmarcar durante a medida muda o gráfico na hora. Os arquivos salvos não mudam.
+        cal = self._live_cal() if sweep and getattr(w, 'dual_kind', '') == 'F' else None
+        if cal is not None:
+            s = s / np.exp(np.interp(np.log(np.maximum(x, 1e-9)), np.log(cal['f']), np.log(cal['sens'])))
         self.plot.setLogMode(x=sweep, y=sweep)
         self.plot.setLabel('bottom', 'Frequência (Hz)' if sweep else 'Tempo (s)')
-        self.plot.setLabel('left', 'S = R_INMP441 / R_OPT101')
+        self.plot.setLabel('left', 'S calibrado' if cal is not None else 'S = R_INMP441 / R_OPT101')
         self.plot.setTitle(f'{_tr("Medida em andamento")}: {r.job()["nome"]}')
         self.curve.setData(x, s)
+
+    def _live_cal(self):
+        '''Calibração que o Modo Duplo aplicaria agora (Usar marcado e sinal normalizado), lida uma vez por arquivo.'''
+        w = self.win
+        if not (w.chk_mic_cal.isChecked() and w.chk_dual_norm.isChecked()):
+            return None
+        path = w.cmb_mic_cal.currentData()
+        if getattr(self, '_live_cal_key', None) != path:
+            self._live_cal_key = path
+            self._live_cal_val = w._applied_cal() if path else None
+        return self._live_cal_val
 
     def on_close(self):
         """Fechando a interface com uma série rodando: para e salva o que já foi medido."""

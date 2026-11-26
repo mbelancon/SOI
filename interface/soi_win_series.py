@@ -177,7 +177,7 @@ class SeriesMixin:
                 for cls in (QtWidgets.QAbstractButton, QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox,
                             QtWidgets.QLineEdit):
                     ws += page.findChildren(cls)
-        for name in ('sp_freq', 'sp_power', 'ed_sample', 'cmb_mic_cal', 'chk_mic_cal', 'cmb_cell', 'chk_sim',
+        for name in ('sp_freq', 'sp_power', 'ed_sample', 'cmb_mic_cal', 'cmb_cell', 'chk_sim',
                      'btn_settings', 'cmb_mod'):
             w = getattr(self, name, None)
             if w is not None:
