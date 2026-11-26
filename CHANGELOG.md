@@ -66,6 +66,10 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   oscilloscope curve (stored data unchanged), and skips the INMP441 processing while nothing uses it (another tab,
   no measurement, no Dual Mode, no noise capture, no optical modulation). Measured and saved data are the same;
   coming back to the INMP441 restarts its lock-in (~3τ to settle).
+- **Beam off at the end of every sweep** (Marcos, 2026-11-26): when any sweep ends (OPT101, INMP441 and Dual Mode
+  sweeps in frequency or PWM, Signal × t, manual points; finished, stopped or interrupted), the interface sets PWM 0.
+  Inside Measurement Series the series decides at its end (*laser stopped* or *keep*), so the laser stays on
+  between steps. The next frequency sweep started by hand switches the beam back on at the PWM it had before.
 
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after

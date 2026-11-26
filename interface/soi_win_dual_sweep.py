@@ -57,6 +57,8 @@ class DualSweepMixin:
             self._dual_draw_reps()
         if not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
             self.chk_audio_lockin.setChecked(True)     # o lock-in do INMP441 precisa estar rodando
+        if kind in ('F', 'M') and not _rep:
+            self._beam_on_for_sweep()
         self.dual_restore = self._excitation_snapshot() if kind != 'P' else None
         long_tau = self.dual_mode_w[kind].currentIndex() == 1
         if long_tau:
@@ -212,6 +214,7 @@ class DualSweepMixin:
         self.btn_dual_cal.setEnabled(self.dual_std is not None and self.dual_cal is None)
         self._on_cal_samples(fill=False)
         self._apply_mod_ui()
+        self._beam_off_after_sweep()
 
     def dual_step(self, now):
         if self.dual_src == 'X':

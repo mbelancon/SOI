@@ -463,6 +463,8 @@ class OptMixin:
                 self.sweep_params = {'kind': 'P', 'f_start': f_start, 'f_stop': f_stop, 'f_step': f_step,
                                      'target': target, 'freq': self.ref_freq, 'normalize_mode': self.normalize_mode}
             self.sweep_idx = 0
+            if kind == 'F':
+                self._beam_on_for_sweep()
             self.sweep_restore = self._excitation_snapshot() if kind == 'F' else None
             self.sweep_active = True
             self.sweep_state = 'SETTLING'
@@ -513,6 +515,7 @@ class OptMixin:
         for bar in self.sweep_bars.values():
             bar.setVisible(False)
         self._set_eta_style(False)
+        self._beam_off_after_sweep()
         self.update_eta_idle()
         self._apply_mod_ui()
 

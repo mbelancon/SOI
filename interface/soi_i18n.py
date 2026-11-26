@@ -1432,6 +1432,10 @@ EN = {
         'The matched sweep (Dual Mode) is running.',
     'Varredura cancelada pelo usuário.':
         'Sweep cancelled by the user.',
+    'Fim da varredura: PWM 0, feixe desligado.':
+        'Sweep finished: PWM 0, beam off.',
+    ' % religado para a varredura.':
+        ' % switched back on for the sweep.',
     ' | Estabilizando (':
         ' | Settling (',
     ' | Medindo (':

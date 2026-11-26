@@ -391,6 +391,30 @@ class CommonMixin:
         if not self.ext_mode:
             self.link.write(f"P{val}\n")
 
+    def _beam_off_after_sweep(self):
+        """Fim de qualquer varredura (concluída, parada ou interrompida): PWM 0, feixe desligado (Marcos, 26/11).
+        Dentro de Medidas em Série não desliga: a série decide no fim (fim = laser_parado ou manter)."""
+        if getattr(self, 'series_active', False) or self.ext_mode:
+            return
+        rp = getattr(self, 'dual_rep', None)
+        if rp and rp['k'] < rp['n']:          # entre repetições da mesma varredura: o feixe continua ligado
+            return
+        if self.sp_power.value() > 0 or self.laser_power > 0:
+            self.pwm_before_off = float(self.sp_power.value() or self.laser_power)
+            self.sp_power.setValue(0.0)
+            self.on_power(0.0)
+            self.flash('Fim da varredura: PWM 0, feixe desligado.', 5.0)
+
+    def _beam_on_for_sweep(self):
+        """Início de varredura em frequência com o feixe desligado (PWM 0 deixado pela varredura anterior): volta ao
+        PWM de antes do desligamento, para não medir no escuro."""
+        pwm = getattr(self, 'pwm_before_off', None)
+        if self.ext_mode or self.sp_power.value() > 0 or not pwm:
+            return
+        self.sp_power.setValue(pwm)
+        self.on_power(self.sp_power.value())
+        self.flash(f'PWM {pwm:g} % religado para a varredura.', 5.0)
+
     def _link_params(self):
         '''(F, P) enviados ao STM32 na conexão: no modo óptico, o farol (1 Hz, PWM 0).'''
         return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
