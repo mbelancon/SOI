@@ -606,9 +606,11 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                     sp.setValue(max(sp.value(), PWM_SWEEP_START_DEF))
                 tau0 = ADAPT_TAU0_DEF
                 st.setValue('sweep_defaults_20261126', 1)
-            if st.value('sweep_f0_1hz_20261125') is None:     # início padrão em 1 Hz (célula nova, Marcos 25/11; uma vez)
-                self.sp_dual_f0.setValue(SWEEP_F0_DEF)
+            if st.value('sweep_f0_4hz_20261126') is None:     # início padrão em 4 Hz (Marcos 26/11; uma vez)
+                for sp in (self.sp_dual_f0, self.sp_dual_m_f0, self.sp_f0, self.sp_aud_f0):
+                    sp.setValue(SWEEP_F0_DEF)
                 st.setValue('sweep_f0_1hz_20261125', 1)
+                st.setValue('sweep_f0_4hz_20261126', 1)
             if st.value('nb_default_off_20261119') is None:   # descarte por vizinhas: desligado por padrão (uma vez)
                 self.chk_dual_nb.setChecked(False)
                 st.setValue('nb_default_off_20261119', 1)

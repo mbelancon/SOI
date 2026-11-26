@@ -172,7 +172,7 @@ LOWF_WARN_COLOR = '#d97000'
 # (4 s abaixo de LOWF_FMAX, espera 7τ + média 3τ), 3 repetições combinadas pela mediana ponto a ponto, warm-up 600 s,
 # início em 1 Hz desde 25/11 (célula nova resolveu a flutuação em baixa frequência; antes 40 Hz). Entre 40 e 200 Hz os erros são pontos isolados (sons do ambiente de alguns segundos) que um τ maior
 # não remove; a mediana de varreduras separadas no tempo os descarta. Acima de τ = 4 s o S para de melhorar (Allan).
-SWEEP_F0_DEF = 1.0
+SWEEP_F0_DEF = 4.0         # início padrão das varreduras em f: 1 -> 4 Hz em 26/11 (abaixo, muito ruído e pouca informação; Marcos)
 SWEEP_TAU_DEF = 1.0
 LOWF_TAU_FIXED = 4.0       # τ fixo abaixo de LOWF_FMAX com o τ adaptativo desligado
 TAU_USEFUL_MAX = 4.0       # acima disso: aviso "τ > 4 s não melhora: use repetições" (não bloqueia)

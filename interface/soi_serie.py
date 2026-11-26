@@ -41,7 +41,7 @@ LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista 
 
 DEFAULTS = {
     # padrão da campanha de ruído de 18/11: τ fixo 1 s (até 2.4: 4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
-    'varredura': {'nome': 'varredura', 'fmin': 1.0, 'fmax': 2440.0, 'n': 40, 'tau': 1.0, 'tau_fixo': False,
+    'varredura': {'nome': 'varredura', 'fmin': 4.0, 'fmax': 2440.0, 'n': 40, 'tau': 1.0, 'tau_fixo': False,
                   'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 120.0,
                   'repeticoes': 1, 'desligar': False, 'repetir': 1},
     'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': [100.0], 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,

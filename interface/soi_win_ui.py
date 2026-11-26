@@ -556,7 +556,7 @@ class UiMixin:
             self.sweep_spins[kind] = [sb for _, sb in fields]
             opt_sw_lay.addWidget(box)
 
-        self.sp_f0 = self._dspin(0.1, 5000.0, 0.1, 3, 0.1, None, 110, ' Hz')
+        self.sp_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 3, 0.1, None, 110, ' Hz')
         self.sp_f1 = self._dspin(0.1, 5000.0, 60.0, 3, 1.0, None, 110, ' Hz')
         self.sp_df = self._dspin(0.01, 5000.0, 1.0, 3, 0.1, None, 110, ' Hz')
         build_box('F', 'Varredura em frequência (OPT101)',
@@ -772,7 +772,7 @@ class UiMixin:
             self.sweep_spins_aud[kind] = [sb for _, sb in fields]
             sw_lay.addWidget(box)
 
-        self.sp_aud_f0 = self._dspin(0.1, 5000.0, 0.1, 3, 0.1, None, 110, ' Hz')
+        self.sp_aud_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 3, 0.1, None, 110, ' Hz')
         self.sp_aud_f1 = self._dspin(0.1, 5000.0, 60.0, 3, 1.0, None, 110, ' Hz')
         self.sp_aud_df = self._dspin(0.01, 5000.0, 1.0, 3, 0.1, None, 110, ' Hz')
         build_audio_sweep_box('F', 'Varredura em frequência (INMP441)',

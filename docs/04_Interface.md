@@ -205,7 +205,7 @@ and Fit start open; the state of each section is saved between sessions. **Doubl
 **Low frequency.** Until 2.4, an *only f > 40 Hz* box (on by default) kept a preset τ below 40 Hz, where the room's acoustic noise used to dominate. With the new cell (2026-11-23) the low frequencies measure well, so since 2.5.0 adaptive τ works the same over the whole range; the only limit is the minimum τ of about 3 modulation periods (3 s at 1 Hz), which keeps the 2f ripple out of the lock-in output.
 
 **Recommended sweep settings (noise campaign, 2026-11-18).** Defaults: fixed τ = 1 s (τ = 4 s below 40 Hz until 2.4),
-**3 repetitions combined by the point-by-point median**, 600 s warm-up, start at 1 Hz (40 Hz until 2026-11-25; the new cell fixed the low-frequency fluctuation). Measured with an
+**3 repetitions combined by the point-by-point median**, 600 s warm-up, start at 4 Hz (40 Hz until 2026-11-25, then 1 Hz; below 4 Hz there is much noise and little useful information). Measured with an
 aluminium sample in the Camara cell (τ = 1 s): microphone SNR 0 dB at 17 Hz, 14 dB at 37 Hz, 20 dB at 113 Hz and
 29 dB at 487 Hz. Above 200 Hz every setting tested (τ = 1, 2, 4 s fixed, adaptive 2 %) agreed within ~1 %. Between
 40 and 200 Hz the errors are isolated points off by 8–15 %, caused by intermittent room sounds lasting a few seconds;

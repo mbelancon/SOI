@@ -95,10 +95,13 @@ and τ 1 s, τ 0.5 s, adaptive τ and ascending order agreed within ±0.3 %.
   only the amplitude changes between points. Below ~1.8 Hz the automatic τ is still 3 s, so a PWM sweep is faster
   at ≥ 6 Hz (~3–4 s per point).
 - **PWM sweeps start at 30 %** by default (the laser only emits above ~18 %).
+- **Frequency sweeps start at 4 Hz** by default (Marcos, 2026-11-26; was 1 Hz in Dual Mode and 0.1 Hz in the
+  OPT101/INMP441 sweeps): below that there is much noise and fluctuation and little useful information. Saved
+  settings move to 4 Hz once (Dual Mode, manual sweep, OPT101 and INMP441); new series steps start at 4 Hz.
 - **SNR colours** (status bar, both sensors): green ≥ 40 dB (error of one sweep ≲ 2 %), yellow 30–40 dB (~2–7 %),
   red below (was 25/15 dB, set with the old cell). The error of a sweep follows ~3·10^(−SNR/20).
 - Saved settings are moved to these defaults once (adaptive on, ascending, 1 repetition, PWM start ≥ 30 %).
-- Measurement Series: new sweep steps default to 1–2440 Hz, 40 points, adaptive τ 1 s, warm-up 120 s, 1 repetition;
+- Measurement Series: new sweep steps default to 4–2440 Hz, 40 points, adaptive τ 1 s, warm-up 120 s, 1 repetition;
   PWM steps start at 30 %. Saved series files keep what they say.
 
 ### Removed (requested by Marcos, 2026-11-25)
