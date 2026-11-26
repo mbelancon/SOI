@@ -963,11 +963,7 @@ class DualSweepMixin:
                                 + ' a correção pelo τ do sensor, e esta varredura está '
                                 + ('com' if self.dual_tau_sensor > 0 else 'sem')
                                 + ' ela: S e a fase do sistema ficam inconsistentes.</span>')
-                cell = self.cmb_cell.currentData()
-                if c['cell'] != cell:
-                    cal_txt += (f'<br><span style="color:#d00000;">⚠ A calibração foi feita na configuração '
-                                f'{CELLS.get(c["cell"], c["cell"])} e a célula escolhida é {CELLS.get(cell, cell)}: '
-                                'a acústica muda e a correção não vale. Gere uma calibração nesta configuração.</span>')
+                # 2.5.0: sem aviso de célula diferente da calibração (só existe a Câmara desde a remoção do modo OPC)
                 # Ressonância da célula: muda com o volume livre (altura da amostra). Longe da f0 da calibração,
                 # a correção perto do pico não vale
                 sh = resonance_shift(x[ok & inside & keep], s_raw[ok & inside & keep], c)

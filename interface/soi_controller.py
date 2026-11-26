@@ -536,7 +536,7 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
                   'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order',
-                  'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
+                  'cmb_cal_ref', 'cmb_cal_a', 'cmb_cal_b')   # cmb_cell fora (2.5.0: só a Câmara)
         return spins, checks, combos
 
     def _fit_to_screen(self):

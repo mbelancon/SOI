@@ -110,6 +110,10 @@ class UiMixin:
                                  + '\nA calibração do microfone só vale na configuração em que foi feita (o volume de gás e a\n'
                                    'acústica mudam); a interface avisa se a calibração escolhida for de outra. Vai para os CSV.')
         self.cmb_cell.currentIndexChanged.connect(lambda _: self._show_dual_results())
+        # 2.5.0: só a Câmara. Um índice salvo das versões com OPC (1 = Câmara) deixava o combo sem item (célula
+        # "None" no aviso da calibração e nos CSV): qualquer índice inválido volta para a Câmara
+        self.cmb_cell.currentIndexChanged.connect(
+            lambda i: self.cmb_cell.setCurrentIndex(0) if i < 0 and self.cmb_cell.count() else None)
         # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
         # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
         self.lbl_snr_top = QtWidgets.QLabel('SNR OPT/INMP: — / — dB')

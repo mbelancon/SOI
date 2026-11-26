@@ -59,6 +59,11 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   result text was one long line): the result now wraps on its own line and long file names no longer widen the
   window. Mouse-wheel zoom works on the spectrum (double click returns to the full spectrum).
 - **Measurement series:** the frequency column header is now "f (Hz)" to save space.
+- **Calibration "cell is None" warning** (Marcos, 2026-11-26): a cell index saved by older versions (with the OPC
+  mode) left the hidden cell selector empty, so the Dual Mode warned that the calibration (Câmara) did not match
+  the chosen cell ("None") and the CSV headers got `# Celula = None`. The cell is no longer restored from the
+  settings, an empty selector falls back to Câmara, and the cell-mismatch warning is gone. The calibration was
+  applied anyway; only the warning and the header were wrong.
 
 ### Added (practical test, 2026-11-26)
 - **Light mode** (Settings → Performance, off by default, remembered): for slow computers (the lab laptop-class i3
