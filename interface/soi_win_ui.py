@@ -121,8 +121,8 @@ class UiMixin:
             'atualiza a cada segundo; "—" nos primeiros segundos):\n'
             'SNR = 20·log10(|⟨Z⟩| / σ), com Z = X + jY a saída do lock-in e σ o desvio-padrão de X e de Y (média das\n'
             'duas quadraturas). Inclui tudo o que flutua na janela (ruído e deriva) e melhora com τ maior.\n'
-            f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (erro do ponto ≲ 10 %, perto do piso de ~7 % em baixa frequência),\n'
-            f'amarelo {SNR_TOP_OK_DB:g}–{SNR_TOP_GOOD_DB:g} dB (bem detectado, erro ~10 a 25 %), vermelho abaixo (≳ 40 %).\n'
+            f'Verde ≥ {SNR_TOP_GOOD_DB:g} dB (erro de uma varredura ≲ 2 %), amarelo {SNR_TOP_OK_DB:g}–{SNR_TOP_GOOD_DB:g} dB\n'
+            f'(~2 a 7 %), vermelho abaixo (> ~7 %); o erro cai ~3·10^(−SNR/20) (bateria de 26/11).\n'
             'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.')
         self.lbl_snr_top.setStyleSheet('padding:0 8px;')     # 2.5.0: na barra de status (montada no fim de _build_ui)
         self.snr_top_timer = QtCore.QTimer(self)
@@ -557,7 +557,7 @@ class UiMixin:
         self.sp_df = self._dspin(0.01, 5000.0, 1.0, 3, 0.1, None, 110, ' Hz')
         build_box('F', 'Varredura em frequência (OPT101)',
                   (('Início:', self.sp_f0), ('Fim:', self.sp_f1), ('Passo:', self.sp_df)))
-        self.sp_p0 = self._dspin(0.0, 100.0, 10.0, 1, 1.0, None, 110, ' %')
+        self.sp_p0 = self._dspin(0.0, 100.0, PWM_SWEEP_START_DEF, 1, 1.0, None, 110, ' %')
         self.sp_p1 = self._dspin(0.0, 100.0, 100.0, 1, 1.0, None, 110, ' %')
         self.sp_dp = self._dspin(0.1, 100.0, 10.0, 1, 1.0, None, 110, ' %')
         build_box('P', 'Varredura em PWM (OPT101)',
@@ -773,7 +773,7 @@ class UiMixin:
         self.sp_aud_df = self._dspin(0.01, 5000.0, 1.0, 3, 0.1, None, 110, ' Hz')
         build_audio_sweep_box('F', 'Varredura em frequência (INMP441)',
                               (('Início:', self.sp_aud_f0), ('Fim:', self.sp_aud_f1), ('Passo:', self.sp_aud_df)))
-        self.sp_aud_p0 = self._dspin(0.0, 100.0, 10.0, 1, 1.0, None, 110, ' %')
+        self.sp_aud_p0 = self._dspin(0.0, 100.0, PWM_SWEEP_START_DEF, 1, 1.0, None, 110, ' %')
         self.sp_aud_p1 = self._dspin(0.0, 100.0, 100.0, 1, 1.0, None, 110, ' %')
         self.sp_aud_dp = self._dspin(0.1, 100.0, 10.0, 1, 1.0, None, 110, ' %')
         build_audio_sweep_box('P', 'Varredura em PWM (INMP441)',

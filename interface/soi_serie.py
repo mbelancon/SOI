@@ -41,9 +41,9 @@ LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista 
 
 DEFAULTS = {
     # padrão da campanha de ruído de 18/11: τ fixo 1 s (até 2.4: 4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
-    'varredura': {'nome': 'varredura', 'fmin': 40.0, 'fmax': 2440.0, 'n': 25, 'tau': 1.0, 'tau_fixo': True,
-                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 600.0,
-                  'repeticoes': 3, 'desligar': False, 'repetir': 1},
+    'varredura': {'nome': 'varredura', 'fmin': 1.0, 'fmax': 2440.0, 'n': 40, 'tau': 1.0, 'tau_fixo': False,
+                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 120.0,
+                  'repeticoes': 1, 'desligar': False, 'repetir': 1},
     'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': [100.0], 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,
                 'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'transiente': {'nome': 'transiente_f{f}_pwm{pwm}', 'f': [17.0], 'pwm': [100.0], 'pulsos': 64, 'intervalo': 60.0,
@@ -52,13 +52,13 @@ DEFAULTS = {
     'pausa': {'nome': 'pausa', 'duracao': 10.0, 'repetir': 1},
     'opt101-f': {'nome': 'opt101_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
                  'desligar': False, 'repetir': 1},
-    'opt101-pwm': {'nome': 'opt101_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+    'opt101-pwm': {'nome': 'opt101_pwm', 'inicio': 30.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
                    'desligar': False, 'repetir': 1},
     'inmp441-f': {'nome': 'inmp441_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
                   'desligar': False, 'repetir': 1},
-    'inmp441-pwm': {'nome': 'inmp441_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+    'inmp441-pwm': {'nome': 'inmp441_pwm', 'inicio': 30.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
                     'desligar': False, 'repetir': 1},
-    'duplo-pwm': {'nome': 'duplo_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'tau': 1.0,
+    'duplo-pwm': {'nome': 'duplo_pwm', 'inicio': 30.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'tau': 1.0,
                   'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'aviso': {'nome': '', 'texto': 'Clique em Continuar para seguir.'},
 }

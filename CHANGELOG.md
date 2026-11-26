@@ -71,6 +71,27 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
   Inside Measurement Series the series decides at its end (*laser stopped* or *keep*), so the laser stays on
   between steps. The next frequency sweep started by hand switches the beam back on at the PWM it had before.
 
+### Changed: sweep defaults for the new cell (2026-11-26 battery, approved by Marcos)
+With the new cell the drift between sweeps was ≤ 0.24 %, the spread between repetitions 0.1–0.6 % below 700 Hz,
+and τ 1 s, τ 0.5 s, adaptive τ and ascending order agreed within ±0.3 %.
+- **Adaptive τ is the default, τ max 1 s** (was fixed τ 1 s; adaptive started at 4 s). Below ~3 Hz the 3-period
+  minimum still wins (3 s at 1 Hz); the tooltip now says so. `--varredura` without `--tau-fixo` is adaptive.
+- **1 repetition** by default (was 3 + median); repetitions and the median stay available.
+- **Ascending order** by default (was shuffled; shuffled stays in the Order box and `--ordem embaralhada`).
+- **Warm-up** default 120 s (was 600 s).
+- **Lock-in filters reset when the frequency changes.** Before, the previous point left a residue: a weak
+  high-frequency point measured right after a strong low-frequency one was off by 2–3 % (shuffled order, > 700 Hz);
+  now every point starts from zero and the residue is a fixed 0.3 % of the point itself after 7τ.
+- **PWM sweeps** wait 7τ and average max(1 s, 3τ), as the adaptive τ (was 9τ + 4τ: ~27 s per point at τ 3 s);
+  only the amplitude changes between points. Below ~1.8 Hz the automatic τ is still 3 s, so a PWM sweep is faster
+  at ≥ 6 Hz (~3–4 s per point).
+- **PWM sweeps start at 30 %** by default (the laser only emits above ~18 %).
+- **SNR colours** (status bar, both sensors): green ≥ 40 dB (error of one sweep ≲ 2 %), yellow 30–40 dB (~2–7 %),
+  red below (was 25/15 dB, set with the old cell). The error of a sweep follows ~3·10^(−SNR/20).
+- Saved settings are moved to these defaults once (adaptive on, ascending, 1 repetition, PWM start ≥ 30 %).
+- Measurement Series: new sweep steps default to 1–2440 Hz, 40 points, adaptive τ 1 s, warm-up 120 s, 1 repetition;
+  PWM steps start at 30 %. Saved series files keep what they say.
+
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
   opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB

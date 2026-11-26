@@ -598,6 +598,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                 self.chk_dual_adapt.setChecked(False)
                 tau0 = SWEEP_TAU_DEF
                 st.setValue('sweep_defaults_20261119', 1)
+            if st.value('sweep_defaults_20261126') is None:   # padrões da célula nova (bateria de 26/11; uma vez)
+                self.chk_dual_adapt.setChecked(True)
+                self.cmb_dual_order.setCurrentIndex(0)        # crescente
+                self.sp_dual_reps.setValue(SWEEP_REPS_DEF)
+                for sp in (self.sp_dual_p0, self.sp_p0, self.sp_aud_p0):
+                    sp.setValue(max(sp.value(), PWM_SWEEP_START_DEF))
+                tau0 = ADAPT_TAU0_DEF
+                st.setValue('sweep_defaults_20261126', 1)
             if st.value('sweep_f0_1hz_20261125') is None:     # início padrão em 1 Hz (célula nova, Marcos 25/11; uma vez)
                 self.sp_dual_f0.setValue(SWEEP_F0_DEF)
                 st.setValue('sweep_f0_1hz_20261125', 1)

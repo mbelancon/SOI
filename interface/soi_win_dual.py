@@ -415,7 +415,12 @@ class DualMixin:
             return adapt_times(tau)
         if self.dual_mode_w[kind].currentIndex() == 1:
             tau = self.dual_tau_w[kind].value()
+            if kind == 'P':
+                return adapt_times(tau)      # só a amplitude muda entre pontos: 7τ basta (resto < 1 % ao dobrar o PWM)
             return 9.0 * tau + 0.3, max(0.5, tau)
+        if kind == 'P':
+            # Varredura em PWM (26/11): mesma espera do τ adaptativo, 7τ + média max(1 s, 3τ) (antes 9τ + 4τ)
+            return adapt_times(max(lp_tau(self.cutoff_lp, RATE.FS), lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
         if kind in ('F', 'M'):
             # A troca de frequência aplica os cortes automáticos nos dois lock-ins (apply_frequency)
             lp = get_effective_cutoffs(value)[0]

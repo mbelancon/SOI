@@ -30,22 +30,22 @@ def _headless_args(argv):
     ap.add_argument('--n', type=int, default=None, help='número de pontos, espaçamento log (padrão: o da interface)')
     ap.add_argument('--tau', type=float, default=None, help='τ max em s (τ adaptativo) ou τ fixo (padrão: o da interface)')
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
-    ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (padrão desde 18/11; espera 9τ, média 1τ; '
-                    'em toda a faixa)')
+    ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (espera 9τ, média 1τ; em toda a faixa). Sem ele, '
+                    'τ adaptativo (padrão desde 26/11)')
     ap.add_argument('--descartar', action='store_true',
                     help='liga "Descartar trechos com som da sala" (monitor das vizinhas f ± 7 %%; desligado por padrão)')
     ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
     ap.add_argument('--sem-evitar-rede', action='store_true',
                     help='sem detecção de ruído, não exclui os múltiplos de 60 Hz (±3 Hz) da varredura')
-    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='embaralhada',
-                    help='ordem de medida das frequências (padrão embaralhada = nova ordem aleatória a cada repetição, '
-                         'semente no cabeçalho do CSV)')
+    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='crescente',
+                    help='ordem de medida das frequências (padrão crescente desde 26/11; embaralhada = nova ordem '
+                         'aleatória a cada repetição, semente no cabeçalho do CSV)')
     ap.add_argument('--semente', type=int, default=None,
                     help='semente da ordem embaralhada (repetição k usa semente + k - 1); padrão: aleatória')
     ap.add_argument('--excluir', '--evitar', dest='evitar', default=None, metavar='F1;F2',
                     help='faixas excluídas: frequências de fontes de ruído (ex.: "170.7" ou "170.7;341.4"); nenhum '
                          'ponto é medido a até ±2 %% delas (mínimo 3 Hz): o ponto vai para 1 Hz além da borda')
-    ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (antes o padrão; --precisao também liga)')
+    ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (padrão desde 26/11; mantido por compatibilidade)')
     ap.add_argument('--repeticoes', type=int, default=None, metavar='N',
                     help='repete a varredura N vezes e grava a mediana ponto a ponto (padrão: o da interface, 3)')
     ap.add_argument('--aquecer', type=float, default=0.0, metavar='S',
@@ -330,7 +330,7 @@ def run_headless(argv, LockInWindow):
         sp1.setValue(a.fmax)
     if a.n is not None:
         spn.setValue(a.n)
-    win.chk_dual_adapt.setChecked((a.adaptativo or a.precisao is not None) and not a.tau_fixo)
+    win.chk_dual_adapt.setChecked(not a.tau_fixo)
     if a.repeticoes is not None:
         win.sp_dual_reps.setValue(max(1, a.repeticoes))
     win.chk_dual_avoid60.setChecked(not a.sem_evitar_rede)

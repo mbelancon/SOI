@@ -149,8 +149,8 @@ CAL_SWEEP_TAU = 2.0
 # flutuação está bem abaixo da Precisão, o τ do ponto seguinte diminui (a flutuação cai com 1/√τ); se passa
 # muito da Precisão, o ponto é refeito com τ maior. Cada ponto: espera 7τ + 0,3 s e média por max(1 s, 3τ).
 ADAPT_TOL_DEF = 2.0       # precisão alvo da flutuação de S (%); a de Δφ é a mesma em radianos (2 % -> 1,15°)
-ADAPT_TAU0_DEF = 4.0      # τ inicial padrão (s) com o τ adaptativo
-ADAPT_TAU_CAP = 4.0       # τ max padrão (s) do modo adaptativo; o campo "τ max" do quadro define o teto (Marcos, 17/11)
+ADAPT_TAU0_DEF = 1.0      # τ inicial padrão (s) com o τ adaptativo (4 -> 1 s com a célula nova, bateria de 26/11)
+ADAPT_TAU_CAP = 1.0       # (4 -> 1 s em 26/11) τ max padrão (s) do modo adaptativo; o campo "τ max" do quadro define o teto (Marcos, 17/11)
 ADAPT_Q_TARGET = 0.7      # o τ seguinte é escolhido para a flutuação ficar em 70 % da Precisão
 ADAPT_Q_REDO = 2.0        # flutuação acima de 2× a Precisão: refaz o ponto com τ maior
 ADAPT_MAX_REDO = 2
@@ -163,7 +163,7 @@ ADAPT_MAX_DRIFT_WAIT = 0  # médias extras (mesmo τ) enquanto S ou Δφ derivam
 # aditivo; a flutuação medida na janela subestima o erro e o τ adaptativo não converge. Opção (padrão): τ adaptativo
 # só acima de LOWF_FMAX, τ fixo por faixa abaixo (f < limite -> τ); acima, o adaptativo recomeça de LOWF_TAU_ABOVE
 NOISE_LASER_TOL_HZ = 0.15  # Detectar ruídos no warm-up: tons a ±0,15 Hz de k·f do laser são do laser
-WARMUP_DEF_S = 600.0      # "Aguardar warm-up" das varreduras (s); 300 -> 600 s na campanha de ruído de 18/11
+WARMUP_DEF_S = 120.0      # "Aguardar warm-up" das varreduras (s); 600 -> 120 s em 26/11 (deriva entre varreduras ≤ 0,24 %)
 LOWF_FMAX = 40.0
 LOWF_TAU_BANDS = ((LOWF_FMAX, ADAPT_TAU_CAP),)   # antes 8 s < 15 Hz e 4 s < 40 Hz; desde 17/11 usa o τ max do quadro
 LOWF_TAU_ABOVE = 1.0
@@ -176,7 +176,8 @@ SWEEP_F0_DEF = 1.0
 SWEEP_TAU_DEF = 1.0
 LOWF_TAU_FIXED = 4.0       # τ fixo abaixo de LOWF_FMAX com o τ adaptativo desligado
 TAU_USEFUL_MAX = 4.0       # acima disso: aviso "τ > 4 s não melhora: use repetições" (não bloqueia)
-SWEEP_REPS_DEF = 3
+SWEEP_REPS_DEF = 1         # 3 -> 1 em 26/11: dispersão entre repetições 0,1-0,6 % (uma varredura basta)
+PWM_SWEEP_START_DEF = 30.0  # início padrão das varreduras em PWM (%): o laser só emite acima de ~18 % (26/11)
 DUAL_NODATA_RETRIES = 2     # ponto sem dados de um sensor: mede de novo até 2 vezes antes de pular
 MEDIAN_EFF = 1.25          # incerteza da mediana = 1,25·DP/√N (eficiência da mediana)
 # Monitor de ruído pelas vizinhas (aprovado por Marcos em 18/11; limites da campanha de aquecimento de 18/11): a cada
@@ -230,8 +231,8 @@ DUAL_CAL_ERR_COLOR = (44, 160, 44, 150)   # barras de erro da calibração (verd
 DUAL_OUT_CAL_COLOR = '#c0392b'    # pontos fora da faixa da calibração aplicada (fundo avermelhado no gráfico)
 SNR_TOP_WINDOW_S = 4.0      # janela mínima do SNR da barra superior (s); usa 10τ se maior, até SNR_TOP_MAX_S
 SNR_TOP_MAX_S = 30.0
-SNR_TOP_GOOD_DB = 25.0      # verde: erro do ponto ≲ 10 %, perto do piso (análise das medidas de 17/11; antes 30)
-SNR_TOP_OK_DB = 15.0        # amarelo: ~10 a 25 %; abaixo, vermelho (≳ 40 %) (antes 20)
+SNR_TOP_GOOD_DB = 40.0      # verde: erro de uma varredura ≲ 2 % (p90; bateria de 26/11, erro ≈ 3·10^(-SNR/20)); antes 25
+SNR_TOP_OK_DB = 30.0        # amarelo: ~2 a 7 %; abaixo, vermelho (> ~7 %) (antes 15)
 PWM_PRESETS = (0.0, 10.0, 100.0)  # botões de um clique ao lado do campo do PWM (o campo fica antes do último)
 MEDIDAS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False)

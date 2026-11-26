@@ -349,6 +349,10 @@ class CommonMixin:
     def apply_frequency(self, val, command=True):
         '''Nova frequência de modulação: cortes automáticos dos dois lock-ins e, com command, envia F ao STM32
         (command=False: modulação óptica, a frequência é a detectada no OPT101).'''
+        # Frequência nova (enviada ao STM32): zera os filtros dos dois lock-ins. Mantidos, o ponto anterior deixava um
+        # resto que, depois de um ponto forte, pesava num ponto fraco (bateria de 26/11: 2-3 % acima de 700 Hz na
+        # ordem embaralhada, 0,08 % na crescente). Do zero, o resto é uma fração fixa do próprio ponto (0,3 % em 7τ).
+        new_f = command and abs(val - getattr(self, 'ref_freq', val)) > 1e-6 * max(abs(val), 1e-9)
         self.ref_freq = val
         tau = auto_tau(val)
         self.cutoff_hp = get_effective_cutoffs(val)[1]
@@ -358,11 +362,15 @@ class CommonMixin:
         self.update_raw_window()
         with self.dsp_lock:
             self.dsp.update_params(val, self.cutoff_lp, self.cutoff_hp)
+            if new_f:
+                self.dsp.reset_filters()
         # O lock-in do INMP441 segue a frequência de excitação comum
         with self.audio_lock:
             self.audio_freq = val
             self.audio_cutoff_lp, self.audio_cutoff_hp = tau_cutoff(tau, AUDIO_FS_REAL), self.cutoff_hp
             self.audio_li.update_params(val, self.audio_cutoff_lp, self.audio_cutoff_hp)
+            if new_f:
+                self.audio_li.reset_filters()
         self._set_spin(self.sp_audio_tau, tau)
         self._set_spin(self.sp_audio_hp, self.audio_cutoff_hp)
         self._set_spin(self.sp_tau, tau)

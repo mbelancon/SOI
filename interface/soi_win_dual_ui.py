@@ -63,7 +63,7 @@ class DualUiMixin:
             return box, btn, eta
 
         self.dual_bars = {}
-        self.sp_dual_p0 = self._dspin(0.0, 100.0, 10.0, 1, 1.0, None, 110, ' %')
+        self.sp_dual_p0 = self._dspin(0.0, 100.0, PWM_SWEEP_START_DEF, 1, 1.0, None, 110, ' %')
         self.sp_dual_p1 = self._dspin(0.0, 100.0, 100.0, 1, 1.0, None, 110, ' %')
         self.sp_dual_dp = self._dspin(0.1, 100.0, 10.0, 1, 1.0, None, 110, ' %')
         box_p, btn_p, eta_p = sweep_box('Sinal x PWM (%)',
@@ -96,10 +96,11 @@ class DualUiMixin:
         self.lbl_dual_fn = QtWidgets.QLabel('N pontos:')
         # τ adaptativo (vale para as duas varreduras em frequência; o quadro 'M' fica escondido)
         self.chk_dual_adapt = QtWidgets.QCheckBox('τ adaptativo')
-        self.chk_dual_adapt.setChecked(False)          # padrão desde 18/11: τ fixo + repetições com mediana
+        self.chk_dual_adapt.setChecked(True)           # padrão desde 26/11: τ adaptativo, τ max 1 s, uma varredura
         self.chk_dual_adapt.setToolTip(
-            'Ligado: o campo do quadro vira "τ max" (padrão 4 s; o ruído em baixa frequência é lento): a varredura começa\n'
-            'nele e o τ muda ao longo dela sem passar desse valor.\n'
+            'Ligado (padrão): o campo do quadro vira "τ max" (padrão 1 s): a varredura começa nele e o τ muda ao longo\n'
+            'dela sem passar desse valor, exceto em baixa frequência: o τ nunca fica abaixo de ~3 períodos, então abaixo\n'
+            'de ~3 Hz ele passa do τ max (3 s em 1 Hz).\n'
             'Em cada ponto o SOI mede a flutuação da saída dos lock-ins (desvio-padrão de S e de Δφ durante\n'
             'a medida e a diferença entre a 1ª e a 2ª metade). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a\n'
             'flutuação cai com 1/√τ), até ~3 períodos (mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ\n'
@@ -168,11 +169,12 @@ class DualUiMixin:
         self.cmb_dual_order = QtWidgets.QComboBox()
         for txt, key in (('Crescente', 'crescente'), ('Decrescente', 'decrescente'), ('Embaralhada', 'embaralhada')):
             self.cmb_dual_order.addItem(txt, key)
-        self.cmb_dual_order.setCurrentIndex(2)          # padrão desde 19/11: embaralhada (blocos casualizados)
+        self.cmb_dual_order.setCurrentIndex(0)          # padrão desde 26/11: crescente (deriva ≤ 0,24 % na célula nova)
         self.cmb_dual_order.setToolTip(
-            'Ordem em que as frequências são medidas. Crescente ou decrescente: uma deriva lenta (aquecimento)\n'
-            'vira uma inclinação falsa na curva. Embaralhada (padrão): nova ordem aleatória a cada repetição, e a deriva vira\n'
-            'ruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\n'
+            'Ordem em que as frequências são medidas. Crescente (padrão desde 26/11: com a célula nova a deriva entre\n'
+            'varreduras é ≤ 0,24 %). Com deriva lenta (aquecimento), crescente ou decrescente a transformam numa inclinação\n'
+            'falsa na curva; embaralhada usa uma nova ordem aleatória a cada repetição, e a deriva vira ruído que a\n'
+            'mediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\n'
             'Os CSV continuam em ordem de frequência, com as colunas Ordem_medida (posição em que o ponto foi medido)\n'
             'e Hora_ponto (fim do ponto).')
         self.lbl_dual_taumax = QtWidgets.QLabel(f'τ > {TAU_USEFUL_MAX:g} s não melhora: use repetições')

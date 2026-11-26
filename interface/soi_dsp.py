@@ -137,6 +137,11 @@ class PyLockIn(_MainsFilterMixin):
         self.edge_count = 0
         self._unlock()
 
+    def reset_filters(self):
+        '''Zera os dois passa-baixas (troca de frequência numa varredura): sem resto do ponto anterior.'''
+        self.lp1 = 0j
+        self.lp2 = 0j
+
     def _nominal_step(self):
         return TWO_PI * self.ref_freq / self.fs
 
@@ -297,10 +302,15 @@ class AudioLockIn(_MainsFilterMixin):
         self.phase_origin = 0     # nº da amostra I2S da borda de subida do laser (marcador do firmware)
 
     def update_params(self, ref_freq, cutoff_lp, cutoff_hp):
-        # Os estados dos filtros são mantidos: ao trocar a frequência a saída transita até estabilizar
+        # Os estados dos filtros são mantidos aqui; apply_frequency os zera (reset_filters) quando a frequência muda
         self.ref_freq = actual_mod_freq(ref_freq)
         self.alpha_lp = TWO_PI * cutoff_lp / self.fs
         self.alpha_hp = TWO_PI * cutoff_hp / self.fs
+
+    def reset_filters(self):
+        '''Zera os dois passa-baixas (troca de frequência numa varredura): sem resto do ponto anterior.'''
+        self.lp1 = 0j
+        self.lp2 = 0j
 
     def process(self, sequence, samples, decimation, theta=None):
         '''samples: int32 (PCM 24 bits). Devolve (r, fase em graus), uma saída a cada 'decimation'
