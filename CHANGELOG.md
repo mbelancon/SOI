@@ -55,6 +55,10 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
 ### Fixed (practical test, 2026-11-26)
 - **Dual Mode status bar** cut long texts (e.g. "…1177 point(s) | la" in a long *Signal vs t*): it now wraps to a
   second line and the progress text gets half of the bar width.
+- **Detect background noise** window grew several times wider than the screen when many tones were found (the
+  result text was one long line): the result now wraps on its own line and long file names no longer widen the
+  window. Mouse-wheel zoom works on the spectrum (double click returns to the full spectrum).
+- **Measurement series:** the frequency column header is now "f (Hz)" to save space.
 
 ### Added (practical test, 2026-11-26)
 - **Light mode** (Settings → Performance, off by default, remembered): for slow computers (the lab laptop-class i3

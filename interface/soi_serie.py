@@ -1058,7 +1058,7 @@ def _tr(s):
         return s
 
 
-COLS = ('', '#', 'Tipo', 'Nome da etapa', 'Frequência (Hz)', 'PWM %', 'τ / Médias', 'Pontos / Intervalo',
+COLS = ('', '#', 'Tipo', 'Nome da etapa', 'f (Hz)', 'PWM %', 'τ / Médias', 'Pontos / Intervalo',
         'Repetir', 'Duração', 'Estado')
 
 

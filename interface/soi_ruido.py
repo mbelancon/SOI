@@ -323,9 +323,13 @@ def make_dialog(win):
             self.bar.setRange(0, 1000)
             self.bar.setVisible(False)
             row.addWidget(self.bar, 1)
-            self.lbl = QtWidgets.QLabel('')
-            row.addWidget(self.lbl, 2)
             lay.addLayout(row)
+            # Resultado em linha própria, quebrando em várias linhas: a lista de tons numa linha só deixava a janela
+            # várias vezes mais larga que a tela (2.5.0)
+            self.lbl = QtWidgets.QLabel('')
+            self.lbl.setWordWrap(True)
+            self.lbl.setMinimumWidth(1)
+            lay.addWidget(self.lbl)
             split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
             self.pw = pg.PlotWidget()
             self.pw.setBackground('w')
@@ -376,6 +380,7 @@ def make_dialog(win):
             row.addWidget(self.btn_send)
             self.lbl_file = QtWidgets.QLabel('')
             self.lbl_file.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.lbl_file.setMinimumWidth(1)               # nome de arquivo comprido não alarga a janela
             row.addWidget(self.lbl_file, 1)
             btn_close = QtWidgets.QPushButton('Fechar')
             btn_close.clicked.connect(self.close)
@@ -388,7 +393,7 @@ def make_dialog(win):
                 self._stop('Gravação cancelada.')
                 return
             if not win.audio_available():
-                self.lbl.setText('Sem áudio do INMP441: conecte o SOI ou ligue "Simular amostragem".')
+                self.lbl.setText('Sem áudio do INMP441: conecte o SOI (sem ele, a interface simula).')
                 return
             if getattr(win, 'dual_active', False) or getattr(win, 'sweep_active', False) or \
                     getattr(win, 'warm_state', None) is not None:
