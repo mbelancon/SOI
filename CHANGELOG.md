@@ -52,6 +52,10 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
 - Minimum window size went from about 1270×650 (2.4) to about 910×450 logical pixels (1366×768 at 125 % gives
   ~1090×585).
 
+### Fixed (practical test, 2026-11-26)
+- **Dual Mode status bar** cut long texts (e.g. "…1177 point(s) | la" in a long *Signal vs t*): it now wraps to a
+  second line and the progress text gets half of the bar width.
+
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
   opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB

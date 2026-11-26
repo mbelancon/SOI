@@ -385,8 +385,11 @@ class DualUiMixin:
         self.lbl_dual_now = QtWidgets.QLabel('')         # flutuação do ponto em medida, no meio
         self.lbl_dual_now.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.lbl_dual_now.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        for lb in (self.lbl_dual_status, self.lbl_dual_now, self.lbl_dual_fl):   # textos longos não alargam a janela
-            bar_h.addWidget(soi_layout.no_widen(lb), 1)
+        # Textos longos não alargam a janela: quebram em mais linhas (antes cortavam: "...1177 ponto(s) | últ" em
+        # 1366 px); o andamento fica com metade da largura da barra
+        for lb, st in ((self.lbl_dual_status, 2), (self.lbl_dual_now, 1), (self.lbl_dual_fl, 1)):
+            lb.setWordWrap(True)
+            bar_h.addWidget(soi_layout.no_widen(lb), st)
         self.lbl_dual_fl.setToolTip('Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n'
                                         '(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.\n'
                                         'Verde: dentro da Precisão; amarelo: até 2×; vermelho: acima.')
