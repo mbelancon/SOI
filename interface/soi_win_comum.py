@@ -474,6 +474,18 @@ class CommonMixin:
         chk_nb.toggled.connect(self.set_show_nb)
         lay.addWidget(box)
 
+        box = self._group('Desempenho')
+        bl = QtWidgets.QVBoxLayout(box)
+        chk_light = QtWidgets.QCheckBox('Modo leve (para computadores lentos)')
+        chk_light.setChecked(self.light_mode)
+        bl.addWidget(chk_light)
+        bl.addWidget(info('Desenha a tela 10 vezes por segundo (em vez de 25), com menos pontos no osciloscópio, e '
+                          'não processa o INMP441 enquanto você não está na aba dele nem em medida ou Modo Duplo '
+                          '(ao voltar, o lock-in dele recomeça e leva ~3τ para estabilizar). Os dados medidos e '
+                          'salvos são os mesmos. Use se a interface engasgar ou houver perdas de USB.'))
+        chk_light.toggled.connect(self.set_light_mode)
+        lay.addWidget(box)
+
         # 2.5.0: "Finalizar experimento" fica à vista, na seção Experimento do painel lateral
 
         def on_trigger(checked):
@@ -515,6 +527,12 @@ class CommonMixin:
         dlg.adjustSize()
         soi_layout.fit_to_screen(dlg)
         dlg.exec()
+
+    def set_light_mode(self, on):
+        '''Modo leve (Configurações): salvo na hora, vale já e na próxima abertura.'''
+        self.light_mode = bool(on)
+        self.timer.setInterval(LIGHT_GUI_INTERVAL_MS if self.light_mode else GUI_INTERVAL_MS)
+        QtCore.QSettings('LCTM', 'SOI Controller').setValue('light_mode', self.light_mode)
 
     def set_opt_supply(self, v):
         self.opt_supply = 5.0 if v > 4 else 3.3

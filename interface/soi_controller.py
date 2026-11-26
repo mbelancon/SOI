@@ -199,7 +199,11 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         self.awake_timer = QtCore.QTimer(self)
         self.awake_timer.timeout.connect(self._update_keep_awake)
         self.awake_timer.start(2000)
-        self.timer.start(GUI_INTERVAL_MS)
+        # Modo leve (Configurações): menos quadros por segundo, osciloscópio com menos pontos e o lock-in do INMP441
+        # parado enquanto nada o usa. Só afeta o desenho e o consumo de CPU, não os dados medidos.
+        v = QtCore.QSettings('LCTM', 'SOI Controller').value('light_mode')
+        self.light_mode = str(v).lower() in ('true', '1')
+        self.timer.start(LIGHT_GUI_INTERVAL_MS if self.light_mode else GUI_INTERVAL_MS)
 
         self._start_audio_rec()
         self.opt_thread = StepThread(self._optical_step)
@@ -357,6 +361,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         if raw_dirty:
             ring = self.raw
             sa, sb = ring.segments()
+            if self.light_mode:
+                # Só o desenho: um ponto a cada 'k' (a referência 0/1 e o sinal usam o mesmo passo)
+                def cut(s):
+                    k = max(1, (s.stop - s.start) // LIGHT_SCOPE_POINTS)
+                    return slice(s.start, s.stop, k)
+                sa = cut(sa)
+                if sb is not None:
+                    sb = cut(sb)
             self.c_adc_a.setData(ring.t[sa], ring.adc[sa])
             self.c_ref_a.setData(ring.t[sa], ring.ref[sa])
             if sb is not None:

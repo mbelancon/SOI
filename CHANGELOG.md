@@ -56,6 +56,13 @@ Minor version: only the interface changes (firmware 2.0.0, same USB protocol). G
 - **Dual Mode status bar** cut long texts (e.g. "…1177 point(s) | la" in a long *Signal vs t*): it now wraps to a
   second line and the progress text gets half of the bar width.
 
+### Added (practical test, 2026-11-26)
+- **Light mode** (Settings → Performance, off by default, remembered): for slow computers (the lab laptop-class i3
+  reached USB losses during a long series). Redraws at 10 frames/s instead of 25, draws at most 2000 points per
+  oscilloscope curve (stored data unchanged), and skips the INMP441 processing while nothing uses it (another tab,
+  no measurement, no Dual Mode, no noise capture, no optical modulation). Measured and saved data are the same;
+  coming back to the INMP441 restarts its lock-in (~3τ to settle).
+
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
   opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB

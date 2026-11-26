@@ -35,12 +35,36 @@ class AudioMixin:
     def _audio_step(self):
         '''Thread do INMP441: lock-in de áudio independente do OPT101.'''
         chunks, drops = self.link.take_audio()
+        if not self._audio_needed():
+            # Modo leve: nada usa o INMP441 agora (outra aba, sem medida, sem Modo Duplo): descarta o bloco
+            self._audio_skipped = True
+            return
         with self.audio_lock:
+            if getattr(self, '_audio_skipped', False):
+                # voltou a precisar: recomeça limpo (como depois de uma perda), sem misturar com o trecho antigo
+                self._audio_skipped = False
+                self.audio_last_sequence = None
+                self.audio_valid_samples = 0
+                self.audio_write_index = 0
+                self._audio_reset_lockin()
+                chunks, drops = [], 0
             if self.simulating and not self.link.connected:
                 chop = self.chopper_sim if self.ext_mode else None
                 chunks = chunks + self.audio_sim.generate(time.perf_counter(), self.ref_freq, self.laser_power, chop)
             if chunks or drops:
                 self._process_audio(chunks, drops)
+
+    def _audio_needed(self):
+        '''Modo leve: o INMP441 só é processado quando algo o usa. Fora do modo leve, sempre (como antes).'''
+        if not getattr(self, 'light_mode', False):
+            return True
+        if self.tabs.currentIndex() == 1 or self._measuring() or self.ext_mode:
+            return True
+        dual = getattr(self, 'dual_plots', None)
+        return bool(self.noise_cap is not None or self.audio_rec is not None
+                    or getattr(self, 'noise_dlg', None) is not None and self.noise_dlg.isVisible()
+                    or dual is not None and dual.isVisible()
+                    or getattr(self, 'dual_state', 'IDLE') != 'IDLE')
 
     def on_audio_views(self, _=None):
         '''Caixas Lock-In / Ruído-SNR / FFT. O lock-in roda se qualquer um dos dois primeiros estiver ligado.'''
