@@ -13,7 +13,7 @@ The interface and the firmware share the same version number. It appears in `__v
 ## [2.5.1] - in development
 
 Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same USB protocol). Requested by Marcos on
-2026-11-27: the OPT101 tab adopts the same pattern as Dual Mode.
+2026-11-27: the OPT101 and INMP441 tabs adopt the same sweep pattern as Dual Mode, and the Settings window gets more compact.
 
 ### Changed: OPT101 tab sweeps follow the Dual Mode pattern
 - The *Sweeps* section now has **Signal vs f (Hz)**, **Signal vs PWM (%)** and **Signal vs t (s)**, with the same
@@ -38,6 +38,19 @@ Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same US
 - **PWM sweep start is now 40 %** by default in all tabs (was 30 %; the laser only emits above ~18 %). It stays
   editable to any value from 0 to 100 % (also the PWM stages of Measurement Series). A saved value other than 30 % is kept; a saved 30 % becomes 40 % once.
 - Settings saved by older versions for the OPT101 frequency sweep (end, step) are reset once to the new defaults.
+
+### Changed: INMP441 tab sweeps (same pattern as OPT101 and Dual Mode)
+- The INMP441 *Sweeps* section has the same three boxes and options (spacing, order, adaptive τ, precision,
+  repetitions + median, excluded bands, PWM start 40 %, Signal vs t) and the same **600 s** warm-up (editable, 10–7200 s),
+  using the INMP441 lock-in. CSVs are `INMP441_F_varredura_...`, `INMP441_P_varredura_...`, `INMP441_T_sinal_t_...`.
+- New sweep CSVs write magnitudes with 6 significant digits (INMP441 values are ~1e-5 and were rounded away).
+- Settings saved by older versions for the INMP441 frequency sweep are reset once to the new defaults.
+- Measurement Series keep the old behaviour (stages `inmp441-f`/`inmp441-pwm` unchanged).
+
+### Changed: Settings window
+- Smaller (about 440×275 px): explanations moved to tooltips, trigger and supply options in one row each, the two
+  checkboxes merged into one *Sweeps and performance* group. The 5 V warning (PA0 needs 1 kΩ + BAT54) stays visible
+  when 5 V is selected.
 
 ## [2.5.0] - in development
 

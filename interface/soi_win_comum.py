@@ -313,7 +313,7 @@ class CommonMixin:
             tip = self.link.last_error or 'Nenhuma porta do STM32 (USB VID 0x0483) encontrada.'
         task = ''
         if self.sweep_active and self.sweep_kind == 'T':
-            task = f'Sinal x t OPT101: {len(self.sweep_results)} pontos, {self._fmt_time(time.perf_counter() - self.ot_t0)}'
+            task = f'Sinal x t {"OPT101" if self.sweep_target == "OPT" else "INMP441"}: {len(self.sweep_results)} pontos, {self._fmt_time(time.perf_counter() - self.ot_t0)}'
         elif self.sweep_active:
             alvo = 'OPT101' if self.sweep_target == 'OPT' else 'INMP441'
             tipo = 'frequência' if self.sweep_kind == 'F' else 'PWM'
@@ -439,18 +439,13 @@ class CommonMixin:
             self.chk_dual_nb.setChecked(False)
 
     def open_settings(self):
-        '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101 e Finalizar experimento.'''
+        '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101, varreduras e desempenho. Compacta (2.5.1):
+        as explicações ficam nas dicas (balão) de cada opção.'''
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle('Configurações')
-        dlg.setMinimumWidth(620)
+        dlg.setMinimumWidth(440)
         lay = QtWidgets.QVBoxLayout(dlg)
-
-        def info(text):
-            lbl = QtWidgets.QLabel(text)
-            lbl.setWordWrap(True)
-            lbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
-            lbl.setStyleSheet('color:#404040;margin-left:22px;margin-bottom:4px;')
-            return lbl
+        lay.setSpacing(6)
 
         busy = self.sweep_active or self.dual_active
         box = self._group('Trigger (referência dos lock-ins)')
@@ -458,20 +453,24 @@ class CommonMixin:
         r_el = QtWidgets.QRadioButton('Eletrônico (STM32)')
         r_op = QtWidgets.QRadioButton('Óptico (OPT101, chopper)')
         (r_op if self.ext_mode else r_el).setChecked(True)
-        bl.addWidget(r_el)
-        bl.addWidget(info('O STM32 modula o laser pelo PWM em PA8 na frequência do campo <b>Freq</b>, e o instante de '
-                          'cada borda vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.'))
-        bl.addWidget(r_op)
-        bl.addWidget(info('A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI '
-                          'acha a frequência no sinal do OPT101, que precisa ver a luz <b>já modulada</b>, e usa a fase '
-                          'dele como referência do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de '
-                          '1 Hz no bit de referência, que alinha o microfone ao OPT101: <b>não ligue nada em PA8</b>. '
-                          'A faixa de busca da frequência fica na aba OPT101; no Modo Duplo a varredura em frequência '
-                          'vira manual (você muda o chopper).'))
+        r_el.setToolTip('O STM32 modula o laser pelo PWM em PA8 na frequência do campo Freq, e o instante de cada borda\n'
+                        'vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.')
+        r_op.setToolTip('A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI acha a\n'
+                        'frequência no sinal do OPT101, que precisa ver a luz já modulada, e usa a fase dele como referência\n'
+                        'do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de 1 Hz no bit de referência,\n'
+                        'que alinha o microfone ao OPT101: não ligue nada em PA8. A faixa de busca da frequência fica na aba\n'
+                        'OPT101; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).')
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(r_el)
+        row.addWidget(r_op)
+        row.addStretch(1)
+        bl.addLayout(row)
         if busy:
             for r in (r_el, r_op):
                 r.setEnabled(False)
-            bl.addWidget(info('<i>Termine ou cancele a varredura em andamento para trocar o trigger.</i>'))
+            note = QtWidgets.QLabel('<i>Termine ou cancele a varredura para trocar o trigger.</i>')
+            note.setTextFormat(QtCore.Qt.TextFormat.RichText)
+            bl.addWidget(note)
         lay.addWidget(box)
 
         box = self._group('Alimentação do OPT101')
@@ -479,16 +478,19 @@ class CommonMixin:
         r33 = QtWidgets.QRadioButton('3,3 V (padrão)')
         r50 = QtWidgets.QRadioButton('5 V')
         (r50 if self.opt_supply > 4 else r33).setChecked(True)
-        bl.addWidget(r33)
-        bl.addWidget(info('A saída do OPT101 vai de ~7,5 mV até V<sub>s</sub> − 1,3 V ≈ <b>2,0 V</b>: nunca passa do limite '
-                          'do ADC do STM32 (3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. '
-                          'Linha "Max OPT101 output" em 2,0 V.'))
-        bl.addWidget(r50)
-        bl.addWidget(info('A saída chega a ≈ <b>3,7 V</b>, acima do limite do ADC. Ajuste o ganho (resistor de '
-                          'realimentação) ou a luz para o pico ficar abaixo de ~2,9 V (vermelho a partir de 90 % = 3,0 V): usa quase toda '
-                          'a faixa do ADC. Linha "Max OPT101 output" em 3,3 V (limite do ADC, antes do OPT101 saturar).'))
-        warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: resistor de 1 kΩ em série entre a saída do '
-                                'OPT101 e o PA0 e diodo Schottky BAT54 do PA0 para os 3,3 V. Sem isso o STM32 pode queimar.')
+        r33.setToolTip('A saída do OPT101 vai de ~7,5 mV até Vs − 1,3 V ≈ 2,0 V: nunca passa do limite do ADC do STM32\n'
+                       '(3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. Linha "Max OPT101 output" em 2,0 V.')
+        r50.setToolTip('A saída chega a ≈ 3,7 V, acima do limite do ADC. Ajuste o ganho (resistor de realimentação) ou a luz\n'
+                       'para o pico ficar abaixo de ~2,9 V (vermelho a partir de 90 % = 3,0 V): usa quase toda a faixa do ADC.\n'
+                       'Linha "Max OPT101 output" em 3,3 V (limite do ADC, antes do OPT101 saturar).\n'
+                       'ATENÇÃO: com 5 V o PA0 precisa de proteção (1 kΩ em série + Schottky BAT54 do PA0 para 3,3 V).')
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(r33)
+        row.addWidget(r50)
+        row.addStretch(1)
+        bl.addLayout(row)
+        warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: 1 kΩ em série + Schottky BAT54 para 3,3 V. '
+                                'Sem isso o STM32 pode queimar.')
         warn.setWordWrap(True)
         warn.setTextFormat(QtCore.Qt.TextFormat.RichText)
         warn.setStyleSheet('color:#b00000;background:#fdecea;border:1px solid #e0a0a0;border-radius:4px;padding:4px;')
@@ -496,29 +498,29 @@ class CommonMixin:
         warn.setVisible(self.opt_supply > 4)
         lay.addWidget(box)                          # 2.5.0: a escala fixa do osciloscópio foi para a seção da aba OPT101
 
-        box = self._group('Varreduras')
+        box = self._group('Varreduras e desempenho')
         bl = QtWidgets.QVBoxLayout(box)
-        chk_nb = QtWidgets.QCheckBox('Mostrar "Descartar trechos com som da sala" na varredura em frequência')
+        chk_nb = QtWidgets.QCheckBox('Mostrar "Descartar trechos com som da sala"')
         chk_nb.setChecked(self.show_nb)
+        chk_nb.setToolTip('Mostra, na varredura em frequência do Modo Duplo, a caixa que descarta trechos com som da sala.\n'
+                          'A cada 1 s o SOI compara o sinal do microfone nas frequências vizinhas (f ± 7 %) com o sinal em f;\n'
+                          'o segundo em que um som da sala sobe as vizinhas sai da média, e o ponto é refeito se mais de 30 %\n'
+                          'for descartado. Com τ = 1 s não trouxe ganho (testes de 18–19/11); pode valer com τ maior.\n'
+                          'Desligada, a caixa some da interface e o descarte fica desligado.')
         bl.addWidget(chk_nb)
-        bl.addWidget(info('A cada 1 s o SOI compara o sinal do microfone nas frequências vizinhas (f ± 7 %) com o sinal '
-                          'em f; o segundo em que um som da sala sobe as vizinhas sai da média, e o ponto é refeito se '
-                          'mais de 30 % for descartado. Com τ = 1 s não trouxe ganho (testes de 18–19/11); pode valer '
-                          'com τ maior. Desligada, a caixa some da interface e o descarte fica desligado.'))
         chk_nb.toggled.connect(self.set_show_nb)
-        lay.addWidget(box)
-
-        box = self._group('Desempenho')
-        bl = QtWidgets.QVBoxLayout(box)
-        chk_light = QtWidgets.QCheckBox('Modo leve (para computadores lentos)')
+        chk_light = QtWidgets.QCheckBox('Modo leve (computadores lentos)')
         chk_light.setChecked(self.light_mode)
+        chk_light.setToolTip('Desenha a tela 10 vezes por segundo (em vez de 25), com menos pontos no osciloscópio, e não\n'
+                             'processa o INMP441 enquanto você não está na aba dele nem em medida ou Modo Duplo (ao voltar,\n'
+                             'o lock-in dele recomeça e leva ~3τ para estabilizar). Os dados medidos e salvos são os mesmos.\n'
+                             'Use se a interface engasgar ou houver perdas de USB.')
         bl.addWidget(chk_light)
-        bl.addWidget(info('Desenha a tela 10 vezes por segundo (em vez de 25), com menos pontos no osciloscópio, e '
-                          'não processa o INMP441 enquanto você não está na aba dele nem em medida ou Modo Duplo '
-                          '(ao voltar, o lock-in dele recomeça e leva ~3τ para estabilizar). Os dados medidos e '
-                          'salvos são os mesmos. Use se a interface engasgar ou houver perdas de USB.'))
         chk_light.toggled.connect(self.set_light_mode)
         lay.addWidget(box)
+        hint = QtWidgets.QLabel('Passe o mouse sobre uma opção para ver os detalhes.')
+        hint.setStyleSheet('color:#707070;')
+        lay.addWidget(hint)
 
         # 2.5.0: "Finalizar experimento" fica à vista, na seção Experimento do painel lateral
 
@@ -556,7 +558,7 @@ class CommonMixin:
         lay.addWidget(btns)
         for lbl in dlg.findChildren(QtWidgets.QLabel):        # rótulos com quebra de linha: altura certa
             if lbl.wordWrap():
-                lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 60))
+                lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 40))
         dlg.fit_scroll()
         dlg.adjustSize()
         soi_layout.fit_to_screen(dlg)

@@ -69,7 +69,7 @@ Since 2.5.0 the window has two parts, so that it fits 1366×768 screens also at 
 | **SNR OPT/INMP** (status bar) | dB | How far each lock-in output is above its noise, over the last 10τ (4 to 30 s), updated every second: SNR = 20·log10(\|⟨Z⟩\|/σ), Z = X + jY. Green ≥ 25 dB (point error ≲ 10 %), yellow 15–25 dB (~10–25 %), red < 15 dB (≳ 40 %); see [Examples](08_Measurement_Examples.md#how-good-is-a-point-snr). OPT needs Lock-In Mode in the OPT101 tab; INMP needs the INMP441 lock-in. |
 | **Sample** | text | Prefix of every file saved in `Medidas/`. Characters not allowed in file names become `_`. Empty = no prefix. Saved between sessions. |
 | Calibration + Use | list | Microphone calibration applied to the Dual Mode frequency sweep. Lists the calibrations in the `Medidas/` folder from newest to oldest (by the date in the name), without the `CAL_` and `microfone_` parts; the full name, the reference and the cell appear in the tooltip. Each item starts with the cell it was made in (`[Câmara]`; old OPC calibrations show `[OPC]`) and with ⚠ if it has not been verified. The list is reread when opened. On start, the newest is selected with **Use** ticked. |
-| ⚙ Settings | button (tab row) | Opens the **Settings** window: lock-in trigger (**Electronic**, STM32 PWM, or **Optical**, OPT101 with a chopper; see [Optical modulation](#optical-modulation-chopper)), **OPT101 supply** and the sweep options. Each option has a short explanation in the window. |
+| ⚙ Settings | button (tab row) | Opens the **Settings** window: lock-in trigger (**Electronic**, STM32 PWM, or **Optical**, OPT101 with a chopper; see [Optical modulation](#optical-modulation-chopper)), **OPT101 supply** and the sweep/performance options (*Show "Discard stretches…"*, *Light mode*). The explanations are in the tooltip of each option. |
 | Finish experiment | button (Experiment section) | Zips into `Medidas/<sample>_<date>.zip` all files saved during the session (since the interface opened or since the last click) and the calibration in use (CSV and PNG). The originals stay in the folder. During a sweep, it asks you to finish or cancel it first. |
 
 ## OPT101 tab
@@ -134,7 +134,7 @@ Microphone lock-in, with filters **independent** of the OPT101 ones. The referen
 
 **Status:** rate of received samples and the **"LOW SIGNAL"** warning when the SNR falls below the threshold.
 
-**Display** (side panel; the sweeps are in the *Sweeps* section and work like the OPT101 ones):
+**Display** (side panel; the sweeps are in the *Sweeps* section and work exactly like the OPT101 ones — Signal vs f, PWM and t, adaptive τ, repetitions, order, excluded bands, 600 s warm-up — using the INMP441 lock-in; CSVs are named `INMP441_...`):
 - Plots that can be switched on: **Lock-In**, **Noise/SNR** and **FFT**.
 - **R/θ ↔ X/Y**: magnitude and phase, or in-phase and quadrature components.
 - **Auto-phase**: zeroes the mean phase of the last 1 s (the signal goes entirely into X). *Offset (°)*: manual correction.

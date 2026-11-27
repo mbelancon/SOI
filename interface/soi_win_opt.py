@@ -349,18 +349,17 @@ class OptMixin:
         self.sweep_settle_time, self.sweep_measure_time = self._times_for_cutoff(self.cutoff_lp)
 
     def _sweep_new(self):
-        '''Varredura do OPT101 no padrão novo (2.5.1)? Falso no INMP441 e nas Medidas em Série (comportamento antigo).'''
-        return (getattr(self, 'sweep_target', 'OPT') == 'OPT' and not getattr(self, 'sweep_legacy', True)
-                and getattr(self, 'sweep_kind', 'F') in ('F', 'P'))
+        '''Varredura no padrão novo (2.5.1, OPT101 e INMP441)? Falso nas Medidas em Série (comportamento antigo).'''
+        return not getattr(self, 'sweep_legacy', True) and getattr(self, 'sweep_kind', 'F') in ('F', 'P')
 
     @staticmethod
     def _planned_range(a, b, step):
         return np.arange(a, b + step * 0.5, step).tolist()
 
     def _planned_values(self, kind, target='OPT'):
+        if not self._opt_legacy():
+            return self._opt_planned(kind, target)
         if target == 'OPT':
-            if not self._opt_legacy():
-                return self._opt_planned(kind)
             if kind == 'F':
                 return self._planned_range(self.sp_f0.value(), self.sp_f1.value(), self.sp_df.value())
             return self._planned_range(self.sp_p0.value(), self.sp_p1.value(), self.sp_dp.value())
@@ -372,9 +371,8 @@ class OptMixin:
     def _point_time(self, kind, value, target=None):
         target = target or getattr(self, 'sweep_target', 'OPT')
         running = getattr(self, 'sweep_active', False)
-        if target == 'OPT' and kind in ('F', 'P') and not (self._opt_legacy() if not running
-                                                          else getattr(self, 'sweep_legacy', True)):
-            return sum(self._opt_times(kind, value, 'est' if running else None))
+        if kind in ('F', 'P') and not (self._opt_legacy() if not running else getattr(self, 'sweep_legacy', True)):
+            return sum(self._opt_times(kind, value, 'est' if running else None, target))
         if kind == 'F':
             return sum(self._times_for_cutoff(get_effective_cutoffs(value)[0]))
         return sum(self._times_for_cutoff(self.cutoff_lp))
@@ -390,27 +388,28 @@ class OptMixin:
     def update_eta_idle(self, *_):
         if getattr(self, 'sweep_active', False):
             return
-        for kind, lbl in self.eta_labels.items():
-            if kind == 'T':
-                dur = self.sp_ot_dur.value() * 60.0
-                self._eta_set(lbl, 'Duração: ' + self._fmt_time(dur) if dur else 'Até clicar em Parar')
+        for target, etas in (('OPT', self.eta_labels), ('AUDIO', getattr(self, 'eta_labels_aud', {}))):
+            if target not in getattr(self, 'sw_w', {}):
                 continue
-            values = self._planned_values(kind, 'OPT')
-            total = sum(self._point_time(kind, v, 'OPT') for v in values)
-            if kind == 'F':
-                reps = self.sp_opt_reps.value()
-                if self.chk_opt_adapt.isChecked():
-                    tmin = reps * sum(sum(self._opt_times('F', v, 'min')) for v in values)
-                    self._eta_set(lbl, f'Tempo estimado: {self._fmt_time(tmin)}\u00a0a\u00a0{self._fmt_time(reps * total)}')
-                    lbl.setToolTip(f'{len(values)} pontos. τ adaptativo: do τ mínimo em todos os pontos ao τ max em todos.')
-                else:
-                    self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(reps * total))
-                    lbl.setToolTip(f'{len(values)} pontos' + (f' × {reps} repetições' if reps > 1 else ''))
-                continue
-            self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
-        for kind, lbl in getattr(self, 'eta_labels_aud', {}).items():
-            total = sum(self._point_time(kind, v, 'AUDIO') for v in self._planned_values(kind, 'AUDIO'))
-            self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
+            W = self.sw_w[target]
+            for kind, lbl in etas.items():
+                if kind == 'T':
+                    dur = W.t_dur.value() * 60.0
+                    self._eta_set(lbl, 'Duração: ' + self._fmt_time(dur) if dur else 'Até clicar em Parar')
+                    continue
+                values = self._planned_values(kind, target)
+                total = sum(self._point_time(kind, v, target) for v in values)
+                if kind == 'F' and not self._opt_legacy():
+                    reps = W.reps.value()
+                    if W.adapt.isChecked():
+                        tmin = reps * sum(sum(self._opt_times('F', v, 'min', target)) for v in values)
+                        self._eta_set(lbl, f'Tempo estimado: {self._fmt_time(tmin)}\u00a0a\u00a0{self._fmt_time(reps * total)}')
+                        lbl.setToolTip(f'{len(values)} pontos. τ adaptativo: do τ mínimo em todos os pontos ao τ max em todos.')
+                    else:
+                        self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(reps * total))
+                        lbl.setToolTip(f'{len(values)} pontos' + (f' × {reps} repetições' if reps > 1 else ''))
+                    continue
+                self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
 
     def _sweep_remaining(self, now):
         elapsed = now - self.sweep_timer
@@ -481,9 +480,11 @@ class OptMixin:
             values = self._planned_values(kind, target)
             if not values:
                 return
-            self.sweep_legacy = target != 'OPT' or self._opt_legacy()
+            self.sweep_legacy = self._opt_legacy()
             if not self.sweep_legacy:
-                values = self._opt_begin_run(kind, values, _rep)
+                if target == 'AUDIO' and not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
+                    self.chk_audio_lockin.setChecked(True)      # o lock-in do INMP441 precisa estar rodando
+                values = self._opt_begin_run(kind, values, _rep, target)
             else:
                 self.opt_rep = None
             self.sweep_kind = kind
@@ -491,13 +492,10 @@ class OptMixin:
             self.sweep_freqs = values
             self.sweep_results = []
             
-            f_start = self.sp_f0.value() if target == 'OPT' else self.sp_aud_f0.value()
-            f_stop  = self.sp_f1.value() if target == 'OPT' else self.sp_aud_f1.value()
-            f_step  = self.sp_df.value() if target == 'OPT' else self.sp_aud_df.value()
+            W = self._w(target)
+            f_start, f_stop, f_step = W.f0.value(), W.f1.value(), W.fn.value()
             if kind == 'P':
-                f_start = self.sp_p0.value() if target == 'OPT' else self.sp_aud_p0.value()
-                f_stop  = self.sp_p1.value() if target == 'OPT' else self.sp_aud_p1.value()
-                f_step  = self.sp_dp.value() if target == 'OPT' else self.sp_aud_dp.value()
+                f_start, f_stop, f_step = W.p0.value(), W.p1.value(), W.dp.value()
 
             if kind == 'F':
                 if not self.sweep_legacy:       # f_start/f_stop: faixa pedida; f_step: N pontos (log) ou passo (linear)
@@ -548,17 +546,17 @@ class OptMixin:
     def _end_sweep_ui(self):
         self.sweep_active = False
         self.sweep_state = 'IDLE'
-        for kind, btn in self.btn_sweeps.items():
-            btn.setText('▶ Iniciar' if kind == 'T' else '▶ Varredura')
-            btn.setStyleSheet('background:#cfe2ff;')
-            btn.setEnabled(True)
-        for w in (self.sp_tau, self.sp_ot_f, self.sp_ot_pwm, self.sp_ot_tau, self.sp_ot_dt, self.sp_ot_dur):
-            w.setEnabled(True)
-        self._on_opt_adapt(self.chk_opt_adapt.isChecked())
-        for btn in getattr(self, 'btn_sweeps_aud', {}).values():
-            btn.setText('▶ Varredura')
-            btn.setStyleSheet('background:#cfe2ff;')
-            btn.setEnabled(True)
+        for btns in (self.btn_sweeps, getattr(self, 'btn_sweeps_aud', {})):
+            for kind, btn in btns.items():
+                btn.setText('▶ Iniciar' if kind == 'T' else '▶ Varredura')
+                btn.setStyleSheet('background:#cfe2ff;')
+                btn.setEnabled(True)
+        self.sp_tau.setEnabled(True)
+        self.sp_audio_tau.setEnabled(True)
+        for tg, W in getattr(self, 'sw_w', {}).items():
+            for w in (W.t_f, W.t_pwm, W.t_tau, W.t_dt, W.t_dur):
+                w.setEnabled(True)
+            self._on_sw_adapt(tg, W.adapt.isChecked())
         self.sp_freq.setEnabled(True)
         self.sp_power.setEnabled(True)
         if getattr(self, 'sweep_restore', None) is not None:     # varredura em frequência: volta ao início
@@ -614,25 +612,16 @@ class OptMixin:
                                       f"{head} | Medindo ({count} amostras)...")
             
             if elapsed >= self.sweep_measure_time:
-                if new and self.sweep_kind == 'F' and self.chk_opt_adapt.isChecked() and self._opt_adapt_point(v_curr, now):
+                if new and self.sweep_kind == 'F' and self._w(target).adapt.isChecked() and self._opt_adapt_point(v_curr, now):
                     return              # ponto refeito com τ maior
-                if target == 'OPT':
-                    if self.sweep_count > 0:
-                        r = np.concatenate(self.sweep_chunks_r)
-                        p = np.concatenate(self.sweep_chunks_p)
-                        dc = np.concatenate(self.sweep_chunks_dc)
-                        if new:
-                            self._opt_record_point(v_curr, r, p, dc)
-                        else:
-                            self.sweep_results.append((v_curr, float(r.mean()), float(r.std()),
-                                                       *circ_stats_deg(p), float(dc.mean())))
-                else:
-                    with self.audio_lock:
-                        if self.audio_sweep_count > 0:
-                            r = np.concatenate(self.audio_sweep_r)
-                            p = np.concatenate(self.audio_sweep_p)
-                            self.sweep_results.append((v_curr, float(r.mean()), float(r.std()),
-                                                       *circ_stats_deg(p), 0.0))
+                data = self._sweep_data(target)
+                if data is not None:
+                    r, p, dc = data
+                    if new:
+                        self._opt_record_point(v_curr, r, p, dc)
+                    else:
+                        self.sweep_results.append((v_curr, float(r.mean()), float(r.std()),
+                                                   *circ_stats_deg(p), float(dc.mean())))
                 self.sweep_idx += 1
                 if self.sweep_idx < total:
                     self._apply_sweep_value(self.sweep_freqs[self.sweep_idx])
@@ -716,7 +705,10 @@ class OptMixin:
             t0 = float(t[0])
             span = max(float(t[-1] - t0), 1.0)
             f_exp = lambda x, A, B, T: A + B * np.exp(-(x - t0) / T)
-            popt, pcov = curve_fit(f_exp, t, y, p0=(float(y[-1]), float(y[0] - y[-1]), span / 3.0), maxfev=4000)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                popt, pcov = curve_fit(f_exp, t, y, p0=(float(y[-1]), float(y[0] - y[-1]), span / 3.0), maxfev=4000)
         except Exception:
             return None
         if not (np.all(np.isfinite(pcov)) and 0.0 < popt[2] < 20.0 * span):
@@ -760,7 +752,8 @@ class OptMixin:
         lay.addWidget(pw_r)
         lay.addWidget(pw_p)
         pw_p.setXLink(pw_r)
-        beam = max(df * 0.15, 1e-6) if kind != 'F' or self.cmb_opt_fspace.currentIndex() == 1 else 0.0
+        beam = (max(df * 0.15, 1e-6) if kind != 'F' or getattr(self, 'sweep_legacy', True)
+                or self._w(self.sweep_params.get('target', 'OPT')).fspace.currentIndex() == 1 else 0.0)
         if kind == 'T':
             beam = 0.0
         if kind == 'F': 
@@ -846,8 +839,8 @@ class OptMixin:
             pw_p.setXRange(xm_min - x_marg, xm_max + x_marg, padding=0)
             pw_p.setYRange(-180, 180, padding=0) # Fixando fase para ocupar altura de -180 a 180
 
-        if kind == 'F' and target_str == 'OPT101' and not getattr(self, 'sweep_legacy', True) \
-                and self.sweep_params.get('f_step', 0) and self.cmb_opt_fspace.currentIndex() == 0:
+        if kind == 'F' and not getattr(self, 'sweep_legacy', True) and self.sweep_params.get('f_step', 0) \
+                and self._w(self.sweep_params.get('target', 'OPT')).fspace.currentIndex() == 0:
             chk_log_x.setChecked(True)          # pontos em escala log: eixo X em log (a mediana usa o mesmo caminho)
         chk_log_x.toggled.connect(update_bounds)
         chk_log_y.toggled.connect(update_bounds)

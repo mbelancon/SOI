@@ -2210,3 +2210,14 @@ EN.update({
     'Duração: ': 'Duration: ',
     'Sinal x t (OPT101): ': 'Signal vs t (OPT101): ',
 })
+EN.update({
+    'Sinal x t INMP441: ': 'Signal vs t INMP441: ',
+    'Sinal x t (INMP441): ': 'Signal vs t (INMP441): ',
+    'Varreduras e desempenho': 'Sweeps and performance',
+    'Modo leve (computadores lentos)': 'Light mode (slow computers)',
+    'Mostrar "Descartar trechos com som da sala"': 'Show "Discard stretches with room sounds"',
+    'Passe o mouse sobre uma opção para ver os detalhes.': 'Hover over an option to see the details.',
+    '⚠ Com 5 V o PA0 <b>precisa de proteção</b>: 1 kΩ em série + Schottky BAT54 para 3,3 V. Sem isso o STM32 pode queimar.':
+        '⚠ With 5 V, PA0 <b>needs protection</b>: 1 kΩ in series + BAT54 Schottky to 3.3 V. Without it the STM32 may burn out.',
+    '5 V': '5 V',
+})

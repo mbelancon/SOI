@@ -529,15 +529,16 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                  'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin',
                  'sp_cal_a_L', 'sp_cal_b_L', 'sp_dual_adapt_tol', 'sp_dual_reps', 'sp_dt_f', 'sp_dt_pwm', 'sp_dt_tau', 'sp_dt_dt',
                  'sp_dt_dur', 'sp_opt_tau', 'sp_opt_tol', 'sp_opt_reps', 'sp_ot_f', 'sp_ot_pwm', 'sp_ot_tau', 'sp_ot_dt',
-                 'sp_ot_dur')
+                 'sp_ot_dur',
+                 'sp_aud_tau', 'sp_aud_tol', 'sp_aud_reps', 'sp_at_f', 'sp_at_pwm', 'sp_at_tau', 'sp_at_dt', 'sp_at_dur')
         checks = ('chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_opt_adapt',
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_opt_adapt', 'chk_aud_adapt',
                   'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb', 'chk_dual_warm_noise')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
-                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order', 'cmb_opt_fspace', 'cmb_opt_order',
+                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order', 'cmb_opt_fspace', 'cmb_opt_order', 'cmb_aud_fspace', 'cmb_aud_order',
                   'cmb_cal_ref', 'cmb_cal_a', 'cmb_cal_b')   # cmb_cell fora (2.5.0: só a Câmara)
         return spins, checks, combos
 
@@ -631,6 +632,19 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             v = st.value('opt_avoid')
             if v is not None:
                 self.ed_opt_avoid.setText(str(v))
+            v = st.value('aud_avoid')
+            if v is not None:
+                self.ed_aud_avoid.setText(str(v))
+            if st.value('aud_sweeps_20261127') is None:       # varreduras do INMP441 no padrão do OPT101 (uma vez)
+                self.cmb_aud_fspace.setCurrentIndex(0)
+                self.sp_aud_df.setValue(float(CAL_SWEEP_N))
+                self.sp_aud_f0.setValue(SWEEP_F0_DEF)
+                self.sp_aud_f1.setValue(CAL_SWEEP_F1)
+                self.cmb_aud_order.setCurrentIndex(0)
+                self.chk_aud_adapt.setChecked(True)
+                self.sp_aud_tau.setValue(ADAPT_TAU_CAP)
+                self.sp_aud_reps.setValue(SWEEP_REPS_DEF)
+                st.setValue('aud_sweeps_20261127', 1)
             if st.value('opt_sweeps_20261127') is None:       # varreduras do OPT101 no padrão do Modo Duplo (uma vez)
                 self.cmb_opt_fspace.setCurrentIndex(0)
                 self.sp_df.setValue(float(CAL_SWEEP_N))
@@ -646,7 +660,8 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                     if abs(sp.value() - 30.0) < 1e-6:
                         sp.setValue(PWM_SWEEP_START_DEF)
                 st.setValue('pwm_start_40_20261127', 1)
-            self._on_opt_adapt(self.chk_opt_adapt.isChecked())
+            self._on_sw_adapt('OPT', self.chk_opt_adapt.isChecked())
+            self._on_sw_adapt('AUDIO', self.chk_aud_adapt.isChecked())
             v = st.value('sample_name')
             if v is not None:
                 self.ed_sample.setText(str(v))
@@ -710,6 +725,7 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('dual_avoid', self.ed_dual_avoid.text())
         st.setValue('opt_avoid', self.ed_opt_avoid.text())
+        st.setValue('aud_avoid', self.ed_aud_avoid.text())
         st.setValue('show_nb', int(self.show_nb))
         st.setValue('opt_supply', self.opt_supply)
         st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))

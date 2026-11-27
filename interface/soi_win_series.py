@@ -52,7 +52,7 @@ class SeriesMixin:
 
     def _series_widgets(self):
         sp0, sp1, space, spn, _ = self.dual_fw['F']
-        return (self.cmb_opt_fspace, self.sp_f0, self.sp_f1, self.sp_df, self.sp_p0, self.sp_p1, self.sp_dp, self.sp_aud_f0,
+        return (self.cmb_opt_fspace, self.cmb_aud_fspace, self.sp_f0, self.sp_f1, self.sp_df, self.sp_p0, self.sp_p1, self.sp_dp, self.sp_aud_f0,
                 self.sp_aud_f1, self.sp_aud_df, self.sp_aud_p0, self.sp_aud_p1, self.sp_aud_dp, self.sp_dual_p0,
                 self.sp_dual_p1, self.sp_dual_dp, self.dual_mode_w['P'], self.dual_tau_w['P'],
                 self.cmb_mod, space, sp0, sp1, spn, self.chk_dual_adapt, self.chk_dual_adapt40, self.chk_dual_blocks,
@@ -110,8 +110,8 @@ class SeriesMixin:
         self.cmb_mod.setCurrentIndex(0)               # modulação eletrônica (o STM32 fixa/varre a frequência)
         if tipo in ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm'):
             a, b, d = self._series_sweep_fields(tipo)
-            if tipo == 'opt101-f':
-                self.cmb_opt_fspace.setCurrentIndex(1)       # as etapas da série usam passo linear (em Hz)
+            if tipo in ('opt101-f', 'inmp441-f'):
+                (self.cmb_opt_fspace if tipo == 'opt101-f' else self.cmb_aud_fspace).setCurrentIndex(1)   # série: passo linear (Hz)
             a.setValue(p['inicio'])
             b.setValue(p['fim'])
             d.setValue(p['passo'])
