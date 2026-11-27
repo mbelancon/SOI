@@ -47,6 +47,12 @@ Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same US
 - Settings saved by older versions for the INMP441 frequency sweep are reset once to the new defaults.
 - Measurement Series keep the old behaviour (stages `inmp441-f`/`inmp441-pwm` unchanged).
 
+### Fixed: Dual Mode error bars without normalization (repetitions)
+- With *Normalize by OPT101* off, the plot of a median of repetitions used the uncertainty of S = R_INMP441/R_OPT101 for the
+  INMP441 R. When the OPT101 R changed a lot between repetitions (unstable 450 nm laser), the bars reached 100 % or more
+  and, in log scale, ran down to ~0. It now uses the median R of the INMP441 and u = 1.25·SD/√N of the INMP441 itself.
+  CSV files are unchanged.
+
 ### Changed: Settings window
 - Smaller (about 440×275 px): explanations moved to tooltips, trigger and supply options in one row each, the two
   checkboxes merged into one *Sweeps and performance* group. The 5 V warning (PA0 needs 1 kΩ + BAT54) stays visible

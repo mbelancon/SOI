@@ -414,6 +414,9 @@ class DualSweepMixin:
         self.dual_results = [(x[i], ro_med[i], 0.0, s_med[i] * ro_med[i],
                               s_med[i] * ro_med[i] * np.nan_to_num(u_s[i]) / 100.0,
                               pa_med[i], np.nan_to_num(u_p[i]), po_med[i], 0.0) for i in range(m)]
+        # Sem normalização o gráfico usa o R do INMP441 e a incerteza dele (DP entre repetições), não a de S:
+        # se o R do OPT101 varia entre repetições (laser instável), u de S fica enorme sem o INMP441 ter variado
+        self.dual_raw_u = (self.dual_results, ra_med.copy(), MEDIAN_EFF * ra_sd / sq)
         self.dual_pinfo = []
         self.dual_nb = []
         self.dual_excluded = set()
@@ -926,6 +929,10 @@ class DualSweepMixin:
         self._set_dual_f_titles()
         if not norm:
             # Só o INMP441: R e fase brutos (a luz não é descontada); sem calibração nem fit do padrão
+            raw = getattr(self, 'dual_raw_u', None)
+            if raw is not None and raw[0] is self.dual_results and raw[1].size == ra.size:
+                ra = raw[1]                          # mediana das repetições: R do INMP441 e u = 1,25·DP/√N dele
+                ra_e = np.nan_to_num(raw[2])
             ok = ra > 0
             s = np.where(ok, ra, np.nan)
             s_rel = ra_e / np.maximum(ra, 1e-30)
