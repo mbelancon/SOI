@@ -13,6 +13,10 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - OPT101 → PA0 (ADC, 0–3,3 V). Saída de ~7,5 mV a Vs − 1,3 V: com Vs = 3,3 V, máx. ~2,0 V.
 - INMP441 (I2S): SCK PB13, WS PB12, SD PB15.
 - Modulação do laser: PWM em PA8 (via driver); sincronismo em PB0. Laser 532 nm.
+- **PA8 → entrada TTL/PWM de módulos de laser baratos: SEMPRE resistor em série** (24/11 dois drivers queimaram com
+  ligação direta, 12 V). O módulo tem pull-up interno (TTL solto = 3,88 V) e injeta ~2 Vpp de ruído. Montagem que
+  funciona: 1 kΩ em série + pull-down 5 kΩ, terra comum; capacitor 1–10 nF sugerido. Ligar o STM32 antes dos 12 V.
+  Registrado em docs/02.
 - Célula fotoacústica "Camara": cilindro 2 cm × 5 mm de diâmetro, furo de ~1 mm no meio da altura (furo de
   equalização do outro lado, fechado nas medidas), janela de lâmina de 1 mm. Desde 23/11: sem a câmara do
   microfone e com nova fixação do INMP441 (acabou o vazamento que prejudicava a baixa frequência).

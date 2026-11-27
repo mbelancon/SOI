@@ -38,7 +38,7 @@ Both streams go to the PC over USB (CDC). The Python interface performs lock-in 
 | Laser + driver | Modulated excitation | Driver TTL input ← **PA8** (5 kHz PWM, 0–100 %) |
 | Oscilloscope (optional) | Watch the modulation | **PB0** (1 = laser on) |
 
-PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET or the TTL input of the laser driver). Details, precautions and a diagram are in [docs/02_Hardware_and_Wiring.md](docs/02_Hardware_and_Wiring.md).
+PA8 only provides a 3.3 V logic signal: always use a driver (transistor/MOSFET or the TTL input of the laser driver). **Put a series resistor (about 1 kΩ) between PA8 and a cheap module's TTL/PWM input, plus a pull-down:** wiring PA8 directly damaged two drivers on 2026-11-24. Details, precautions and a diagram are in [docs/02_Hardware_and_Wiring.md](docs/02_Hardware_and_Wiring.md).
 
 ## Quick start
 

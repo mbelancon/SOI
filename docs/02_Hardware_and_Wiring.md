@@ -57,6 +57,20 @@ The firmware uses a long ADC sampling time (84 cycles ≈ 4 µs) to tolerate hig
 - PA8 only delivers a 3.3 V logic signal and a few mA. Always use a **driver** (transistor/MOSFET or the TTL input of a laser driver). ⚠ Document the driver used.
 - **PB0** mirrors the modulation state (1 = laser on). Use this pin as the oscilloscope trigger.
 
+### Series resistor between PA8 and the TTL/PWM input of cheap diode-laser modules
+
+**Never connect PA8 directly to the TTL/PWM input of a cheap laser module.** On 2026-11-24 two laser drivers were damaged
+this way (TTL input wired straight to PA8, no resistor, 12 V supply): one stopped responding to the PWM, the other
+still switched on/off but no longer reduced power at low duty.
+
+- These 3-wire modules have an internal **pull-up** on the TTL input (floating input measured at 3.88 V, above the 3.3 V
+  of the STM32), and the driver injects ~2 Vpp of noise back into the input. Without a resistor, that current flows
+  into PA8 and the module's input stage sees an undefined level while the STM32 is in reset, boot or DFU (PA8 floats).
+- Working arrangement (bench, 2026-11-26): **1 kΩ in series** with PA8 and a **5 kΩ pull-down** to ground at the module
+  input, with a common ground. It works but is still noisy; a **1–10 nF** capacitor at the module input is suggested.
+- Power the STM32 before the laser supply, and set the PWM to 0 % before closing the interface (firmware 2.0.0 does not
+  turn the laser off by itself; automatic shutdown is planned for firmware 2.1.0).
+
 ## ST-Link programmer
 
 | ST-Link | Black Pill (SWD header) |

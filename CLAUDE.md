@@ -52,7 +52,8 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
 - A entrada analógica do STM32F401 (PA0) não tolera 5 V. O OPT101 pode ser alimentado com 5 V para ganhar
   resolução (saída máx. ~3,7 V), mas só com proteção no ADC: 1 kΩ em série + Schottky BAT54 para 3,3 V.
   Sempre avisar do risco de queimar o STM32 ao sugerir essa opção. Padrão: Vs = 3,3 V, saída máx. ~2,0 V.
-- O laser é sempre acionado por driver, nunca direto pelo PA8.
+- O laser é sempre acionado por driver, nunca direto pelo PA8. Entre o PA8 e a entrada TTL de módulo de laser barato
+  sempre resistor em série (~1 kΩ) + pull-down (ver docs/02).
 
 ## Economia de tokens
 - Uma thread por recurso ou análise; assunto novo vai para thread nova. Ler só o trecho/módulo necessário do código
