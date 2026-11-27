@@ -230,7 +230,7 @@ class CommonMixin:
     def warming_up(self):
         return getattr(self, 'warm_state', None) is not None
 
-    def _make_sweep_box(self, title, fields, on_click, extra=(), more=(), warm_pwm=None):
+    def _make_sweep_box(self, title, fields, on_click, extra=(), more=(), warm_pwm=None, warm_default=None):
         '''Quadro de varredura padrão (mesmo em todas as abas): campos na 1ª linha (e os de 'extra'
         numa linha própria); botão, tempo e barra de progresso na última. Retorna (quadro, botão,
         rótulo do tempo, barra).'''
@@ -273,7 +273,7 @@ class CommonMixin:
         chk_w.setToolTip('Antes do 1º ponto, liga o laser (no PWM da medida) e espera o tempo indicado: depois que o laser\n'
                          'liga, o sinal fotoacústico cai alguns % até a amostra e a célula aquecerem (campanha de 16-17/11:\n'
                          '−14 % com constante de ~4,4 min a 10 Hz). Clicar no botão durante a espera cancela.')
-        sp_w = self._dspin(10.0, 7200.0, WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
+        sp_w = self._dspin(10.0, 7200.0, warm_default or WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
         sp_w.setVisible(False)
         chk_w.toggled.connect(sp_w.setVisible)
         chk_w.toggled.connect(lambda _=False, e=eta: self._eta_render(e))
@@ -312,7 +312,9 @@ class CommonMixin:
             conn = "<span style='color:#d07000;'>●</span> STM32 desconectado, procurando..."
             tip = self.link.last_error or 'Nenhuma porta do STM32 (USB VID 0x0483) encontrada.'
         task = ''
-        if self.sweep_active:
+        if self.sweep_active and self.sweep_kind == 'T':
+            task = f'Sinal x t OPT101: {len(self.sweep_results)} pontos, {self._fmt_time(time.perf_counter() - self.ot_t0)}'
+        elif self.sweep_active:
             alvo = 'OPT101' if self.sweep_target == 'OPT' else 'INMP441'
             tipo = 'frequência' if self.sweep_kind == 'F' else 'PWM'
             task = (f'Varredura {alvo} em {tipo}: ponto {self.sweep_idx + 1}/{len(self.sweep_freqs)}, '
@@ -404,9 +406,9 @@ class CommonMixin:
         Dentro de Medidas em Série não desliga: a série decide no fim (fim = laser_parado ou manter)."""
         if getattr(self, 'series_active', False) or self.ext_mode:
             return
-        rp = getattr(self, 'dual_rep', None)
-        if rp and rp['k'] < rp['n']:          # entre repetições da mesma varredura: o feixe continua ligado
-            return
+        for rp in (getattr(self, 'dual_rep', None), getattr(self, 'opt_rep', None)):
+            if rp and rp['k'] < rp['n']:      # entre repetições da mesma varredura: o feixe continua ligado
+                return
         if self.sp_power.value() > 0 or self.laser_power > 0:
             self.pwm_before_off = float(self.sp_power.value() or self.laser_power)
             self.sp_power.setValue(0.0)

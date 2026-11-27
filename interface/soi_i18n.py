@@ -64,6 +64,7 @@ EN_EXACT = {
     'a': 'to',
     'fim': 'end',
     'de': 'from',
+    'Tempo': 'Time',
 }
 
 
@@ -2159,3 +2160,53 @@ EN.update({
         'No INMP441 audio: connect the SOI (without it, the interface simulates).',
 })
 EN.update({'S calibrado': 'Calibrated S'})
+
+
+# 2.5.1: varreduras da aba OPT101 no padrão do Modo Duplo
+EN.update({
+    'Ordem em que as frequências são medidas. Crescente (padrão). Com deriva lenta (aquecimento), crescente ou\ndecrescente a transformam numa inclinação falsa na curva; embaralhada usa uma nova ordem aleatória a cada\nrepetição, e a deriva vira ruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV.':
+        'Order in which the frequencies are measured. Ascending (default). With slow drift (heating), ascending or\ndescending turns it into a false slope in the curve; shuffled uses a new random order at each\nrepetition, and the drift becomes noise that the median of the repetitions reduces. The seed is in the CSV header.',
+    'Ligado (padrão): o campo vira "τ max" (padrão 1 s): a varredura começa nele e o τ muda ao longo dela sem\npassar desse valor, exceto em baixa frequência: o τ nunca fica abaixo de ~3 períodos (3 s em 1 Hz).\nEm cada ponto o SOI mede a flutuação de R do OPT101 (desvio-padrão e diferença entre a 1ª e a 2ª metade da\nmédia). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a flutuação cai com 1/√τ), até ~3 períodos\n(mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ maior (até o τ max). Cada ponto espera 7τ e\nfaz a média por max(1 s, 3τ).\nDesligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ.':
+        'On (default): the field becomes "τ max" (default 1 s): the sweep starts at it and τ changes along the sweep without\nexceeding that value, except at low frequency: τ never goes below ~3 periods (3 s at 1 Hz).\nAt each point the SOI measures the fluctuation of the OPT101 R (standard deviation and the difference between the 1st and 2nd half of the\naverage). Well below the Precision, the τ of the next point decreases (fluctuation falls as 1/√τ), down to ~3 periods\n(minimum 100 ms); above 2× the Precision, the point is redone with a larger τ (up to τ max). Each point waits 7τ and\naverages for max(1 s, 3τ).\nOff: the field goes back to "τ", fixed for the whole sweep; waits 9τ and averages for 1τ.',
+    'Flutuação aceitável de R do OPT101 em cada ponto (padrão 2 %). Menor = τ maior e\nvarredura mais lenta.':
+        'Acceptable fluctuation of the OPT101 R at each point (default 2 %). Smaller = larger τ and\nslower sweep.',
+    'Repetições: a varredura é feita N vezes seguidas (laser ligado entre elas; warm-up só antes da 1ª).\nCada repetição grava o CSV normal (_rep1, _rep2...) e no fim um CSV _mediana com a mediana ponto a ponto\ne a incerteza u = 1,25·DP/√N. 1 = uma varredura só.':
+        'Repetitions: the sweep is run N times in a row (laser on between them; warm-up only before the 1st).\nEach repetition saves the normal CSV (_rep1, _rep2...) and, at the end, a _mediana CSV with the point-by-point median\nand the uncertainty u = 1.25·SD/√N. 1 = a single sweep.',
+    'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";", que\nficam sempre excluídas. Em volta de cada uma, ±2 % da frequência (mínimo ±3 Hz), nenhum ponto é medido: um\nponto que cairia nessa faixa vai para 1 Hz além da borda, e fica listado no cabeçalho do CSV. Os múltiplos\nde 60 Hz também são deslocados (k·60 ± 3 Hz). Vazio = só a rede.':
+        'Frequencies of known noise sources (e.g. the laser fan at ~170 Hz), separated by ";", which\nare always excluded. Around each one, ±2 % of the frequency (at least ±3 Hz), no point is measured: a\npoint that would fall in that band goes 1 Hz beyond the edge, and is listed in the CSV header. Multiples\nof 60 Hz are also moved (k·60 ± 3 Hz). Empty = mains only.',
+    'Início da varredura em PWM: qualquer valor de 0 a 100 % (padrão 40 %; o laser só emite acima de ~18 %).':
+        'Start of the PWM sweep: any value from 0 to 100 % (default 40 %; the laser only emits above ~18 %).',
+    'τ do lock-in do OPT101 durante a medida (restaurado no fim). Use τ menor que o intervalo\nentre pontos para os pontos serem independentes.':
+        'τ of the OPT101 lock-in during the measurement (restored at the end). Use a τ smaller than the interval\nbetween points so the points are independent.',
+    'Cada ponto é a média (e o desvio-padrão, nas barras de erro) do lock-in neste intervalo.':
+        'Each point is the average (and the standard deviation, in the error bars) of the lock-in in this interval.',
+    'Duração da medida; 0 = até clicar em Parar. O CSV e o PNG são gravados no fim.':
+        'Duration of the measurement; 0 = until you click Stop. The CSV and PNG are saved at the end.',
+    'O laser começa a modular na frequência e no PWM escolhidos ao clicar em Iniciar. Os\nprimeiros 7τ (assentamento do lock-in) são descartados; o tempo é contado desde o\ninício (o aquecimento aparece). Requer o Modo Lock-In.':
+        'The laser starts modulating at the chosen frequency and PWM when you click Start. The first 7τ\n(lock-in settling) are discarded; time is counted from the start (the heating shows).\nRequires Lock-In Mode.',
+    'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\nsem passar desse valor.':
+        'τ max of the sweep (adaptive τ on): the sweep starts at it and τ changes with the fluctuation,\nnot exceeding that value.',
+    'τ do lock-in do OPT101 durante a varredura: espera 9τ e faz a média por 1τ em cada ponto.':
+        'τ of the OPT101 lock-in during the sweep: waits 9τ and averages for 1τ at each point.',
+    'O Sinal x t precisa do OPT101 no Modo Lock-In.':
+        'Signal vs t needs the OPT101 in Lock-In Mode.',
+    'Sinal x t usa a modulação eletrônica (o STM32 fixa a frequência).':
+        'Signal vs t uses electronic modulation (the STM32 fixes the frequency).',
+    'A varredura do Modo Duplo está em andamento.':
+        'The Dual Mode sweep is in progress.',
+    'Até clicar em Parar': 'Until you click Stop',
+    'Exponencial (A + B·e^(−t/T))': 'Exponential (A + B·e^(−t/T))',
+    ': refazendo com τ maior': ': redoing with a larger τ',
+    'flutuação R ': 'fluctuation R ',
+    ', fase ': ', phase ',
+    ', deriva ': ', drift ',
+    ' | último: τ = ': ' | last: τ = ',
+    ' repetições': ' repetitions',
+    'Varredura concluída (mediana de ': 'Sweep finished (median of ',
+    'Sinal x t OPT101: ': 'Signal vs t OPT101: ',
+    ' | lock-in assentando (': ' | lock-in settling (',
+    'Sinal x t concluído: ': 'Signal vs t finished: ',
+    'Varredura concluída: ': 'Sweep finished: ',
+    'Duração: ': 'Duration: ',
+    'Sinal x t (OPT101): ': 'Signal vs t (OPT101): ',
+})

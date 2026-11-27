@@ -342,7 +342,16 @@ class OptMixin:
         return max(1.0, 9.0 * tau) + 0.3, max(1.0, 4.0 * tau)
 
     def _sweep_times(self):
+        if self._sweep_new():
+            self.sweep_settle_time, self.sweep_measure_time = self._opt_times(
+                self.sweep_kind, self.sweep_freqs[self.sweep_idx], 'est')
+            return
         self.sweep_settle_time, self.sweep_measure_time = self._times_for_cutoff(self.cutoff_lp)
+
+    def _sweep_new(self):
+        '''Varredura do OPT101 no padrão novo (2.5.1)? Falso no INMP441 e nas Medidas em Série (comportamento antigo).'''
+        return (getattr(self, 'sweep_target', 'OPT') == 'OPT' and not getattr(self, 'sweep_legacy', True)
+                and getattr(self, 'sweep_kind', 'F') in ('F', 'P'))
 
     @staticmethod
     def _planned_range(a, b, step):
@@ -350,6 +359,8 @@ class OptMixin:
 
     def _planned_values(self, kind, target='OPT'):
         if target == 'OPT':
+            if not self._opt_legacy():
+                return self._opt_planned(kind)
             if kind == 'F':
                 return self._planned_range(self.sp_f0.value(), self.sp_f1.value(), self.sp_df.value())
             return self._planned_range(self.sp_p0.value(), self.sp_p1.value(), self.sp_dp.value())
@@ -358,7 +369,12 @@ class OptMixin:
                 return self._planned_range(self.sp_aud_f0.value(), self.sp_aud_f1.value(), self.sp_aud_df.value())
             return self._planned_range(self.sp_aud_p0.value(), self.sp_aud_p1.value(), self.sp_aud_dp.value())
 
-    def _point_time(self, kind, value):
+    def _point_time(self, kind, value, target=None):
+        target = target or getattr(self, 'sweep_target', 'OPT')
+        running = getattr(self, 'sweep_active', False)
+        if target == 'OPT' and kind in ('F', 'P') and not (self._opt_legacy() if not running
+                                                          else getattr(self, 'sweep_legacy', True)):
+            return sum(self._opt_times(kind, value, 'est' if running else None))
         if kind == 'F':
             return sum(self._times_for_cutoff(get_effective_cutoffs(value)[0]))
         return sum(self._times_for_cutoff(self.cutoff_lp))
@@ -375,10 +391,25 @@ class OptMixin:
         if getattr(self, 'sweep_active', False):
             return
         for kind, lbl in self.eta_labels.items():
-            total = sum(self._point_time(kind, v) for v in self._planned_values(kind, 'OPT'))
+            if kind == 'T':
+                dur = self.sp_ot_dur.value() * 60.0
+                self._eta_set(lbl, 'Duração: ' + self._fmt_time(dur) if dur else 'Até clicar em Parar')
+                continue
+            values = self._planned_values(kind, 'OPT')
+            total = sum(self._point_time(kind, v, 'OPT') for v in values)
+            if kind == 'F':
+                reps = self.sp_opt_reps.value()
+                if self.chk_opt_adapt.isChecked():
+                    tmin = reps * sum(sum(self._opt_times('F', v, 'min')) for v in values)
+                    self._eta_set(lbl, f'Tempo estimado: {self._fmt_time(tmin)}\u00a0a\u00a0{self._fmt_time(reps * total)}')
+                    lbl.setToolTip(f'{len(values)} pontos. τ adaptativo: do τ mínimo em todos os pontos ao τ max em todos.')
+                else:
+                    self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(reps * total))
+                    lbl.setToolTip(f'{len(values)} pontos' + (f' × {reps} repetições' if reps > 1 else ''))
+                continue
             self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
         for kind, lbl in getattr(self, 'eta_labels_aud', {}).items():
-            total = sum(self._point_time(kind, v) for v in self._planned_values(kind, 'AUDIO'))
+            total = sum(self._point_time(kind, v, 'AUDIO') for v in self._planned_values(kind, 'AUDIO'))
             self._eta_set(lbl, 'Tempo estimado: ' + self._fmt_time(total))
 
     def _sweep_remaining(self, now):
@@ -389,7 +420,7 @@ class OptMixin:
             rest = self.sweep_measure_time - elapsed
         rest = max(rest, 0.0)
         for v in self.sweep_freqs[self.sweep_idx + 1:]:
-            rest += self._point_time(self.sweep_kind, v)
+            rest += self._point_time(self.sweep_kind, v, self.sweep_target)
         return rest
 
     @staticmethod
@@ -426,18 +457,22 @@ class OptMixin:
         if self.sweep_kind == 'F':
             self._set_spin(self.sp_freq, value)
             self.apply_frequency(value)
+            if self._sweep_new():
+                self._opt_set_point_tau(value)       # τ da varredura (adaptativo ou fixo) no lock-in do OPT101
         else:
             self._set_spin(self.sp_power, value)
             self.laser_power = value
             self.link.write(f"P{value}\n")
 
-    def toggle_sweep(self, kind='F', target='OPT'):
+    def toggle_sweep(self, kind='F', target='OPT', _rep=False):
         if self.average_mode:
             self.flash('A varredura está disponível apenas no Modo Lock-In.')
             return
         if getattr(self, 'dual_active', False):
             self.flash('A varredura casada (Modo Duplo) está em andamento.')
             return
+        if _rep and getattr(self, 'opt_rep', None) is None:
+            return                  # repetições canceladas entre uma varredura e a seguinte
         if getattr(self, 'sweep_active', False) and (self.sweep_kind != kind or self.sweep_target != target):
             self.flash('Já existe uma varredura em andamento.')
             return
@@ -446,6 +481,11 @@ class OptMixin:
             values = self._planned_values(kind, target)
             if not values:
                 return
+            self.sweep_legacy = target != 'OPT' or self._opt_legacy()
+            if not self.sweep_legacy:
+                values = self._opt_begin_run(kind, values, _rep)
+            else:
+                self.opt_rep = None
             self.sweep_kind = kind
             self.sweep_target = target
             self.sweep_freqs = values
@@ -460,14 +500,19 @@ class OptMixin:
                 f_step  = self.sp_dp.value() if target == 'OPT' else self.sp_aud_dp.value()
 
             if kind == 'F':
+                if not self.sweep_legacy:       # f_start/f_stop: faixa pedida; f_step: N pontos (log) ou passo (linear)
+                    f_start, f_stop = sorted((f_start, f_stop))
                 self.sweep_params = {'kind': 'F', 'f_start': f_start, 'f_stop': f_stop, 'f_step': f_step,
                                      'target': target, 'normalize_mode': self.normalize_mode}
             else:
                 self.sweep_params = {'kind': 'P', 'f_start': f_start, 'f_stop': f_stop, 'f_step': f_step,
                                      'target': target, 'freq': self.ref_freq, 'normalize_mode': self.normalize_mode}
             self.sweep_idx = 0
-            if kind == 'F':
+            self.sweep_adapt_info = ''
+            if kind == 'F' and not _rep:
                 self._beam_on_for_sweep()
+            elif kind == 'F':
+                pass            # repetição: o feixe continua ligado desde a anterior
             self.sweep_restore = self._excitation_snapshot() if kind == 'F' else None
             self.sweep_active = True
             self.sweep_state = 'SETTLING'
@@ -496,16 +541,20 @@ class OptMixin:
             bar.setVisible(True)
             self._set_eta_style(True)
         elif kind == self.sweep_kind and target == self.sweep_target:
+            self.opt_rep = None
             self._end_sweep_ui()
             self.flash('Varredura cancelada pelo usuário.')
 
     def _end_sweep_ui(self):
         self.sweep_active = False
         self.sweep_state = 'IDLE'
-        for btn in self.btn_sweeps.values():
-            btn.setText('▶ Varredura')
+        for kind, btn in self.btn_sweeps.items():
+            btn.setText('▶ Iniciar' if kind == 'T' else '▶ Varredura')
             btn.setStyleSheet('background:#cfe2ff;')
             btn.setEnabled(True)
+        for w in (self.sp_tau, self.sp_ot_f, self.sp_ot_pwm, self.sp_ot_tau, self.sp_ot_dt, self.sp_ot_dur):
+            w.setEnabled(True)
+        self._on_opt_adapt(self.chk_opt_adapt.isChecked())
         for btn in getattr(self, 'btn_sweeps_aud', {}).values():
             btn.setText('▶ Varredura')
             btn.setStyleSheet('background:#cfe2ff;')
@@ -523,6 +572,9 @@ class OptMixin:
         self._apply_mod_ui()
 
     def sweep_step(self, now):
+        if self.sweep_kind == 'T':
+            self._opt_time_step(now)
+            return
         v_curr = self.sweep_freqs[self.sweep_idx]
         elapsed = now - self.sweep_timer
         lbl = self.eta_labels[self.sweep_kind] if getattr(self, 'sweep_target', 'OPT') == 'OPT' else self.eta_labels_aud[self.sweep_kind]
@@ -538,7 +590,14 @@ class OptMixin:
             head = f"Varredura {target_nome} [{self.sweep_idx + 1}/{total}] Freq: {v_curr:.2f} Hz"
         else:
             head = f"Varredura {target_nome} [{self.sweep_idx + 1}/{total}] PWM: {v_curr:.1f} %"
-            
+        new = self._sweep_new()
+        if new:
+            rp = getattr(self, 'opt_rep', None)
+            if rp:
+                head = f"Repetição {rp['k']}/{rp['n']} · " + head
+            if self.sweep_kind == 'F':
+                head += f" | τ = {self._fmt_tau(self.sweep_tau_now)}"
+
         if self.sweep_state == 'SETTLING':
             self.sweep_status_text = f"{head} | Estabilizando ({elapsed:.1f}/{self.sweep_settle_time:.1f}s)..."
             if elapsed >= self.sweep_settle_time:
@@ -550,16 +609,23 @@ class OptMixin:
                 count = self.sweep_count
             else:
                 with self.audio_lock: count = self.audio_sweep_count
-            self.sweep_status_text = f"{head} | Medindo ({count} amostras)..."
+            self.sweep_status_text = (f"{head} | Medindo ({elapsed:.1f}/{self.sweep_measure_time:.1f} s)"
+                                      + getattr(self, 'sweep_adapt_info', '') if new else
+                                      f"{head} | Medindo ({count} amostras)...")
             
             if elapsed >= self.sweep_measure_time:
+                if new and self.sweep_kind == 'F' and self.chk_opt_adapt.isChecked() and self._opt_adapt_point(v_curr, now):
+                    return              # ponto refeito com τ maior
                 if target == 'OPT':
                     if self.sweep_count > 0:
                         r = np.concatenate(self.sweep_chunks_r)
                         p = np.concatenate(self.sweep_chunks_p)
                         dc = np.concatenate(self.sweep_chunks_dc)
-                        self.sweep_results.append((v_curr, float(r.mean()), float(r.std()),
-                                                   *circ_stats_deg(p), float(dc.mean())))
+                        if new:
+                            self._opt_record_point(v_curr, r, p, dc)
+                        else:
+                            self.sweep_results.append((v_curr, float(r.mean()), float(r.std()),
+                                                       *circ_stats_deg(p), float(dc.mean())))
                 else:
                     with self.audio_lock:
                         if self.audio_sweep_count > 0:
@@ -586,7 +652,17 @@ class OptMixin:
 
     def _finish_and_export_sweep(self):
         self._end_sweep_ui()
-        if not self.sweep_results: return
+        if self.sweep_kind == 'T':
+            self.opt_rep = None
+            if self.sweep_results:
+                self._opt_export_time()
+            return
+        if not self.sweep_results:
+            self.opt_rep = None
+            return
+        if self._sweep_new():
+            self._opt_finish_new()
+            return
 
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y%m%d_%H%M%S")
@@ -629,12 +705,31 @@ class OptMixin:
         self.show_sweep_results(kind, f0, f1, df, mode_str, filename, png_filename, target_str)
         self.flash(f'Varredura concluída: {filename}', 6.0)
 
+    @staticmethod
+    def _fit_time_exp(t, y):
+        '''Sinal x t: y = A + B·e^(−t/T). Devolve (função, texto) ou None (poucos pontos ou ajuste sem sentido).'''
+        t, y = np.asarray(t, float), np.asarray(y, float)
+        if len(t) < 8:
+            return None
+        try:
+            from scipy.optimize import curve_fit
+            t0 = float(t[0])
+            span = max(float(t[-1] - t0), 1.0)
+            f_exp = lambda x, A, B, T: A + B * np.exp(-(x - t0) / T)
+            popt, pcov = curve_fit(f_exp, t, y, p0=(float(y[-1]), float(y[0] - y[-1]), span / 3.0), maxfev=4000)
+        except Exception:
+            return None
+        if not (np.all(np.isfinite(pcov)) and 0.0 < popt[2] < 20.0 * span):
+            return None
+        return (lambda x: f_exp(x, *popt)), (f'y = A + B·e<sup>−t/T</sup><br>T = {popt[2]:.0f} ± {np.sqrt(pcov[2, 2]):.0f} s<br>'
+                                             f'A = {popt[0]:.4g}<br>B/A = {100 * popt[1] / popt[0]:+.1f} %')
+
     def show_sweep_results(self, kind, f0, f1, df, mode_str, filename, png_filename, target_str='OPT101'):
         res = np.array(self.sweep_results, dtype=float)
         freqs, mag, mag_err, ph, ph_err = res[:, 0], res[:, 1], res[:, 2], res[:, 3], res[:, 4]
 
         win = QtWidgets.QWidget()
-        what = 'Frequência' if kind == 'F' else 'PWM'
+        what = {'F': 'Frequência', 'T': 'Tempo'}.get(kind, 'PWM')
         win.setWindowTitle(f"Resposta em {what} ({target_str}) - {filename}")
         lay = QtWidgets.QVBoxLayout(win)
         
@@ -647,10 +742,11 @@ class OptMixin:
         ctrl_lay.addSpacing(16)
         ctrl_lay.addWidget(QtWidgets.QLabel('Fit:'))
         cmb_fit = QtWidgets.QComboBox()
-        cmb_fit.addItems(['Lei de potência (A·xⁿ)', 'Linear (a + b·x)', 'Sem fit'])
+        cmb_fit.addItems(['Lei de potência (A·xⁿ)', 'Linear (a + b·x)', 'Sem fit'] if kind != 'T' else
+                         ['Exponencial (A + B·e^(−t/T))', 'Linear (a + b·x)', 'Sem fit'])
         cmb_fit.setToolTip('Lei de potência: reta em log-log (n = -1 para 1/f). Ajustada nos dados, independe da escala.\n'
                            'Linear: reta nos eixos lineares.')
-        cmb_fit.setCurrentIndex(0 if kind == 'F' else 1)
+        cmb_fit.setCurrentIndex(0 if kind in ('F', 'T') else 1)
         ctrl_lay.addWidget(cmb_fit)
         lbl_fit = QtWidgets.QLabel('')
         lbl_fit.setTextFormat(QtCore.Qt.TextFormat.RichText)
@@ -664,10 +760,14 @@ class OptMixin:
         lay.addWidget(pw_r)
         lay.addWidget(pw_p)
         pw_p.setXLink(pw_r)
-        beam = max(df * 0.15, 1e-6)
-
+        beam = max(df * 0.15, 1e-6) if kind != 'F' or self.cmb_opt_fspace.currentIndex() == 1 else 0.0
+        if kind == 'T':
+            beam = 0.0
         if kind == 'F': 
-            pw_r.setTitle(f"Resposta em Frequência ({f0:g} a {f1:g} Hz, passo {df:g} Hz) - {target_str}")
+            pw_r.setTitle(f"Resposta em Frequência ({f0:g} a {f1:g} Hz, {len(freqs)} pontos) - {target_str}")
+        elif kind == 'T':
+            pr = self.sweep_params
+            pw_r.setTitle(f"Sinal x t ({pr['freq']:g} Hz, PWM {pr['pwm']:g} %, τ {pr['tau']:g} s, ponto a cada {df:g} s) - {target_str}")
         else:
             fm = self.sweep_params.get('freq', self.ref_freq)
             pw_r.setTitle(f"Resposta em PWM ({f0:g} a {f1:g} %, passo {df:g} %, modulação {fm:g} Hz) - {target_str}")
@@ -684,8 +784,8 @@ class OptMixin:
         fit_curve = pw_r.plot([], [], pen=pg.mkPen('#e67e22', width=2, style=QtCore.Qt.PenStyle.DashLine))
 
         def update_fit():
-            model = {0: 'pow', 1: 'lin'}.get(cmb_fit.currentIndex())
-            res = fit_sweep(freqs, mag, model) if model else None
+            model = {0: 'exp' if kind == 'T' else 'pow', 1: 'lin'}.get(cmb_fit.currentIndex())
+            res = self._fit_time_exp(freqs, mag) if model == 'exp' else (fit_sweep(freqs, mag, model) if model else None)
             if res is None:
                 fit_curve.setData([], [])
                 lbl_fit.setText('')
@@ -701,7 +801,7 @@ class OptMixin:
         update_fit()
 
         pw_p.setLabel('left', 'Fase (Graus)')
-        pw_p.setLabel('bottom', 'Frequência do Laser (Hz)' if kind == 'F' else 'PWM do Laser (%)')
+        pw_p.setLabel('bottom', {'F': 'Frequência do Laser (Hz)', 'T': 'Tempo (s)'}.get(kind, 'PWM do Laser (%)'))
         pw_p.showGrid(x=True, y=True, alpha=0.3)
         pw_p.plot(freqs, ph, pen=pg.mkPen('firebrick', width=1.5), symbol='s', symbolSize=6, symbolBrush='firebrick', symbolPen='firebrick')
         err_p = pg.ErrorBarItem(x=freqs, y=ph, height=2 * ph_err, beam=beam, pen=pg.mkPen((120, 120, 120), width=1.5))
@@ -746,6 +846,9 @@ class OptMixin:
             pw_p.setXRange(xm_min - x_marg, xm_max + x_marg, padding=0)
             pw_p.setYRange(-180, 180, padding=0) # Fixando fase para ocupar altura de -180 a 180
 
+        if kind == 'F' and target_str == 'OPT101' and not getattr(self, 'sweep_legacy', True) \
+                and self.sweep_params.get('f_step', 0) and self.cmb_opt_fspace.currentIndex() == 0:
+            chk_log_x.setChecked(True)          # pontos em escala log: eixo X em log (a mediana usa o mesmo caminho)
         chk_log_x.toggled.connect(update_bounds)
         chk_log_y.toggled.connect(update_bounds)
         

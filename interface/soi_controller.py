@@ -18,7 +18,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.5.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.5.1'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -50,11 +50,12 @@ from soi_win_dual_sweep import DualSweepMixin
 from soi_win_comum import CommonMixin
 from soi_win_dual_fit import DualPanelsMixin
 from soi_win_opt import OptMixin
+from soi_win_opt_sweep import OptSweepMixin
 from soi_win_series import SeriesMixin
 from soi_win_audio import AudioMixin
 
 
-class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, CommonMixin, DualPanelsMixin, OptMixin, SeriesMixin, AudioMixin,
+class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, CommonMixin, DualPanelsMixin, OptMixin, OptSweepMixin, SeriesMixin, AudioMixin,
                    QtWidgets.QMainWindow):
     version = __version__
     def __init__(self):
@@ -527,15 +528,16 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                  'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1', 'sp_dual_model_n',
                  'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin',
                  'sp_cal_a_L', 'sp_cal_b_L', 'sp_dual_adapt_tol', 'sp_dual_reps', 'sp_dt_f', 'sp_dt_pwm', 'sp_dt_tau', 'sp_dt_dt',
-                 'sp_dt_dur')
+                 'sp_dt_dur', 'sp_opt_tau', 'sp_opt_tol', 'sp_opt_reps', 'sp_ot_f', 'sp_ot_pwm', 'sp_ot_tau', 'sp_ot_dt',
+                 'sp_ot_dur')
         checks = ('chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
                   'chk_audio_fft_full', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt',
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_opt_adapt',
                   'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb', 'chk_dual_warm_noise')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
-                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order',
+                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order', 'cmb_opt_fspace', 'cmb_opt_order',
                   'cmb_cal_ref', 'cmb_cal_a', 'cmb_cal_b')   # cmb_cell fora (2.5.0: só a Câmara)
         return spins, checks, combos
 
@@ -626,6 +628,25 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             v = st.value('dual_avoid')
             if v is not None:
                 self.ed_dual_avoid.setText(str(v))
+            v = st.value('opt_avoid')
+            if v is not None:
+                self.ed_opt_avoid.setText(str(v))
+            if st.value('opt_sweeps_20261127') is None:       # varreduras do OPT101 no padrão do Modo Duplo (uma vez)
+                self.cmb_opt_fspace.setCurrentIndex(0)
+                self.sp_df.setValue(float(CAL_SWEEP_N))
+                self.sp_f0.setValue(SWEEP_F0_DEF)
+                self.sp_f1.setValue(CAL_SWEEP_F1)
+                self.cmb_opt_order.setCurrentIndex(0)
+                self.chk_opt_adapt.setChecked(True)
+                self.sp_opt_tau.setValue(ADAPT_TAU_CAP)
+                self.sp_opt_reps.setValue(SWEEP_REPS_DEF)
+                st.setValue('opt_sweeps_20261127', 1)
+            if st.value('pwm_start_40_20261127') is None:     # início padrão 30 -> 40 %; valores editados ficam (uma vez)
+                for sp in (self.sp_dual_p0, self.sp_p0, self.sp_aud_p0):
+                    if abs(sp.value() - 30.0) < 1e-6:
+                        sp.setValue(PWM_SWEEP_START_DEF)
+                st.setValue('pwm_start_40_20261127', 1)
+            self._on_opt_adapt(self.chk_opt_adapt.isChecked())
             v = st.value('sample_name')
             if v is not None:
                 self.ed_sample.setText(str(v))
@@ -688,6 +709,7 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st.setValue('dual_sweep_tau', float(self.sp_dual_tau_f.value()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('dual_avoid', self.ed_dual_avoid.text())
+        st.setValue('opt_avoid', self.ed_opt_avoid.text())
         st.setValue('show_nb', int(self.show_nb))
         st.setValue('opt_supply', self.opt_supply)
         st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))
@@ -708,6 +730,7 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st = getattr(self, 'series_tab', None)
         return bool(getattr(self, 'sweep_active', False) or getattr(self, 'dual_active', False)
                     or getattr(self, 'dual_rep', None)                    # entre duas repetições
+                    or getattr(self, 'opt_rep', None)
                     or getattr(self, 'warm_state', None) is not None      # warm-up antes da varredura
                     or (st is not None and st.runner.active))             # Medidas em Série (também entre etapas)
 

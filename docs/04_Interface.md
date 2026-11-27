@@ -120,9 +120,11 @@ The STM32 (firmware 2.0.0) sends every ADC sample, 12 bits at 200 kS/s, and the 
 ![OPT101 tab with the side panel, the ADC FFT and the Sweeps section open (simulated mode, 1366×768)](images/interface_opt101.png)
 
 **Sweeps (side panel, *Sweeps* section; Lock-In mode only):**
-- *Frequency sweep*: start, end and step (0.1–5000 Hz).
-- *PWM sweep*: start, end and step (0–100 %), at the current frequency.
-- At each point the sweep **waits max(1 s, 9τ) + 0.3 s** for the filter to settle and then **measures for max(1 s, 4τ)**. It shows the estimated time, the remaining time and a progress bar. The same button cancels.
+- *Signal vs f (Hz)*: start, end, spacing (logarithmic with **N points**, or linear with a **step**), **order** (ascending, descending or shuffled), **adaptive τ** (*τ max*, default 1 s; *Precision*, default 2 %), **Repetitions** (default 1; with N > 1 a `_mediana` CSV is added) and **Excluded bands (Hz)**; multiples of 60 Hz are always moved. Same logic as the Dual Mode frequency sweep, using only the OPT101.
+- *Signal vs PWM (%)*: start (any value 0–100 %, default 40 %), end and step, at the current frequency.
+- *Signal vs t (s)*: fixed frequency and PWM, τ, point interval and duration (0 = until Stop); CSV and a plot with an optional exponential fit.
+- Each box has **Wait for warm-up** (default 600 s, since the OPT101 alone takes 600–1200 s to settle).
+- With adaptive τ, each point waits 7τ and averages for max(1 s, 3τ) (τ never below ~3 periods); with it off, it waits 9τ and averages for 1τ. The PWM sweep uses 7τ + max(1 s, 3τ). It shows the estimated time, the remaining time and a progress bar. The same button cancels.
 - When it finishes or is cancelled, a frequency sweep (OPT101, INMP441 or Dual Mode) returns to the previous frequency, resending `F` to the STM32, and to the previous filter settings, including hand-tuned ones.
 - At the end a window opens with magnitude ± standard deviation and phase versus the swept variable. The axes can be switched to log scale, with a **power-law fit (A·xⁿ)** or a **linear** fit.
 

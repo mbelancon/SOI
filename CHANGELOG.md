@@ -10,6 +10,35 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.5.1] - in development
+
+Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same USB protocol). Requested by Marcos on
+2026-11-27: the OPT101 tab adopts the same pattern as Dual Mode.
+
+### Changed: OPT101 tab sweeps follow the Dual Mode pattern
+- The *Sweeps* section now has **Signal vs f (Hz)**, **Signal vs PWM (%)** and **Signal vs t (s)**, with the same
+  fields and logic as Dual Mode, using only the OPT101:
+  - **Signal vs f:** start, end, spacing (logarithmic by default, or linear with a step), N points, order (ascending by
+    default; descending or shuffled), **adaptive τ** with *τ max* (default 1 s) and *Precision* (2 %) driven by the
+    fluctuation of the OPT101 R and phase (same rules as Dual Mode: 7τ wait, average max(1 s, 3τ), τ never below
+    ~3 periods, redo above 2× the Precision), **Repetitions** (default 1; with N > 1 each repetition is saved as
+    `_repK` and a `_mediana` CSV with the point-by-point median and u = 1.25·SD/√N is written), and **Excluded bands
+    (Hz)**. Multiples of 60 Hz are always moved to k·60 ± 3 Hz. The default range is 4–2440 Hz, 35 points.
+  - **Signal vs PWM:** start, end, step; the wait now follows the adaptive rule (7τ + max(1 s, 3τ)) like the Dual Mode
+    PWM sweep, instead of 9τ + 4τ.
+  - **Signal vs t:** fixed frequency and PWM, τ, point interval and duration (0 = until Stop). Each point is the
+    lock-in mean in the interval (error bars = SD); the first 7τ are discarded but time counts from the start. CSV
+    `OPT101_T_sinal_t_...`, plus a plot with an optional exponential fit S(t) = A + B·e^(−t/T).
+  - **Warm-up:** the three boxes start with a **600 s** warm-up (editable, 10–7200 s). The OPT101 alone took 600–1200 s
+    to settle in the 26–27/11 campaign, while the 120 s of Dual Mode was validated only for the normalized S.
+  - CSV header: `# Espacamento`, `# Ordem`, `# Tau`, `# Warm-up`, `# Repeticao`, excluded bands and mains-moved points;
+    new columns `Tau_s` and `Ordem_medida` at the end (the old columns are unchanged).
+  - **Measurement Series** keep the old OPT101 behaviour (linear step, automatic τ, one sweep): the series stages
+    `opt101-f` and `opt101-pwm` are unchanged.
+- **PWM sweep start is now 40 %** by default in all tabs (was 30 %; the laser only emits above ~18 %). It stays
+  editable to any value from 0 to 100 % (also the PWM stages of Measurement Series). A saved value other than 30 % is kept; a saved 30 % becomes 40 % once.
+- Settings saved by older versions for the OPT101 frequency sweep (end, step) are reset once to the new defaults.
+
 ## [2.5.0] - in development
 
 Minor version: only the interface changes (firmware 2.0.0, same USB protocol). Goal: a cleaner window that fits

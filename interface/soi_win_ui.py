@@ -536,7 +536,8 @@ class UiMixin:
             ln.sigPositionChanged.connect(self.on_fit_region_moved)
             self.plot1.getPlotItem().addItem(ln, ignoreBounds=True)
             self.fit_lines.append(ln)
-        # Quadros de varredura (F = frequência, P = potência), num painel recolhível (botão Varreduras)
+        # Quadros de varredura do OPT101 (2.5.1): o mesmo padrão do Modo Duplo, só com o OPT101:
+        # Sinal x f (Hz), Sinal x PWM (%) e Sinal x t (s), num painel recolhível (botão Varreduras)
         self.sweep_kind = 'F'
         self.eta_labels = {}
         self.btn_sweeps = {}
@@ -547,32 +548,107 @@ class UiMixin:
         opt_sw_lay = QtWidgets.QVBoxLayout(self.opt_sweeps_panel)
         opt_sw_lay.setContentsMargins(0, 0, 0, 0)
 
-        def build_box(kind, title, fields):
+        def build_box(kind, title, fields, **kw):
             box, btn, lbl, bar = self._make_sweep_box(
-                title, fields, lambda _=False, k=kind: self.toggle_sweep(k, 'OPT'),
-                warm_pwm=(lambda: max(self.sp_p0.value(), self.sp_p1.value())) if kind == 'P' else None)
+                title, fields,
+                (lambda _=False: self.toggle_opt_time()) if kind == 'T' else (lambda _=False, k=kind: self.toggle_sweep(k, 'OPT')),
+                warm_default=OPT_WARMUP_DEF_S, **kw)
             btn.setToolTip('Requer o Modo Lock-In.')
-            for _, sb in fields:
-                sb.valueChanged.connect(self.update_eta_idle)
+            for _, sb in tuple(fields) + tuple(kw.get('extra', ())):
+                if isinstance(sb, (QtWidgets.QDoubleSpinBox, QtWidgets.QSpinBox)):
+                    sb.valueChanged.connect(self.update_eta_idle)
             self.btn_sweeps[kind], self.eta_labels[kind] = btn, lbl
             self.sweep_bars[('OPT', kind)] = bar
             self.sweep_spins[kind] = [sb for _, sb in fields]
             opt_sw_lay.addWidget(box)
 
-        self.sp_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 3, 0.1, None, 110, ' Hz')
-        self.sp_f1 = self._dspin(0.1, 5000.0, 60.0, 3, 1.0, None, 110, ' Hz')
-        self.sp_df = self._dspin(0.01, 5000.0, 1.0, 3, 0.1, None, 110, ' Hz')
-        build_box('F', 'Varredura em frequência (OPT101)',
-                  (('Início:', self.sp_f0), ('Fim:', self.sp_f1), ('Passo:', self.sp_df)))
+        self.sp_f0 = self._dspin(0.1, 5000.0, SWEEP_F0_DEF, 2, 1.0, None, 110, ' Hz')
+        self.sp_f1 = self._dspin(0.1, 5000.0, CAL_SWEEP_F1, 2, 10.0, None, 110, ' Hz')
+        self.cmb_opt_fspace = QtWidgets.QComboBox()
+        self.cmb_opt_fspace.addItems(['Logarítmico', 'Linear'])
+        self.lbl_opt_fn = QtWidgets.QLabel('N pontos:')
+        self.sp_df = self._dspin(2.0, 5000.0, CAL_SWEEP_N, 0, 1.0, None, 90)     # N pontos (log) ou passo em Hz (linear)
+        self.opt_df_last = {0: float(CAL_SWEEP_N), 1: 10.0}
+        self.cmb_opt_order = QtWidgets.QComboBox()
+        for txt, key in (('Crescente', 'crescente'), ('Decrescente', 'decrescente'), ('Embaralhada', 'embaralhada')):
+            self.cmb_opt_order.addItem(txt, key)
+        self.cmb_opt_order.setToolTip(
+            'Ordem em que as frequências são medidas. Crescente (padrão). Com deriva lenta (aquecimento), crescente ou\n'
+            'decrescente a transformam numa inclinação falsa na curva; embaralhada usa uma nova ordem aleatória a cada\n'
+            'repetição, e a deriva vira ruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV.')
+        self.chk_opt_adapt = QtWidgets.QCheckBox('τ adaptativo')
+        self.chk_opt_adapt.setChecked(True)
+        self.chk_opt_adapt.setToolTip(
+            'Ligado (padrão): o campo vira "τ max" (padrão 1 s): a varredura começa nele e o τ muda ao longo dela sem\n'
+            'passar desse valor, exceto em baixa frequência: o τ nunca fica abaixo de ~3 períodos (3 s em 1 Hz).\n'
+            'Em cada ponto o SOI mede a flutuação de R do OPT101 (desvio-padrão e diferença entre a 1ª e a 2ª metade da\n'
+            'média). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a flutuação cai com 1/√τ), até ~3 períodos\n'
+            '(mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ maior (até o τ max). Cada ponto espera 7τ e\n'
+            'faz a média por max(1 s, 3τ).\n'
+            'Desligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ.')
+        self.lbl_opt_tau = QtWidgets.QLabel('τ max:')
+        self.sp_opt_tau = TauSpinBox(ADAPT_TAU_CAP, None, width=80)
+        self.sp_opt_tol = self._dspin(0.1, 20.0, ADAPT_TOL_DEF, 1, 0.5, None, 80, ' %')
+        self.sp_opt_tol.setToolTip('Flutuação aceitável de R do OPT101 em cada ponto (padrão 2 %). Menor = τ maior e\n'
+                                   'varredura mais lenta.')
+        self.sp_opt_reps = QtWidgets.QSpinBox()
+        self.sp_opt_reps.setRange(1, 20)
+        self.sp_opt_reps.setValue(SWEEP_REPS_DEF)
+        self.sp_opt_reps.setSuffix(' ×')
+        self.sp_opt_reps.setFixedWidth(60)
+        self.sp_opt_reps.setToolTip(
+            'Repetições: a varredura é feita N vezes seguidas (laser ligado entre elas; warm-up só antes da 1ª).\n'
+            'Cada repetição grava o CSV normal (_rep1, _rep2...) e no fim um CSV _mediana com a mediana ponto a ponto\n'
+            'e a incerteza u = 1,25·DP/√N. 1 = uma varredura só.')
+        self.ed_opt_avoid = QtWidgets.QLineEdit('')
+        self.ed_opt_avoid.setPlaceholderText('ex.: 170,7')
+        self.ed_opt_avoid.setFixedWidth(90)
+        self.ed_opt_avoid.setToolTip(
+            'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";", que\n'
+            'ficam sempre excluídas. Em volta de cada uma, ±2 % da frequência (mínimo ±3 Hz), nenhum ponto é medido: um\n'
+            'ponto que cairia nessa faixa vai para 1 Hz além da borda, e fica listado no cabeçalho do CSV. Os múltiplos\n'
+            'de 60 Hz também são deslocados (k·60 ± 3 Hz). Vazio = só a rede.')
+        build_box('F', 'Sinal x f (Hz)',
+                  (('Início:', self.sp_f0), ('Fim:', self.sp_f1), ('Espaçamento:', self.cmb_opt_fspace),
+                   (self.lbl_opt_fn, self.sp_df), ('Ordem:', self.cmb_opt_order)),
+                  extra=(('Faixas excluídas (Hz):', self.ed_opt_avoid),),
+                  more=(((self.lbl_opt_tau, self.sp_opt_tau), ('', self.chk_opt_adapt), ('Precisão:', self.sp_opt_tol),
+                         ('Repetições:', self.sp_opt_reps)),))
         self.sp_p0 = self._dspin(0.0, 100.0, PWM_SWEEP_START_DEF, 1, 1.0, None, 110, ' %')
+        self.sp_p0.setToolTip('Início da varredura em PWM: qualquer valor de 0 a 100 % (padrão 40 %; o laser só emite acima de ~18 %).')
         self.sp_p1 = self._dspin(0.0, 100.0, 100.0, 1, 1.0, None, 110, ' %')
         self.sp_dp = self._dspin(0.1, 100.0, 10.0, 1, 1.0, None, 110, ' %')
-        build_box('P', 'Varredura em PWM (OPT101)',
-                  (('Início:', self.sp_p0), ('Fim:', self.sp_p1), ('Passo:', self.sp_dp)))
+        build_box('P', 'Sinal x PWM (%)',
+                  (('Início:', self.sp_p0), ('Fim:', self.sp_p1), ('Passo:', self.sp_dp)),
+                  warm_pwm=lambda: max(self.sp_p0.value(), self.sp_p1.value()))
+        self.sp_ot_f = self._dspin(0.5, 5000.0, 10.0, 2, 1.0, None, 100, ' Hz')
+        self.sp_ot_pwm = self._dspin(0.0, 100.0, 100.0, 1, 5.0, None, 90, ' %')
+        self.sp_ot_tau = TauSpinBox(1.0, None, width=80)
+        self.sp_ot_dt = self._dspin(0.5, 600.0, 5.0, 1, 1.0, None, 80, ' s')
+        self.sp_ot_dur = self._dspin(0.0, 1440.0, 10.0, 1, 1.0, None, 90, ' min')
+        self.sp_ot_tau.setToolTip('τ do lock-in do OPT101 durante a medida (restaurado no fim). Use τ menor que o intervalo\n'
+                                  'entre pontos para os pontos serem independentes.')
+        self.sp_ot_dt.setToolTip('Cada ponto é a média (e o desvio-padrão, nas barras de erro) do lock-in neste intervalo.')
+        self.sp_ot_dur.setToolTip('Duração da medida; 0 = até clicar em Parar. O CSV e o PNG são gravados no fim.')
+        build_box('T', 'Sinal x t (s)',
+                  (('Frequência:', self.sp_ot_f), ('', self._mains_warn(self.sp_ot_f)), ('PWM:', self.sp_ot_pwm)),
+                  extra=(('τ:', self.sp_ot_tau), ('Ponto a cada:', self.sp_ot_dt), ('Duração:', self.sp_ot_dur)),
+                  warm_pwm=lambda: self.sp_ot_pwm.value())
+        self.btn_sweeps['T'].setText('▶ Iniciar')
+        self.btn_sweeps['T'].setToolTip('O laser começa a modular na frequência e no PWM escolhidos ao clicar em Iniciar. Os\n'
+                                        'primeiros 7τ (assentamento do lock-in) são descartados; o tempo é contado desde o\n'
+                                        'início (o aquecimento aparece). Requer o Modo Lock-In.')
         self.btn_sweep = self.btn_sweeps['F']
         self.btn_sweep_p = self.btn_sweeps['P']
         self.lbl_eta = self.eta_labels['F']
         self.lbl_eta_p = self.eta_labels['P']
+        self.cmb_opt_fspace.currentIndexChanged.connect(self._on_opt_fspace)
+        self.chk_opt_adapt.toggled.connect(self._on_opt_adapt)
+        self.cmb_opt_fspace.currentIndexChanged.connect(self.update_eta_idle)
+        self.chk_opt_adapt.toggled.connect(self.update_eta_idle)
+        self.sp_opt_reps.valueChanged.connect(self.update_eta_idle)
+        self.ed_opt_avoid.editingFinished.connect(self.update_eta_idle)
+        self._on_opt_adapt(True)
         self._set_eta_style(False)
         self.update_eta_idle()
         sec_sw = self._side_section('Varreduras', 'opt_sweeps', False, opt_side)

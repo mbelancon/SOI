@@ -163,6 +163,7 @@ ADAPT_MAX_DRIFT_WAIT = 0  # médias extras (mesmo τ) enquanto S ou Δφ derivam
 # aditivo; a flutuação medida na janela subestima o erro e o τ adaptativo não converge. Opção (padrão): τ adaptativo
 # só acima de LOWF_FMAX, τ fixo por faixa abaixo (f < limite -> τ); acima, o adaptativo recomeça de LOWF_TAU_ABOVE
 NOISE_LASER_TOL_HZ = 0.15  # Detectar ruídos no warm-up: tons a ±0,15 Hz de k·f do laser são do laser
+OPT_WARMUP_DEF_S = 600.0  # warm-up padrão da aba OPT101 (s): o OPT101 sozinho levou 600-1200 s para estabilizar (campanha de 26-27/11)
 WARMUP_DEF_S = 120.0      # "Aguardar warm-up" das varreduras (s); 600 -> 120 s em 26/11 (deriva entre varreduras ≤ 0,24 %)
 LOWF_FMAX = 40.0
 LOWF_TAU_BANDS = ((LOWF_FMAX, ADAPT_TAU_CAP),)   # antes 8 s < 15 Hz e 4 s < 40 Hz; desde 17/11 usa o τ max do quadro
@@ -177,7 +178,7 @@ SWEEP_TAU_DEF = 1.0
 LOWF_TAU_FIXED = 4.0       # τ fixo abaixo de LOWF_FMAX com o τ adaptativo desligado
 TAU_USEFUL_MAX = 4.0       # acima disso: aviso "τ > 4 s não melhora: use repetições" (não bloqueia)
 SWEEP_REPS_DEF = 1         # 3 -> 1 em 26/11: dispersão entre repetições 0,1-0,6 % (uma varredura basta)
-PWM_SWEEP_START_DEF = 30.0  # início padrão das varreduras em PWM (%): o laser só emite acima de ~18 % (26/11)
+PWM_SWEEP_START_DEF = 40.0  # início padrão das varreduras em PWM (%): 30 -> 40 em 27/11 (o laser só emite acima de ~18 %; o início é editável, 0-100 %)
 DUAL_NODATA_RETRIES = 2     # ponto sem dados de um sensor: mede de novo até 2 vezes antes de pular
 MEDIAN_EFF = 1.25          # incerteza da mediana = 1,25·DP/√N (eficiência da mediana)
 # Monitor de ruído pelas vizinhas (aprovado por Marcos em 18/11; limites da campanha de aquecimento de 18/11): a cada
