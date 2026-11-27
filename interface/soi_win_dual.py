@@ -351,12 +351,9 @@ class DualMixin:
         return None if lowf_band_tau(f) is None else self._adapt_cap(kind)
 
     def _fixed_tau_at(self, kind, f):
-        """τ do ponto f com o τ adaptativo desligado: o do campo; nas varreduras em frequência, abaixo de LOWF_FMAX,
-        pelo menos LOWF_TAU_FIXED (espera 7τ, média 3τ)."""
-        tau = float(self.dual_tau_w[kind].value())
-        if kind in ('F', 'M') and f < LOWF_FMAX:
-            return max(tau, LOWF_TAU_FIXED)
-        return tau
+        """τ do ponto f com o τ adaptativo desligado: o do campo em toda a faixa (desde 2.5.0 sem os 4 s abaixo de
+        40 Hz; a célula nova mede bem em baixa frequência)."""
+        return float(self.dual_tau_w[kind].value())
 
     def _adapt_cap(self, kind):
         """τ max do τ adaptativo: o valor do campo "τ max" do quadro."""
@@ -394,7 +391,7 @@ class DualMixin:
             self.dual_tau_lbl[k].setText('τ max:' if on else 'τ:')
             self.dual_tau_w[k].setToolTip(
                 'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\n'
-                'sem passar desse valor (abaixo de 40 Hz, com "só f > 40 Hz", é o τ usado).\n'
+                'sem passar desse valor.\n'
                 'É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa.' if on else
                 'τ dos dois lock-ins durante a varredura (integração longa): espera 9τ e faz a média por 1τ em\n'
                 'cada ponto. É o mesmo τ do INMP441: mudar aqui muda lá e vice-versa (e na outra varredura).')
@@ -418,9 +415,12 @@ class DualMixin:
             return adapt_times(tau)
         if self.dual_mode_w[kind].currentIndex() == 1:
             tau = self.dual_tau_w[kind].value()
-            if kind in ('F', 'M') and value < LOWF_FMAX:
-                return adapt_times(self._fixed_tau_at(kind, value))
+            if kind == 'P':
+                return adapt_times(tau)      # só a amplitude muda entre pontos: 7τ basta (resto < 1 % ao dobrar o PWM)
             return 9.0 * tau + 0.3, max(0.5, tau)
+        if kind == 'P':
+            # Varredura em PWM (26/11): mesma espera do τ adaptativo, 7τ + média max(1 s, 3τ) (antes 9τ + 4τ)
+            return adapt_times(max(lp_tau(self.cutoff_lp, RATE.FS), lp_tau(self.audio_cutoff_lp, AUDIO_FS_REAL)))
         if kind in ('F', 'M'):
             # A troca de frequência aplica os cortes automáticos nos dois lock-ins (apply_frequency)
             lp = get_effective_cutoffs(value)[0]
@@ -508,52 +508,6 @@ class DualMixin:
         self.sp_tau.setValue(tau)
         self.sp_audio_tau.setValue(tau)
 
-    def refine_dual_resonance(self):
-        '''Ajusta a ressonância na varredura em frequência atual e mede mais pontos em volta do f0 ajustado.'''
-        if self.dual_active:
-            self.flash('Espere a varredura atual terminar (ou cancele) antes de refinar.')
-            return
-        if self.ext_mode:
-            self.flash('Modulação óptica: meça os pontos da ressonância na varredura manual.')
-            return
-        if not getattr(self, 'dual_results', None) or self.dual_kind != 'F':
-            self.flash('Rode (ou abra) uma varredura em frequência antes de refinar a ressonância.')
-            return
-        x, ro, ro_e, ra, ra_e, pa, pa_e, po, po_e = self._dual_arrays()
-        keep = np.ones(x.size, dtype=bool)
-        keep[[i for i in self.dual_excluded if i < x.size]] = False
-        ok = keep & (ro > 0) & (ra > 0) & (x >= 250.0)
-        k = np.flatnonzero(ok)[np.argsort(x[ok])]
-        f, s = x[k], ra[k] / ro[k]
-        s_rel = np.sqrt((ra_e[k] / ra[k]) ** 2 + (ro_e[k] / ro[k]) ** 2)
-        dphi = np.degrees(np.unwrap(np.radians(pa[k] - po[k])))
-        dphi_e = np.hypot(pa_e[k], po_e[k])
-        found = find_resonance(f, s) if f.size >= 6 else None
-        if found is None:
-            self.flash('Não achei um pico de ressonância acima de 250 Hz nesta varredura.')
-            self.lbl_dual_refine.setText('sem pico claro acima de 250 Hz')
-            return
-        f0, width, how = found[1], found[2], 'pelo pico'
-        fit = fit_resonance(f, s, s_rel, dphi, dphi_e, target='mag', window=found[3])
-        if fit is not None and found[3][0] <= fit['f0'] <= found[3][1] and np.isfinite(fit['fwhm']) and fit['fwhm'] > 0:
-            f0, width, how = fit['f0'], fit['fwhm'], f"ajuste: Q = {fit['q']:.3g}"
-        half = float(np.clip(0.5 * width, 0.02 * f0, 0.25 * f0))   # banda de meia potência (f0 ± f0/2Q)
-        lo, hi = max(0.1, f0 - half), min(5000.0, f0 + half)
-        n = int(round(self.sp_dual_refine_n.value()))
-        new = [round(float(v), 2) for v in np.linspace(lo, hi, n)]
-        have = np.sort(x)
-        new = [v for v in new if have.size == 0 or np.min(np.abs(have - v)) > 0.005 * v]
-        if not new:
-            self.flash('Os pontos em volta da ressonância já foram medidos.')
-            return
-        kind = self.dual_src if self.dual_src in ('F', 'M') else 'F'
-        info = (f'Refino da ressonância: +{len(new)} pontos de {new[0]:g} a {new[-1]:g} Hz em torno de '
-                f'f0 = {f0:.4g} Hz (largura {width:.3g} Hz, {how}); medidos com {DUAL_MODE_NAMES[self.dual_mode_w[kind].currentIndex()]}'
-                + (f', τ = {self.dual_tau_w[kind].value():g} s' if self.dual_mode_w[kind].currentIndex() == 1 else ''))
-        self.lbl_dual_refine.setText(f'f0 ≈ {f0:.4g} Hz ({new[0]:.4g}–{new[-1]:.4g} Hz)')
-        self.lbl_dual_refine.setToolTip(info)
-        self.toggle_dual_sweep(kind, refine=(new, info))
-
     def _check_cal_conditions(self):
         '''Antes da varredura da calibração: avisa se o PWM não está em 100 %, se algum filtro de 60 Hz está ligado
         ou se "Usar" (calibração aplicada) está marcado. Devolve False se o usuário cancelar.'''
@@ -605,22 +559,24 @@ class DualMixin:
         row.addWidget(self.chk_man_auto)
         row.addStretch(1)
         lay.addLayout(row)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel('Passo mínimo:'))
+        row = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)     # 2.5.0: quebra no painel lateral
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('Passo mínimo:'))
         self.sp_man_step = self._dspin(0.1, 100.0, 5.0, 1, 1.0, None, 80, ' %')
         self.sp_man_step.setToolTip('Distância mínima (em %) entre a frequência de um ponto novo e a do último gravado.')
-        row.addWidget(self.sp_man_step)
-        row.addWidget(QtWidgets.QLabel('estável:'))
+        g.addWidget(self.sp_man_step)
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('estável:'))
         self.sp_man_tol = self._dspin(0.01, 10.0, 0.5, 2, 0.1, None, 80, ' %')
         self.sp_man_tol.setToolTip('Desvio padrão máximo da frequência (último segundo, em % dela) para considerá-la estável.\n'
                                    'Durante a espera e a medida do ponto, ela pode mudar no máximo 2× isso (mínimo 1 %).')
-        row.addWidget(self.sp_man_tol)
-        row.addWidget(QtWidgets.QLabel('τ:'))
+        g.addWidget(self.sp_man_tol)
+        g = row.group()
+        g.addWidget(QtWidgets.QLabel('τ:'))
         self.sp_man_tau = TauSpinBox(CAL_SWEEP_TAU, None, width=80)
         self.sp_man_tau.setToolTip('τ dos dois lock-ins durante a varredura manual (restaurado no fim). Cada ponto espera\n'
                                    '9τ depois que a frequência estabiliza e faz a média por 1τ.')
-        row.addWidget(self.sp_man_tau)
-        row.addStretch(1)
+        g.addWidget(self.sp_man_tau)
         lay.addLayout(row)
         row = QtWidgets.QHBoxLayout()
         self.btn_man_start = QtWidgets.QPushButton('▶ Iniciar')
@@ -638,9 +594,9 @@ class DualMixin:
         self.lbl_man = QtWidgets.QLabel('')
         self.lbl_man.setStyleSheet('font-family:Consolas,monospace;')
         self.lbl_man.setWordWrap(True)
-        row.addWidget(self.lbl_man)
         row.addStretch(1)
         lay.addLayout(row)
+        lay.addWidget(self.lbl_man)
         return box
 
     def toggle_manual_sweep(self, slot=None):

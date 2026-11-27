@@ -107,8 +107,7 @@ class CalMixin:
                              for s, k in (('A', a), ('B', b)) if k is not None) if w]
         pair = (f'<span style="color:#2e7d32;">✓ par indicado: {why}</span>' if ok else
                 f'<span style="color:#c62828;">✗ par não indicado: {why}</span>')
-        info = (f'<b>Célula:</b> {CELLS.get(cell, cell)} &nbsp; <b>Curva esperada nas duas:</b> S ∝ f<sup>−{n:g}</sup>, '
-                f'fase constante &nbsp; {pair}')
+        info = pair                                   # 2.5.0: sem "Célula" e "Curva esperada" (Marcos, 25/11)
         if warns:
             info += '<br><span style="color:#b35c00;">⚠ ' + '<br>⚠ '.join(warns) + '</span>'
         self.lbl_cal_ref_info.setText(info)
@@ -171,7 +170,8 @@ class CalMixin:
             return
         m = re.search(r'#\s*Celula\s*=\s*(\w+)', head)
         cell = self.cmb_cell.currentData() or 'Camara'
-        if m and m.group(1) != cell:
+        # arquivos gravados pela 2.5.0 em desenvolvimento têm "# Celula = None" (combo sem item): a célula é a Câmara
+        if m and m.group(1) not in (cell, 'None'):
             QtWidgets.QMessageBox.warning(
                 self, 'Abrir varredura', f'Esta varredura foi feita na célula {CELLS.get(m.group(1), m.group(1))}, e a '
                 f'escolhida é {CELLS.get(cell, cell)}. A calibração vale para uma célula só: troque a célula no topo ou '

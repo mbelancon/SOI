@@ -64,6 +64,7 @@ EN_EXACT = {
     'a': 'to',
     'fim': 'end',
     'de': 'from',
+    'Tempo': 'Time',
 }
 
 
@@ -578,8 +579,8 @@ EN = {
         'Resolution test',
     'Mede, com sinal estável (laser desligado ou luz constante), quanto a sobreamostragem\nreduz o ruído de fato: ruído × OSR comparado com o ideal 1/√OSR, bits efetivos e\nhistograma dos códigos crus do ADC.':
         'Measures, with a steady signal (laser off or constant light), how much oversampling\nactually reduces the noise: noise × OSR compared with the ideal 1/√OSR, effective bits and\nhistogram of the raw ADC codes.',
-    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser (<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real':
-        'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and laser reference (<span style="color:#009600;">green dashed</span>, 0/1) - real-time oscilloscope',
+    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser (<span style="color:#009600;">verde tracejado</span>, 0/1)':
+        'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and laser reference (<span style="color:#009600;">green dashed</span>, 0/1)',
     'Tempo (s)':
         'Time (s)',
     'Limiar de Saturação':
@@ -798,8 +799,8 @@ EN = {
         'Phase of each sensor (unwrapped)',
     'fase (graus)':
         'phase (degrees)',
-    'Sem dados: escolha uma varredura acima e clique em ▶ Varredura.':
-        'No data: choose a sweep above and click ▶ Sweep.',
+    'Sem dados: escolha uma medida no painel à esquerda e clique em ▶ Varredura.':
+        'No data: choose a measurement in the left panel and click ▶ Sweep.',
     'Calibração do microfone ▸':
         'Microphone calibration ▸',
     'Mostra ou esconde a calibração do microfone.\nEscolha a referência (padrão de calibração): ela define a curva teórica esperada e a célula (OPC ou câmara).\nCom o painel fechado, "Fitar padrão" não é aplicado.':
@@ -1046,10 +1047,10 @@ EN = {
         'SNR = 20·log10(|⟨Z⟩| / σ), with Z = X + jY the lock-in output and σ the standard deviation of X and Y (mean of the',
     'duas quadraturas). Inclui tudo o que flutua na janela (ruído e deriva) e melhora com τ maior.':
         'two quadratures). It includes everything that fluctuates in the window (noise and drift) and improves with a larger τ.',
-    'Verde ≥ 25 dB (erro do ponto ≲ 10 %, perto do piso de ~7 % em baixa frequência),':
-        'Green ≥ 25 dB (point error ≲ 10 %, near the ~7 % low-frequency floor),',
-    'amarelo 15–25 dB (bem detectado, erro ~10 a 25 %), vermelho abaixo (≳ 40 %).':
-        'yellow 15–25 dB (well detected, error ~10 to 25 %), red below (≳ 40 %).',
+    'Verde ≥ 40 dB (erro de uma varredura ≲ 2 %), amarelo 30–40 dB':
+        'Green ≥ 40 dB (error of one sweep ≲ 2 %), yellow 30–40 dB',
+    '(~2 a 7 %), vermelho abaixo (> ~7 %); o erro cai ~3·10^(−SNR/20) (bateria de 26/11).':
+        '(~2 to 7 %), red below (> ~7 %); the error falls as ~3·10^(−SNR/20) (26/11 battery).',
     'OPT: precisa do Modo Lock-In na aba OPT101. INMP: precisa do lock-in do INMP441 ligado.':
         'OPT: needs Lock-In Mode in the OPT101 tab. INMP: needs the INMP441 lock-in on.',
     'ℹ Resultados (passe o mouse)':
@@ -1324,8 +1325,8 @@ EN = {
         'Step:',
     "<span style='color:#1a7f1a;'>●</span> STM32 conectado (":
         "<span style='color:#1a7f1a;'>●</span> STM32 connected (",
-    "<span style='color:#1f5fbf;'>●</span> Simulação (sem STM32)":
-        "<span style='color:#1f5fbf;'>●</span> Simulation (no STM32)",
+    "<span style='color:#d07000;font-weight:bold;'>● SIMULAÇÃO (sem STM32)</span>":
+        "<span style='color:#d07000;font-weight:bold;'>● SIMULATION (no STM32)</span>",
     "<span style='color:#d07000;'>●</span> STM32 desconectado, procurando...":
         "<span style='color:#d07000;'>●</span> STM32 disconnected, searching...",
     'Nenhuma porta do STM32 (USB VID 0x0483) encontrada.':
@@ -1432,6 +1433,10 @@ EN = {
         'The matched sweep (Dual Mode) is running.',
     'Varredura cancelada pelo usuário.':
         'Sweep cancelled by the user.',
+    'Fim da varredura: PWM 0, feixe desligado.':
+        'Sweep finished: PWM 0, beam off.',
+    ' % religado para a varredura.':
+        ' % switched back on for the sweep.',
     ' | Estabilizando (':
         ' | Settling (',
     ' | Medindo (':
@@ -1689,7 +1694,7 @@ EN = {
     'Modo Duplo, varredura manual: ': 'Dual Mode, manual sweep: ',
     ' pontos': ' points',
     'Modulação óptica: a referência é o próprio OPT101 (a fase dele fica perto de −90° por construção; S e Δφ valem como na eletrônica).': 'Optical modulation: the reference is the OPT101 itself (its phase stays near −90° by construction; S and Δφ are valid as with electronic modulation).',
-    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico (<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real': 'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and optical PLL reference (<span style="color:#009600;">dashed green</span>, cos θ ≥ 0) - real-time oscilloscope',
+    'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico (<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0)': 'Raw ADC signal (PA0, <span style="color:#000;">black</span>) and optical PLL reference (<span style="color:#009600;">dashed green</span>, cos θ ≥ 0)',
     'Eletrônica': 'Electronic',
     'Óptica': 'Optical',
     '○ procurando': '○ searching',
@@ -1708,7 +1713,7 @@ EN = {
     '(alvo ': '(target ',
     'Flutuação de S = R_INMP441/R_OPT101 e de Δφ durante a medida de cada ponto: desvio-padrão\n(ou, se maior, a diferença entre a 1ª e a 2ª metade). Com τ adaptativo, é o que define o τ.': 'Fluctuation of S = R_INMP441/R_OPT101 and of Δφ during the measurement of each point: standard deviation\n(or, if larger, the difference between the 1st and 2nd half). With adaptive τ, this is what sets τ.',
     'τ adaptativo': 'Adaptive τ',
-    'Ligado: o campo do quadro vira "τ max" (padrão 4 s; o ruído em baixa frequência é lento): a varredura começa\nnele e o τ muda ao longo dela sem passar desse valor.\nEm cada ponto o SOI mede a flutuação da saída dos lock-ins (desvio-padrão de S e de Δφ durante\na medida e a diferença entre a 1ª e a 2ª metade). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a\nflutuação cai com 1/√τ), até ~3 períodos (mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ\nmaior (até o τ max). Cada ponto espera 7τ e faz a média por max(1 s, 3τ). Em alta frequência, com\nsinal limpo, o τ cai para ~0,1 s e o ponto leva ~2 s.\nDesligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ (como antes).': 'On: the field of the box becomes "τ max" (default 4 s; noise at low frequency is slow): the sweep starts\nthere and τ changes along it without exceeding this value.\nAt each point SOI measures the fluctuation of the lock-in output (standard deviation of S and Δφ during\nthe measurement and the difference between the 1st and 2nd half). Well below the Precision, the τ of the next point decreases (the\nfluctuation falls as 1/√τ), down to ~3 periods (minimum 100 ms); above 2× the Precision, the point is measured again with a larger τ\n(up to τ max). Each point waits 7τ and averages for max(1 s, 3τ). At high frequency, with a\nclean signal, τ drops to ~0.1 s and a point takes ~2 s.\nOff: the field is "τ" again, fixed for the whole sweep; 9τ wait and 1τ average (as before).',
+    'Ligado (padrão): o campo do quadro vira "τ max" (padrão 1 s): a varredura começa nele e o τ muda ao longo\ndela sem passar desse valor, exceto em baixa frequência: o τ nunca fica abaixo de ~3 períodos, então abaixo\nde ~3 Hz ele passa do τ max (3 s em 1 Hz).\nEm cada ponto o SOI mede a flutuação da saída dos lock-ins (desvio-padrão de S e de Δφ durante\na medida e a diferença entre a 1ª e a 2ª metade). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a\nflutuação cai com 1/√τ), até ~3 períodos (mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ\nmaior (até o τ max). Cada ponto espera 7τ e faz a média por max(1 s, 3τ). Em alta frequência, com\nsinal limpo, o τ cai para ~0,1 s e o ponto leva ~2 s.\nDesligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ (como antes).': 'On (default): the field of the box becomes "τ max" (default 1 s): the sweep starts there and τ changes along\nit without exceeding this value, except at low frequency: τ never goes below ~3 periods, so below\n~3 Hz it exceeds τ max (3 s at 1 Hz).\nAt each point SOI measures the fluctuation of the lock-in output (standard deviation of S and Δφ during\nthe measurement and the difference between the 1st and 2nd half). Well below the Precision, the τ of the next point decreases (the\nfluctuation falls as 1/√τ), down to ~3 periods (minimum 100 ms); above 2× the Precision, the point is measured again with a larger τ\n(up to τ max). Each point waits 7τ and averages for max(1 s, 3τ). At high frequency, with a\nclean signal, τ drops to ~0.1 s and a point takes ~2 s.\nOff: the field is "τ" again, fixed for the whole sweep; 9τ wait and 1τ average (as before).',
     'Flutuação aceitável da saída em cada ponto: S em %, Δφ na mesma fração em radianos\n(2 % = 1,15°; padrão 2 %). Menor = τ maior e varredura mais lenta.': 'Acceptable output fluctuation at each point: S in %, Δφ the same fraction in radians\n(2 % = 1.15°; default 2 %). Smaller = larger τ and slower sweep.',
     'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\nsem passar desse valor (abaixo de 40 Hz, com "só f > 40 Hz", é o τ usado).\nÉ o mesmo τ do INMP441: mudar aqui muda lá e vice-versa.': 'τ max of the sweep (adaptive τ on): the sweep starts at it and τ changes according to the fluctuation,\nnever above this value (below 40 Hz, with "only f > 40 Hz", it is the τ used).\nIt is the same τ as the INMP441: changing it here changes it there and vice versa.',
     ' | último ponto: τ = ': ' | last point: τ = ',
@@ -1818,6 +1823,9 @@ EN = {
     '⚙ Configurações': '⚙ Settings',
     'Trigger dos lock-ins (eletrônico pelo STM32 ou óptico pelo OPT101), alimentação do\nOPT101 (3,3 V ou 5 V) e Finalizar experimento.': 'Lock-in trigger (electronic from the STM32 or optical from the OPT101), OPT101\nsupply (3.3 V or 5 V) and Finish experiment.',
     'Configurações': 'Settings',
+    'Desempenho': 'Performance',
+    'Modo leve (para computadores lentos)': 'Light mode (for slow computers)',
+    'Desenha a tela 10 vezes por segundo (em vez de 25), com menos pontos no osciloscópio, e não processa o INMP441 enquanto você não está na aba dele nem em medida ou Modo Duplo (ao voltar, o lock-in dele recomeça e leva ~3τ para estabilizar). Os dados medidos e salvos são os mesmos. Use se a interface engasgar ou houver perdas de USB.': 'Redraws the screen 10 times per second (instead of 25), with fewer points on the oscilloscope, and does not process the INMP441 unless you are on its tab or in a measurement or Dual Mode (when you come back, its lock-in restarts and takes ~3τ to settle). Measured and saved data are the same. Use it if the interface stutters or USB losses appear.',
     'Trigger (referência dos lock-ins)': 'Trigger (lock-in reference)',
     'Eletrônico (STM32)': 'Electronic (STM32)',
     'Óptico (OPT101, chopper)': 'Optical (OPT101, chopper)',
@@ -2016,6 +2024,10 @@ EN = {
     'Nome:': 'Name:',
     'medida(s) concluída(s) no gráfico': 'completed measurement(s) on the plot',
     'Tempo (ms)': 'Time (ms)',
+    'Tempo (µs)': 'Time (µs)',
+    'Tempo antes do instante atual (µs)': 'Time before the current instant (µs)',
+    'Tempo desde o início do pulso (ms)': 'Time since the pulse start (ms)',
+    'Tempo desde o início do pulso (µs)': 'Time since the pulse start (µs)',
     'PWM (%)': 'PWM (%)',
     'Tempo (min)': 'Time (min)',
     'Repetições: a varredura é feita N vezes seguidas (laser ligado entre elas; warm-up só antes da 1ª).\nCada repetição grava o CSV normal (_rep1, _rep2...) e no fim um CSV _mediana com a mediana ponto a ponto\ne a incerteza u = 1,25·DP/√N (colunas Incerteza_S_Pct e Incerteza_Fase_Graus). 1 = uma varredura só.\nEntre 40 e 200 Hz os erros são pontos isolados (sons do ambiente de alguns segundos), em frequências\ndiferentes a cada varredura: a mediana os descarta, e um τ maior não (campanha de ruído de 18/11).': 'Repetitions: the sweep runs N times in a row (laser on between them; warm-up only before the 1st).\nEach repetition saves the usual CSV (_rep1, _rep2...) and at the end a _mediana CSV with the point-by-point median\nand the uncertainty u = 1.25·SD/√N (columns Incerteza_S_Pct and Incerteza_Fase_Graus). 1 = a single sweep.\nBetween 40 and 200 Hz the errors are isolated points (room sounds lasting a few seconds), at different\nfrequencies in each sweep: the median rejects them, a longer τ does not (noise campaign, 2026-11-18).',
@@ -2114,6 +2126,98 @@ EN = {
     'Evitar (Hz):': 'Avoid (Hz):',
     'ex.: 170,7': 'e.g. 170.7',
     'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";".\nPontos da varredura dentro da janela de uma delas, ±2 % da frequência (mínimo ±3 Hz), vão para 1 Hz além\nda borda, do lado em que estavam (a janela cresce com a frequência: o harmônico k de uma fonte que varia\nδ varia k·δ), e ficam listados no cabeçalho do CSV. Vazio = nenhuma.': 'Frequencies of known noise sources (e.g. the laser fan at ~170 Hz), separated by ";".\nSweep points inside the window of one of them, ±2 % of the frequency (at least ±3 Hz), move 1 Hz beyond\nthe edge, on the side they were on (the window grows with frequency: harmonic k of a source that drifts by\nδ drifts by k·δ), and are listed in the CSV header. Empty = none.',
-    'Ordem em que as frequências são medidas. Crescente ou decrescente: uma deriva lenta (aquecimento)\nvira uma inclinação falsa na curva. Embaralhada (padrão): nova ordem aleatória a cada repetição, e a deriva vira\nruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\nOs CSV continuam em ordem de frequência, com as colunas Ordem_medida (posição em que o ponto foi medido)\ne Hora_ponto (fim do ponto).': 'Order in which the frequencies are measured. Ascending or descending: a slow drift (warm-up)\nbecomes a false slope in the curve. Shuffled (default): a new random order in each repetition, and the drift becomes\nnoise that the median of the repetitions reduces. The seed goes in the CSV header (the order can be rebuilt).\nThe CSVs stay in frequency order, with the columns Ordem_medida (position in which the point was measured)\nand Hora_ponto (end of the point).',
+    'Ordem em que as frequências são medidas. Crescente (padrão desde 26/11: com a célula nova a deriva entre\nvarreduras é ≤ 0,24 %). Com deriva lenta (aquecimento), crescente ou decrescente a transformam numa inclinação\nfalsa na curva; embaralhada usa uma nova ordem aleatória a cada repetição, e a deriva vira ruído que a\nmediana das repetições reduz. A semente fica no cabeçalho do CSV (a ordem pode ser refeita).\nOs CSV continuam em ordem de frequência, com as colunas Ordem_medida (posição em que o ponto foi medido)\ne Hora_ponto (fim do ponto).': 'Order in which the frequencies are measured. Ascending (default since 26/11: with the new cell the drift between\nsweeps is ≤ 0.24 %). With a slow drift (warm-up), ascending or descending turn it into a false slope\nin the curve; shuffled uses a new random order in each repetition, and the drift becomes noise that the\nmedian of the repetitions reduces. The seed goes in the CSV header (the order can be rebuilt).\nThe CSVs stay in frequency order, with the columns Ordem_medida (position in which the point was measured)\nand Hora_ponto (end of the point).',
     'Monitor de ruído pelas vizinhas: a cada 1 s o SOI mede, no INMP441 bruto, q = R nas frequências vizinhas\n(f ± 7 %) / R em f. Um som do ambiente (porta, voz, carro) aparece nas vizinhas junto com o\nsinal: o trecho da média com q > 2 × a mediana de q do ponto é descartado e, com mais de\n30 % descartado, a média do ponto é refeita (até 2×). Campanha de 18/11: o desvio\ncai de 27 para 15 % em 37 Hz e de 14 para 7 % em 113 Hz; acima de ~500 Hz quase nada é descartado.\nO CSV ganha as colunas Ruido_vizinhas_q, Descartado_Pct e Refeito_ruido (q ~ 3× o erro típico do ponto).': "Neighbour-frequency noise monitor: every 1 s the SOI measures, on the raw INMP441, q = R at the neighbouring\nfrequencies (f ± 7 %) / R at f. A room sound (door, voice, car) shows up at the neighbours together with the\nsignal: the part of the average with q > 2 × the point's median q is discarded and, with more than\n30 % discarded, the point's average is redone (up to 2×). Campaign of 2026-11-18: the deviation\ndrops from 27 to 15 % at 37 Hz and from 14 to 7 % at 113 Hz; above ~500 Hz almost nothing is discarded.\nThe CSV gets the columns Ruido_vizinhas_q, Descartado_Pct and Refeito_ruido (q ~ 3× the typical point error).",
 }
+
+
+# 2.5.0: painel lateral (seções), osciloscópio recolhível
+EN.update({
+    'Osciloscópio': 'Oscilloscope',
+    'Lock-In e Valor Médio': 'Lock-In and Average',
+    'Escala fixa (0 a 3,3 V)': 'Fixed scale (0 to 3.3 V)',
+    'Osciloscópio (sinal bruto do ADC)': 'Oscilloscope (raw ADC signal)',
+    'Mostra ou recolhe o osciloscópio (sinal bruto do ADC). A aquisição continua; o aviso de\n'
+    'saturação continua na linha de status acima.':
+        'Shows or collapses the oscilloscope (raw ADC signal). Acquisition goes on; the\n'
+        'saturation warning stays in the status line above.',
+    'Espectro do sinal bruto do ADC (ao lado do gráfico do lock-in).':
+        'Spectrum of the raw ADC signal (next to the lock-in plot).',
+    'Calibração': 'Calibration',
+    'Calibração do microfone com duas amostras (A e B) de materiais diferentes.':
+        'Microphone calibration with two samples (A and B) of different materials.',
+    'Excitação': 'Excitation',
+    'Experimento': 'Experiment',
+})
+EN.update({
+    'τ fixo: espera 9τ, média 1τ em toda a faixa. τ > 4 s não melhora: use repetições.':
+        'Fixed τ: wait 9τ, average 1τ over the whole range. τ > 4 s does not help: use repetitions.',
+    'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\nsem passar desse valor.\nÉ o mesmo τ do INMP441: mudar aqui muda lá e vice-versa.':
+        'τ max of the sweep (adaptive τ on): the sweep starts at it and τ changes according to the fluctuation,\nnever above this value.\nIt is the same τ as the INMP441: changing it here changes it there and vice versa.',
+})
+EN.update({
+    'Sem áudio do INMP441: conecte o SOI (sem ele, a interface simula).':
+        'No INMP441 audio: connect the SOI (without it, the interface simulates).',
+})
+EN.update({'S calibrado': 'Calibrated S'})
+
+
+# 2.5.1: varreduras da aba OPT101 no padrão do Modo Duplo
+EN.update({
+    'Ordem em que as frequências são medidas. Crescente (padrão). Com deriva lenta (aquecimento), crescente ou\ndecrescente a transformam numa inclinação falsa na curva; embaralhada usa uma nova ordem aleatória a cada\nrepetição, e a deriva vira ruído que a mediana das repetições reduz. A semente fica no cabeçalho do CSV.':
+        'Order in which the frequencies are measured. Ascending (default). With slow drift (heating), ascending or\ndescending turns it into a false slope in the curve; shuffled uses a new random order at each\nrepetition, and the drift becomes noise that the median of the repetitions reduces. The seed is in the CSV header.',
+    'Ligado (padrão): o campo vira "τ max" (padrão 1 s): a varredura começa nele e o τ muda ao longo dela sem\npassar desse valor, exceto em baixa frequência: o τ nunca fica abaixo de ~3 períodos (3 s em 1 Hz).\nEm cada ponto o SOI mede a flutuação de R do OPT101 (desvio-padrão e diferença entre a 1ª e a 2ª metade da\nmédia). Bem abaixo da Precisão, o τ do ponto seguinte diminui (a flutuação cai com 1/√τ), até ~3 períodos\n(mínimo 100 ms); acima de 2× a Precisão, o ponto é refeito com τ maior (até o τ max). Cada ponto espera 7τ e\nfaz a média por max(1 s, 3τ).\nDesligado: o campo volta a ser "τ", fixo na varredura toda; espera 9τ e média por 1τ.':
+        'On (default): the field becomes "τ max" (default 1 s): the sweep starts at it and τ changes along the sweep without\nexceeding that value, except at low frequency: τ never goes below ~3 periods (3 s at 1 Hz).\nAt each point the SOI measures the fluctuation of the OPT101 R (standard deviation and the difference between the 1st and 2nd half of the\naverage). Well below the Precision, the τ of the next point decreases (fluctuation falls as 1/√τ), down to ~3 periods\n(minimum 100 ms); above 2× the Precision, the point is redone with a larger τ (up to τ max). Each point waits 7τ and\naverages for max(1 s, 3τ).\nOff: the field goes back to "τ", fixed for the whole sweep; waits 9τ and averages for 1τ.',
+    'Flutuação aceitável de R do OPT101 em cada ponto (padrão 2 %). Menor = τ maior e\nvarredura mais lenta.':
+        'Acceptable fluctuation of the OPT101 R at each point (default 2 %). Smaller = larger τ and\nslower sweep.',
+    'Repetições: a varredura é feita N vezes seguidas (laser ligado entre elas; warm-up só antes da 1ª).\nCada repetição grava o CSV normal (_rep1, _rep2...) e no fim um CSV _mediana com a mediana ponto a ponto\ne a incerteza u = 1,25·DP/√N. 1 = uma varredura só.':
+        'Repetitions: the sweep is run N times in a row (laser on between them; warm-up only before the 1st).\nEach repetition saves the normal CSV (_rep1, _rep2...) and, at the end, a _mediana CSV with the point-by-point median\nand the uncertainty u = 1.25·SD/√N. 1 = a single sweep.',
+    'Frequências de fontes de ruído conhecidas (ex.: ventoinha do laser em ~170 Hz), separadas por ";", que\nficam sempre excluídas. Em volta de cada uma, ±2 % da frequência (mínimo ±3 Hz), nenhum ponto é medido: um\nponto que cairia nessa faixa vai para 1 Hz além da borda, e fica listado no cabeçalho do CSV. Os múltiplos\nde 60 Hz também são deslocados (k·60 ± 3 Hz). Vazio = só a rede.':
+        'Frequencies of known noise sources (e.g. the laser fan at ~170 Hz), separated by ";", which\nare always excluded. Around each one, ±2 % of the frequency (at least ±3 Hz), no point is measured: a\npoint that would fall in that band goes 1 Hz beyond the edge, and is listed in the CSV header. Multiples\nof 60 Hz are also moved (k·60 ± 3 Hz). Empty = mains only.',
+    'Início da varredura em PWM: qualquer valor de 0 a 100 % (padrão 40 %; o laser só emite acima de ~18 %).':
+        'Start of the PWM sweep: any value from 0 to 100 % (default 40 %; the laser only emits above ~18 %).',
+    'τ do lock-in do OPT101 durante a medida (restaurado no fim). Use τ menor que o intervalo\nentre pontos para os pontos serem independentes.':
+        'τ of the OPT101 lock-in during the measurement (restored at the end). Use a τ smaller than the interval\nbetween points so the points are independent.',
+    'Cada ponto é a média (e o desvio-padrão, nas barras de erro) do lock-in neste intervalo.':
+        'Each point is the average (and the standard deviation, in the error bars) of the lock-in in this interval.',
+    'Duração da medida; 0 = até clicar em Parar. O CSV e o PNG são gravados no fim.':
+        'Duration of the measurement; 0 = until you click Stop. The CSV and PNG are saved at the end.',
+    'O laser começa a modular na frequência e no PWM escolhidos ao clicar em Iniciar. Os\nprimeiros 7τ (assentamento do lock-in) são descartados; o tempo é contado desde o\ninício (o aquecimento aparece). Requer o Modo Lock-In.':
+        'The laser starts modulating at the chosen frequency and PWM when you click Start. The first 7τ\n(lock-in settling) are discarded; time is counted from the start (the heating shows).\nRequires Lock-In Mode.',
+    'τ max da varredura (τ adaptativo ligado): a varredura começa nele e o τ muda conforme a flutuação,\nsem passar desse valor.':
+        'τ max of the sweep (adaptive τ on): the sweep starts at it and τ changes with the fluctuation,\nnot exceeding that value.',
+    'τ do lock-in do OPT101 durante a varredura: espera 9τ e faz a média por 1τ em cada ponto.':
+        'τ of the OPT101 lock-in during the sweep: waits 9τ and averages for 1τ at each point.',
+    'O Sinal x t precisa do OPT101 no Modo Lock-In.':
+        'Signal vs t needs the OPT101 in Lock-In Mode.',
+    'Sinal x t usa a modulação eletrônica (o STM32 fixa a frequência).':
+        'Signal vs t uses electronic modulation (the STM32 fixes the frequency).',
+    'A varredura do Modo Duplo está em andamento.':
+        'The Dual Mode sweep is in progress.',
+    'Até clicar em Parar': 'Until you click Stop',
+    'Exponencial (A + B·e^(−t/T))': 'Exponential (A + B·e^(−t/T))',
+    ': refazendo com τ maior': ': redoing with a larger τ',
+    'flutuação R ': 'fluctuation R ',
+    ', fase ': ', phase ',
+    ', deriva ': ', drift ',
+    ' | último: τ = ': ' | last: τ = ',
+    ' repetições': ' repetitions',
+    'Varredura concluída (mediana de ': 'Sweep finished (median of ',
+    'Sinal x t OPT101: ': 'Signal vs t OPT101: ',
+    ' | lock-in assentando (': ' | lock-in settling (',
+    'Sinal x t concluído: ': 'Signal vs t finished: ',
+    'Varredura concluída: ': 'Sweep finished: ',
+    'Duração: ': 'Duration: ',
+    'Sinal x t (OPT101): ': 'Signal vs t (OPT101): ',
+})
+EN.update({
+    'Sinal x t INMP441: ': 'Signal vs t INMP441: ',
+    'Sinal x t (INMP441): ': 'Signal vs t (INMP441): ',
+    'Varreduras e desempenho': 'Sweeps and performance',
+    'Modo leve (computadores lentos)': 'Light mode (slow computers)',
+    'Mostrar "Descartar trechos com som da sala"': 'Show "Discard stretches with room sounds"',
+    'Passe o mouse sobre uma opção para ver os detalhes.': 'Hover over an option to see the details.',
+    '⚠ Com 5 V o PA0 <b>precisa de proteção</b>: 1 kΩ em série + Schottky BAT54 para 3,3 V. Sem isso o STM32 pode queimar.':
+        '⚠ With 5 V, PA0 <b>needs protection</b>: 1 kΩ in series + BAT54 Schottky to 3.3 V. Without it the STM32 may burn out.',
+    '5 V': '5 V',
+})

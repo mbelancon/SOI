@@ -40,10 +40,10 @@ SIMPLES = ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm')   
 LISTAS = ('sinal-t', 'transiente')     # tipos em que --f e --pwm aceitam lista (uma medida por combinação)
 
 DEFAULTS = {
-    # padrão da campanha de ruído de 18/11: τ fixo 1 s (4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
-    'varredura': {'nome': 'varredura', 'fmin': 40.0, 'fmax': 2440.0, 'n': 25, 'tau': 1.0, 'tau_fixo': True,
-                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 600.0,
-                  'repeticoes': 3, 'desligar': False, 'repetir': 1},
+    # padrão da campanha de ruído de 18/11: τ fixo 1 s (até 2.4: 4 s < 40 Hz), 3 repetições + mediana, warm-up 600 s, 40 Hz
+    'varredura': {'nome': 'varredura', 'fmin': 4.0, 'fmax': 2440.0, 'n': 40, 'tau': 1.0, 'tau_fixo': False,
+                  'precisao': 2.0, 'medias': 1, 'adapt_tudo': False, 'pwm': 100.0, 'aquecer': 120.0,
+                  'repeticoes': 1, 'desligar': False, 'repetir': 1},
     'sinal-t': {'nome': 'f{f}', 'f': [17.0], 'pwm': [100.0], 'tau': 1.0, 'dt': 5.0, 'duracao': 10.0,
                 'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'transiente': {'nome': 'transiente_f{f}_pwm{pwm}', 'f': [17.0], 'pwm': [100.0], 'pulsos': 64, 'intervalo': 60.0,
@@ -52,13 +52,13 @@ DEFAULTS = {
     'pausa': {'nome': 'pausa', 'duracao': 10.0, 'repetir': 1},
     'opt101-f': {'nome': 'opt101_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
                  'desligar': False, 'repetir': 1},
-    'opt101-pwm': {'nome': 'opt101_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+    'opt101-pwm': {'nome': 'opt101_pwm', 'inicio': 40.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
                    'desligar': False, 'repetir': 1},
     'inmp441-f': {'nome': 'inmp441_f', 'inicio': 10.0, 'fim': 1000.0, 'passo': 10.0, 'pwm': 100.0, 'aquecer': 0.0,
                   'desligar': False, 'repetir': 1},
-    'inmp441-pwm': {'nome': 'inmp441_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
+    'inmp441-pwm': {'nome': 'inmp441_pwm', 'inicio': 40.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'aquecer': 0.0,
                     'desligar': False, 'repetir': 1},
-    'duplo-pwm': {'nome': 'duplo_pwm', 'inicio': 10.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'tau': 1.0,
+    'duplo-pwm': {'nome': 'duplo_pwm', 'inicio': 40.0, 'fim': 100.0, 'passo': 10.0, 'f': 17.0, 'tau': 1.0,
                   'aquecer': 0.0, 'desligar': False, 'repetir': 1},
     'aviso': {'nome': '', 'texto': 'Clique em Continuar para seguir.'},
 }
@@ -1058,7 +1058,7 @@ def _tr(s):
         return s
 
 
-COLS = ('', '#', 'Tipo', 'Nome da etapa', 'Frequência (Hz)', 'PWM %', 'τ / Médias', 'Pontos / Intervalo',
+COLS = ('', '#', 'Tipo', 'Nome da etapa', 'f (Hz)', 'PWM %', 'τ / Médias', 'Pontos / Intervalo',
         'Repetir', 'Duração', 'Estado')
 
 
@@ -1181,7 +1181,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.tbl.itemSelectionChanged.connect(self._on_select)
         self.tbl.itemChanged.connect(self._on_item_changed)
         lv.addWidget(self.tbl, 1)
-        add = QtWidgets.QHBoxLayout()
+        add = soi_layout.FlowBar(hspace=6, vspace=4, last_right=False)   # 2.5.0: quebra em telas estreitas
         self.btn_add = QtWidgets.QPushButton('＋ Configurar nova medida...')
         self.btn_add.setStyleSheet('QPushButton{font-weight:bold;padding:3px 12px;}')
         self.btn_add.setToolTip('Abre a janela de configuração: sensor, o que variar, tempo, repetições e médias.\n'
@@ -1190,9 +1190,10 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_edit = QtWidgets.QPushButton('Editar...')
         self.btn_edit.setToolTip('Abre a medida selecionada na janela de configuração (ou dê um duplo clique na linha).')
         self.btn_edit.clicked.connect(lambda: self.open_step_dialog(self._sel()))
-        add.addWidget(self.btn_add)
-        add.addWidget(self.btn_edit)
-        add.addSpacing(10)
+        g = add.group()
+        g.addWidget(self.btn_add)
+        g.addWidget(self.btn_edit)
+        g = add.group()
         self.btn_dup = QtWidgets.QPushButton('Duplicar')
         self.btn_up = QtWidgets.QPushButton('▲')
         self.btn_down = QtWidgets.QPushButton('▼')
@@ -1204,8 +1205,7 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_down.clicked.connect(lambda: self.move_step(1))
         self.btn_del.clicked.connect(self.del_step)
         for b in (self.btn_dup, self.btn_up, self.btn_down, self.btn_del):
-            add.addWidget(b)
-        add.addStretch(1)
+            g.addWidget(b)
         lv.addLayout(add)
         self.lbl_total = QtWidgets.QLabel('')
         self.lbl_total.setStyleSheet('color:#555;')
@@ -1245,7 +1245,7 @@ class SeriesTab(QtWidgets.QWidget):
         split.setStretchFactor(1, 38)
         split.setSizes([900, 560])
 
-        ctl = QtWidgets.QHBoxLayout()
+        ctl = soi_layout.FlowBar(hspace=6, vspace=4, last_right=False)   # 2.5.0: quebra em telas estreitas
         self.btn_start = QtWidgets.QPushButton('▶ Iniciar série')
         self.btn_start.setStyleSheet('QPushButton{font-weight:bold;background:#cfe2ff;padding:3px 12px;}')
         self.btn_pause = QtWidgets.QPushButton('⏸ Pausar após esta etapa')
@@ -1263,7 +1263,6 @@ class SeriesTab(QtWidgets.QWidget):
         self.btn_skip.setToolTip('Encerra a etapa atual (salva o que já foi medido) e segue para a próxima.')
         for b in (self.btn_start, self.btn_cont, self.btn_pause, self.btn_skip, self.btn_stop):
             ctl.addWidget(b)
-        ctl.addSpacing(12)
         self.bar = QtWidgets.QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setFixedWidth(240)
@@ -1271,8 +1270,8 @@ class SeriesTab(QtWidgets.QWidget):
         ctl.addWidget(self.bar)
         self.lbl_folder = QtWidgets.QLabel('')
         self.lbl_folder.setStyleSheet('color:#555;')
-        ctl.addWidget(self.lbl_folder, 1)
         root.addLayout(ctl)
+        root.addWidget(soi_layout.no_widen(self.lbl_folder))
         self._apply_run_ui()
 
     def _dsp(self, lo, hi, val, dec, suffix, step=1.0, width=95):
@@ -1507,8 +1506,7 @@ class SeriesTab(QtWidgets.QWidget):
         f['medias'] = QtWidgets.QSpinBox()
         f['medias'].setRange(1, 20)
         f['medias'].setToolTip('"Permitir médias" do τ adaptativo: até N medidas por ponto (1 = desligado).')
-        g.addWidget(QtWidgets.QLabel('Médias:'), 3, 4)
-        g.addWidget(f['medias'], 3, 5)
+        f['medias'].setVisible(False)                   # 2.5.0: "Permitir médias" saiu (fica 1, fora da tela)
         f['adapt_tudo'] = QtWidgets.QCheckBox('τ adaptativo também abaixo de 40 Hz')
         f['desligar'] = QtWidgets.QCheckBox('Laser parado (PWM 0) ao terminar a etapa')
         f['repeticoes'] = QtWidgets.QSpinBox()
@@ -1520,8 +1518,9 @@ class SeriesTab(QtWidgets.QWidget):
         g.addWidget(QtWidgets.QLabel('Repetições (mediana):'), 4, 0)
         g.addWidget(f['repeticoes'], 4, 1)
         g.addWidget(f['adapt_tudo'], 5, 0, 1, 3)
+        f['adapt_tudo'].setVisible(False)               # 2.5.0: τ adaptativo sempre em toda a faixa
         g.addWidget(f['desligar'], 5, 3, 1, 3)
-        f['tau_note'] = QtWidgets.QLabel('τ fixo: 4 s abaixo de 40 Hz (espera 7τ, média 3τ). τ > 4 s não melhora: '
+        f['tau_note'] = QtWidgets.QLabel('τ fixo: espera 9τ, média 1τ em toda a faixa. τ > 4 s não melhora: '
                                          'use repetições.')
         f['tau_note'].setStyleSheet('color:#777;')
         f['tau_note'].setWordWrap(True)
@@ -2389,14 +2388,30 @@ class SeriesTab(QtWidgets.QWidget):
         if not res:
             self.curve.setData([], [])
             return
-        x = [q[0] for q in res]
-        s = [q[3] / max(q[1], 1e-30) for q in res]
+        x = np.array([q[0] for q in res], dtype=float)
+        s = np.array([q[3] / max(q[1], 1e-30) for q in res])
         sweep = w.dual_src != 'T'
+        # 2.5.0: com "Usar" marcado, a varredura em frequência aparece calibrada (como no Modo Duplo); marcar ou
+        # desmarcar durante a medida muda o gráfico na hora. Os arquivos salvos não mudam.
+        cal = self._live_cal() if sweep and getattr(w, 'dual_kind', '') == 'F' else None
+        if cal is not None:
+            s = s / np.exp(np.interp(np.log(np.maximum(x, 1e-9)), np.log(cal['f']), np.log(cal['sens'])))
         self.plot.setLogMode(x=sweep, y=sweep)
         self.plot.setLabel('bottom', 'Frequência (Hz)' if sweep else 'Tempo (s)')
-        self.plot.setLabel('left', 'S = R_INMP441 / R_OPT101')
+        self.plot.setLabel('left', 'S calibrado' if cal is not None else 'S = R_INMP441 / R_OPT101')
         self.plot.setTitle(f'{_tr("Medida em andamento")}: {r.job()["nome"]}')
         self.curve.setData(x, s)
+
+    def _live_cal(self):
+        '''Calibração que o Modo Duplo aplicaria agora (Usar marcado e sinal normalizado), lida uma vez por arquivo.'''
+        w = self.win
+        if not (w.chk_mic_cal.isChecked() and w.chk_dual_norm.isChecked()):
+            return None
+        path = w.cmb_mic_cal.currentData()
+        if getattr(self, '_live_cal_key', None) != path:
+            self._live_cal_key = path
+            self._live_cal_val = w._applied_cal() if path else None
+        return self._live_cal_val
 
     def on_close(self):
         """Fechando a interface com uma série rodando: para e salva o que já foi medido."""

@@ -30,32 +30,32 @@ def _headless_args(argv):
     ap.add_argument('--n', type=int, default=None, help='número de pontos, espaçamento log (padrão: o da interface)')
     ap.add_argument('--tau', type=float, default=None, help='τ max em s (τ adaptativo) ou τ fixo (padrão: o da interface)')
     ap.add_argument('--precisao', type=float, default=None, help='precisão do τ adaptativo em %% (padrão: a da interface)')
-    ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (padrão desde 18/11; espera 9τ, média 1τ; '
-                    '4 s abaixo de 40 Hz)')
+    ap.add_argument('--tau-fixo', action='store_true', help='τ fixo (espera 9τ, média 1τ; em toda a faixa). Sem ele, '
+                    'τ adaptativo (padrão desde 26/11)')
     ap.add_argument('--descartar', action='store_true',
                     help='liga "Descartar trechos com som da sala" (monitor das vizinhas f ± 7 %%; desligado por padrão)')
     ap.add_argument('--sem-descarte', action='store_true', help='(padrão desde 19/11) não descarta trechos com som da sala')
     ap.add_argument('--sem-evitar-rede', action='store_true',
                     help='sem detecção de ruído, não exclui os múltiplos de 60 Hz (±3 Hz) da varredura')
-    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='embaralhada',
-                    help='ordem de medida das frequências (padrão embaralhada = nova ordem aleatória a cada repetição, '
-                         'semente no cabeçalho do CSV)')
+    ap.add_argument('--ordem', choices=('crescente', 'decrescente', 'embaralhada'), default='crescente',
+                    help='ordem de medida das frequências (padrão crescente desde 26/11; embaralhada = nova ordem '
+                         'aleatória a cada repetição, semente no cabeçalho do CSV)')
     ap.add_argument('--semente', type=int, default=None,
                     help='semente da ordem embaralhada (repetição k usa semente + k - 1); padrão: aleatória')
     ap.add_argument('--excluir', '--evitar', dest='evitar', default=None, metavar='F1;F2',
                     help='faixas excluídas: frequências de fontes de ruído (ex.: "170.7" ou "170.7;341.4"); nenhum '
                          'ponto é medido a até ±2 %% delas (mínimo 3 Hz): o ponto vai para 1 Hz além da borda')
-    ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (antes o padrão; --precisao também liga)')
+    ap.add_argument('--adaptativo', action='store_true', help='liga o τ adaptativo (padrão desde 26/11; mantido por compatibilidade)')
     ap.add_argument('--repeticoes', type=int, default=None, metavar='N',
                     help='repete a varredura N vezes e grava a mediana ponto a ponto (padrão: o da interface, 3)')
     ap.add_argument('--aquecer', type=float, default=0.0, metavar='S',
                     help='warm-up: espera S segundos com o laser ligado (no PWM escolhido) antes de começar')
     ap.add_argument('--medias', type=int, default=0, metavar='N',
-                    help=f'τ adaptativo: "Permitir médias", até N medidas com o mesmo τ (o τ max) por ponto')
+                    help='(ignorado desde a 2.5.0: "Permitir médias" saiu; use --repeticoes)')
     ap.add_argument('--adapt-tudo', action='store_true',
-                    help=f'τ adaptativo também abaixo de {LOWF_FMAX:g} Hz (padrão: τ fixo por faixa abaixo)')
+                    help='(desde a 2.5.0 o τ adaptativo vale em toda a faixa; mantido por compatibilidade)')
     ap.add_argument('--pwm', type=float, default=100.0, help='PWM do laser em %% (padrão 100)')
-    ap.add_argument('--celula', choices=('Camara', 'OPC'), default=None, help='montagem (padrão: a da interface)')
+    ap.add_argument('--celula', choices=('Camara',), default=None, help='montagem (desde a 2.5.0 só Camara; mantido por compatibilidade)')
     ap.add_argument('--cal', default=None, help='arquivo CAL_*.csv da pasta Medidas aplicado no gráfico, ou "nenhuma"')
     ap.add_argument('--porta', default=None, help='porta serial (ex.: COM5); padrão: detecção automática')
     ap.add_argument('--simulado', action='store_true', help='amostragem simulada, sem a placa')
@@ -203,7 +203,7 @@ def _headless_noise(win, a, pump):
            f"gravacao; INMP441 a {fs:.0f} S/s (media de 4 amostras)" + ('; SIMULADO' if a.simulado else ''),
            f'Welch Hann {soi_ruido.SEG_S:g} s; fundo = mediana movel +-{soi_ruido.BG_HALF_HZ:g} Hz; limiar {thr:g} dB'
            + (f'; com a fonte >= {soi_ruido.CMP_DB:g} dB acima' if a.comparar else ''),
-           f'Celula = {win.cmb_cell.currentData()}']
+           f'Celula = {win.cmb_cell.currentData() or "Camara"}']
     path = os.path.join(folder, stem + '.csv')
     soi_ruido.save_csv(path, res, hdr)
     soi_ruido.save_bin(os.path.join(folder, stem + '.bin'), x)
@@ -330,7 +330,7 @@ def run_headless(argv, LockInWindow):
         sp1.setValue(a.fmax)
     if a.n is not None:
         spn.setValue(a.n)
-    win.chk_dual_adapt.setChecked((a.adaptativo or a.precisao is not None) and not a.tau_fixo)
+    win.chk_dual_adapt.setChecked(not a.tau_fixo)
     if a.repeticoes is not None:
         win.sp_dual_reps.setValue(max(1, a.repeticoes))
     win.chk_dual_avoid60.setChecked(not a.sem_evitar_rede)
@@ -353,10 +353,10 @@ def run_headless(argv, LockInWindow):
                'Pontos deslocados da rede: ') + ', '.join(f'{x:g} -> {y:g} Hz' for x, y in moved), flush=True)
     if a.sinal_t and soi_serie.mains_near(a.f) is not None:
         print('Aviso: ' + soi_serie.mains_msg(a.f), flush=True)
-    win.chk_dual_adapt40.setChecked(not a.adapt_tudo)
-    win.chk_dual_blocks.setChecked(a.medias > 1)
+    win.chk_dual_adapt40.setChecked(False)          # 2.5.0: τ adaptativo em toda a faixa (--adapt-tudo é o padrão)
+    win.chk_dual_blocks.setChecked(False)
     if a.medias > 1:
-        win.sp_dual_blocks.setValue(a.medias)
+        print('Aviso: --medias é ignorado desde a 2.5.0 ("Permitir médias" saiu); use --repeticoes.', flush=True)
     win._apply_adapt_ui()
     if a.tau is not None:
         win.dual_tau_w['F'].setValue(a.tau)
@@ -389,7 +389,7 @@ def run_headless(argv, LockInWindow):
           + (f'τ adaptativo (τ max {win.dual_tau_w["F"].value():g} s, precisão {win.sp_dual_adapt_tol.value():g} %'
              + (f'; τ fixo por faixa abaixo de {LOWF_FMAX:g} Hz' if win.chk_dual_adapt40.isChecked() else '')
              + (f'; até {win.sp_dual_blocks.value()} médias por ponto' if win.chk_dual_blocks.isChecked() else '') + ')'
-             if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s ({LOWF_TAU_FIXED:g} s abaixo de {LOWF_FMAX:g} Hz)')
+             if adapt else f'τ fixo {win.dual_tau_w["F"].value():g} s')
           + (f'; {win.sp_dual_reps.value()} repetições + mediana' if win.sp_dual_reps.value() > 1 else '')
           + (f'; ordem {a.ordem}' + (f' (semente {win.dual_seed_fixed})' if a.ordem == 'embaralhada' else '')
              if a.ordem != 'crescente' else '')

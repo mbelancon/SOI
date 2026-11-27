@@ -41,13 +41,9 @@ class SeriesMixin:
         lo = hi = 0.0
         for v in vals:
             if p.get('tau_fixo'):
-                t = sum(adapt_times(max(tau, LOWF_TAU_FIXED))) if v < LOWF_FMAX else 9.0 * tau + 0.3 + max(0.5, tau)
+                t = 9.0 * tau + 0.3 + max(0.5, tau)
                 lo, hi = lo + t, hi + t
-            elif not p.get('adapt_tudo') and lowf_band_tau(v) is not None:
-                st, me = adapt_times(tau)
-                t = st + me * max(1, int(p.get('medias', 1)))
-                lo, hi = lo + t, hi + t
-            else:
+            else:                                   # 2.5.0: adaptativo em toda a faixa
                 lo += sum(adapt_times(adapt_tau_min(v)))
                 hi += sum(adapt_times(max(adapt_tau_min(v), tau)))
         nrep = max(1, int(p.get('repeticoes', 1)))
@@ -56,7 +52,7 @@ class SeriesMixin:
 
     def _series_widgets(self):
         sp0, sp1, space, spn, _ = self.dual_fw['F']
-        return (self.sp_f0, self.sp_f1, self.sp_df, self.sp_p0, self.sp_p1, self.sp_dp, self.sp_aud_f0,
+        return (self.cmb_opt_fspace, self.cmb_aud_fspace, self.sp_f0, self.sp_f1, self.sp_df, self.sp_p0, self.sp_p1, self.sp_dp, self.sp_aud_f0,
                 self.sp_aud_f1, self.sp_aud_df, self.sp_aud_p0, self.sp_aud_p1, self.sp_aud_dp, self.sp_dual_p0,
                 self.sp_dual_p1, self.sp_dual_dp, self.dual_mode_w['P'], self.dual_tau_w['P'],
                 self.cmb_mod, space, sp0, sp1, spn, self.chk_dual_adapt, self.chk_dual_adapt40, self.chk_dual_blocks,
@@ -114,6 +110,8 @@ class SeriesMixin:
         self.cmb_mod.setCurrentIndex(0)               # modulação eletrônica (o STM32 fixa/varre a frequência)
         if tipo in ('opt101-f', 'opt101-pwm', 'inmp441-f', 'inmp441-pwm', 'duplo-pwm'):
             a, b, d = self._series_sweep_fields(tipo)
+            if tipo in ('opt101-f', 'inmp441-f'):
+                (self.cmb_opt_fspace if tipo == 'opt101-f' else self.cmb_aud_fspace).setCurrentIndex(1)   # série: passo linear (Hz)
             a.setValue(p['inicio'])
             b.setValue(p['fim'])
             d.setValue(p['passo'])
@@ -142,10 +140,8 @@ class SeriesMixin:
         spn.setValue(p['n'])
         self.chk_dual_adapt.setChecked(not p['tau_fixo'])
         self.sp_dual_reps.setValue(max(1, int(p.get('repeticoes', 1))))
-        self.chk_dual_adapt40.setChecked(not p.get('adapt_tudo', False))
-        self.chk_dual_blocks.setChecked(int(p.get('medias', 1)) > 1)
-        if int(p.get('medias', 1)) > 1:
-            self.sp_dual_blocks.setValue(int(p['medias']))
+        self.chk_dual_adapt40.setChecked(False)        # 2.5.0: τ adaptativo em toda a faixa
+        self.chk_dual_blocks.setChecked(False)         # 2.5.0: "--medias" de séries antigas é ignorado
         self._apply_adapt_ui()
         self.dual_tau_w['F'].setValue(p['tau'])
         if not p['tau_fixo']:
@@ -183,7 +179,7 @@ class SeriesMixin:
                 for cls in (QtWidgets.QAbstractButton, QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox,
                             QtWidgets.QLineEdit):
                     ws += page.findChildren(cls)
-        for name in ('sp_freq', 'sp_power', 'ed_sample', 'cmb_mic_cal', 'chk_mic_cal', 'cmb_cell', 'chk_sim',
+        for name in ('sp_freq', 'sp_power', 'ed_sample', 'cmb_mic_cal', 'cmb_cell', 'chk_sim',
                      'btn_settings', 'cmb_mod'):
             w = getattr(self, name, None)
             if w is not None:

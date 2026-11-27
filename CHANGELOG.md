@@ -10,6 +10,175 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-27
+
+Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same USB protocol). Requested by Marcos on
+2026-11-27: the OPT101 and INMP441 tabs adopt the same sweep pattern as Dual Mode, and the Settings window gets more compact.
+
+### Changed: OPT101 tab sweeps follow the Dual Mode pattern
+- The *Sweeps* section now has **Signal vs f (Hz)**, **Signal vs PWM (%)** and **Signal vs t (s)**, with the same
+  fields and logic as Dual Mode, using only the OPT101:
+  - **Signal vs f:** start, end, spacing (logarithmic by default, or linear with a step), N points, order (ascending by
+    default; descending or shuffled), **adaptive τ** with *τ max* (default 1 s) and *Precision* (2 %) driven by the
+    fluctuation of the OPT101 R and phase (same rules as Dual Mode: 7τ wait, average max(1 s, 3τ), τ never below
+    ~3 periods, redo above 2× the Precision), **Repetitions** (default 1; with N > 1 each repetition is saved as
+    `_repK` and a `_mediana` CSV with the point-by-point median and u = 1.25·SD/√N is written), and **Excluded bands
+    (Hz)**. Multiples of 60 Hz are always moved to k·60 ± 3 Hz. The default range is 4–2440 Hz, 35 points.
+  - **Signal vs PWM:** start, end, step; the wait now follows the adaptive rule (7τ + max(1 s, 3τ)) like the Dual Mode
+    PWM sweep, instead of 9τ + 4τ.
+  - **Signal vs t:** fixed frequency and PWM, τ, point interval and duration (0 = until Stop). Each point is the
+    lock-in mean in the interval (error bars = SD); the first 7τ are discarded but time counts from the start. CSV
+    `OPT101_T_sinal_t_...`, plus a plot with an optional exponential fit S(t) = A + B·e^(−t/T).
+  - **Warm-up:** the three boxes start with a **600 s** warm-up (editable, 10–7200 s). The OPT101 alone took 600–1200 s
+    to settle in the 26–27/11 campaign, while the 120 s of Dual Mode was validated only for the normalized S.
+  - CSV header: `# Espacamento`, `# Ordem`, `# Tau`, `# Warm-up`, `# Repeticao`, excluded bands and mains-moved points;
+    new columns `Tau_s` and `Ordem_medida` at the end (the old columns are unchanged).
+  - **Measurement Series** keep the old OPT101 behaviour (linear step, automatic τ, one sweep): the series stages
+    `opt101-f` and `opt101-pwm` are unchanged.
+- **PWM sweep start is now 40 %** by default in all tabs (was 30 %; the laser only emits above ~18 %). It stays
+  editable to any value from 0 to 100 % (also the PWM stages of Measurement Series). A saved value other than 30 % is kept; a saved 30 % becomes 40 % once.
+- Settings saved by older versions for the OPT101 frequency sweep (end, step) are reset once to the new defaults.
+
+### Changed: INMP441 tab sweeps (same pattern as OPT101 and Dual Mode)
+- The INMP441 *Sweeps* section has the same three boxes and options (spacing, order, adaptive τ, precision,
+  repetitions + median, excluded bands, PWM start 40 %, Signal vs t) and the same **600 s** warm-up (editable, 10–7200 s),
+  using the INMP441 lock-in. CSVs are `INMP441_F_varredura_...`, `INMP441_P_varredura_...`, `INMP441_T_sinal_t_...`.
+- New sweep CSVs write magnitudes with 6 significant digits (INMP441 values are ~1e-5 and were rounded away).
+- Settings saved by older versions for the INMP441 frequency sweep are reset once to the new defaults.
+- Measurement Series keep the old behaviour (stages `inmp441-f`/`inmp441-pwm` unchanged).
+
+### Fixed: Dual Mode error bars without normalization (repetitions)
+- With *Normalize by OPT101* off, the plot of a median of repetitions used the uncertainty of S = R_INMP441/R_OPT101 for the
+  INMP441 R. When the OPT101 R changed a lot between repetitions (unstable 450 nm laser), the bars reached 100 % or more
+  and, in log scale, ran down to ~0. It now uses the median R of the INMP441 and u = 1.25·SD/√N of the INMP441 itself.
+  CSV files are unchanged.
+
+### Changed: Settings window
+- Smaller (about 440×275 px): explanations moved to tooltips, trigger and supply options in one row each, the two
+  checkboxes merged into one *Sweeps and performance* group. The 5 V warning (PA0 needs 1 kΩ + BAT54) stays visible
+  when 5 V is selected.
+
+## [2.5.0] - 2026-11-26 (never published separately; shipped in 2.5.1)
+
+Minor version: only the interface changes (firmware 2.0.0, same USB protocol). Goal: a cleaner window that fits
+1366×768 screens (also at 125 % Windows scaling). Plan approved by Marcos on 2026-11-24/25.
+
+### Changed: window layout for 1366×768
+- **Side panel with collapsible sections** on the left, plots on the right. The old top bar became the
+  **Experiment** (sample, calibration + Use, Finish experiment) and **Excitation** (Freq, PWM) sections; below them
+  come the sections of the active tab. The panel scrolls, so open sections never make the window taller; its width
+  can be dragged. Section states, panel width and the oscilloscope state are saved between sessions.
+- **OPT101:** sections *Oscilloscope* (window, oversampling, fixed 0–3.3 V scale, optical search range), *Lock-In and
+  Average* (mode, pause, save, FFT, τ/high-pass or pulses) and *Sweeps*; the curve fit sits below them. The
+  **oscilloscope collapses** with the header above it, and a divider sets its height against the lower plot. The FFT
+  now sits next to the lower plot.
+- **INMP441:** sections *Display*, *Lock-In* and *Sweeps*.
+- **Lock-in filters (OPT101 and INMP441), Marcos 2026-11-25:** only the τ field is shown. The high-pass filter still
+  works, always automatic (2 % of f, 0.01–0.05 Hz; a hand-set value saved by an older version is not restored), and
+  the −3 dB cut-off, ENBW and 9τ wait moved to the τ tooltip.
+- **INMP441, Marcos 2026-11-25:** the noise line above the plots (signal, noise, SNR, density) and the values box of
+  the FFT fit are no longer shown. The SNR stays in the status bar and in the Noise/SNR plot; the fit curve and the
+  "peak not found" notice stay. (The box's peak/floor SNR is a different quantity from the lock-in SNR.) The OPT101
+  FFT lost the same box.
+- **Refine resonance** (Dual Mode, Signal vs f) removed: most measurements will use non-resonant cells (Marcos,
+  2026-11-25). The *Cell resonance* fit model stays.
+- **Diagnostics** button and analysis (Dual Mode, photoacoustic + flat background fit) removed (Marcos, 2026-11-25);
+  CSVs no longer get the `# Diagnostico` line.
+- **Adaptive τ over the whole range** (Marcos, 2026-11-25): the "only f > 40 Hz" box is gone and adaptive τ now works
+  the same at every frequency (headless `--adapt-tudo` is now the default and kept only for compatibility). The
+  minimum τ of about 3 modulation periods stays (3 s at 1 Hz), so the lock-in still rejects the 2f ripple.
+- **Fixed τ over the whole range** (Marcos, 2026-11-25): with adaptive τ off, the sweep uses the τ of the field at every
+  frequency (9τ wait, 1τ average); the rule of τ ≥ 4 s below 40 Hz (7τ wait, 3τ average) is gone, also in the
+  series, the headless sweep and the CSV header.
+- **Dual Mode:** the panel buttons became sections (*Signal vs f*, *Fit*, *Calibration*, *Signal vs PWM*, *Signal vs t*),
+  so the plots keep the full height of the tab. The calibration samples are laid out in three short rows each.
+- **⚙ Settings** moved to the tab row; **SNR OPT/INMP** to the status bar; simulated mode shows **SIMULATION (no STM32)**
+  in orange in the status bar. The *Fixed oscilloscope scale* option moved from Settings to the Oscilloscope section.
+- Sweep boxes, the manual sweep, the Measurement Series buttons and the "No data" / "Peak not found" notices wrap
+  instead of widening the window. The Settings window scrolls on short screens and the background-noise window is
+  limited to the screen size. Shorter oscilloscope title.
+- Minimum window size went from about 1270×650 (2.4) to about 910×450 logical pixels (1366×768 at 125 % gives
+  ~1090×585).
+
+### Fixed (practical test, 2026-11-26)
+- **Dual Mode status bar** cut long texts (e.g. "…1177 point(s) | la" in a long *Signal vs t*): it now wraps to a
+  second line and the progress text gets half of the bar width.
+- **Detect background noise** window grew several times wider than the screen when many tones were found (the
+  result text was one long line): the result now wraps on its own line and long file names no longer widen the
+  window. Mouse-wheel zoom works on the spectrum (double click returns to the full spectrum).
+- **Measurement series:** the frequency column header is now "f (Hz)" to save space.
+- **Calibration "cell is None" warning** (Marcos, 2026-11-26): a cell index saved by older versions (with the OPC
+  mode) left the hidden cell selector empty, so the Dual Mode warned that the calibration (Câmara) did not match
+  the chosen cell ("None") and the CSV headers got `# Celula = None`. The cell is no longer restored from the
+  settings, an empty selector falls back to Câmara, and the cell-mismatch warning is gone. The calibration was
+  applied anyway; only the warning and the header were wrong.
+- **"Use" calibration during a measurement series** (Marcos, 2026-11-26): the *Measurement series* plot showed the
+  raw S even with "Use" checked, and the checkbox was locked while the series ran. Now it stays enabled and the
+  live plot of a frequency sweep shows the calibrated S when it is checked, changing at once when toggled (the
+  Dual Mode plot already did). Saved files are not changed.
+
+### Added (practical test, 2026-11-26)
+- **Light mode** (Settings → Performance, off by default, remembered): for slow computers (the lab laptop-class i3
+  reached USB losses during a long series). Redraws at 10 frames/s instead of 25, draws at most 2000 points per
+  oscilloscope curve (stored data unchanged), and skips the INMP441 processing while nothing uses it (another tab,
+  no measurement, no Dual Mode, no noise capture, no optical modulation). Measured and saved data are the same;
+  coming back to the INMP441 restarts its lock-in (~3τ to settle).
+- **Beam off at the end of every sweep** (Marcos, 2026-11-26): when any sweep ends (OPT101, INMP441 and Dual Mode
+  sweeps in frequency or PWM, Signal × t, manual points; finished, stopped or interrupted), the interface sets PWM 0.
+  Inside Measurement Series the series decides at its end (*laser stopped* or *keep*), so the laser stays on
+  between steps. The next frequency sweep started by hand switches the beam back on at the PWM it had before.
+
+### Changed: sweep defaults for the new cell (2026-11-26 battery, approved by Marcos)
+With the new cell the drift between sweeps was ≤ 0.24 %, the spread between repetitions 0.1–0.6 % below 700 Hz,
+and τ 1 s, τ 0.5 s, adaptive τ and ascending order agreed within ±0.3 %.
+- **Adaptive τ is the default, τ max 1 s** (was fixed τ 1 s; adaptive started at 4 s). Below ~3 Hz the 3-period
+  minimum still wins (3 s at 1 Hz); the tooltip now says so. `--varredura` without `--tau-fixo` is adaptive.
+- **1 repetition** by default (was 3 + median); repetitions and the median stay available.
+- **Ascending order** by default (was shuffled; shuffled stays in the Order box and `--ordem embaralhada`).
+- **Warm-up** default 120 s (was 600 s).
+- **Lock-in filters reset when the frequency changes.** Before, the previous point left a residue: a weak
+  high-frequency point measured right after a strong low-frequency one was off by 2–3 % (shuffled order, > 700 Hz);
+  now every point starts from zero and the residue is a fixed 0.3 % of the point itself after 7τ.
+- **PWM sweeps** wait 7τ and average max(1 s, 3τ), as the adaptive τ (was 9τ + 4τ: ~27 s per point at τ 3 s);
+  only the amplitude changes between points. Below ~1.8 Hz the automatic τ is still 3 s, so a PWM sweep is faster
+  at ≥ 6 Hz (~3–4 s per point).
+- **PWM sweeps start at 30 %** by default (the laser only emits above ~18 %).
+- **Frequency sweeps start at 4 Hz** by default (Marcos, 2026-11-26; was 1 Hz in Dual Mode and 0.1 Hz in the
+  OPT101/INMP441 sweeps): below that there is much noise and fluctuation and little useful information. Saved
+  settings move to 4 Hz once (Dual Mode, manual sweep, OPT101 and INMP441); new series steps start at 4 Hz.
+- **SNR colours** (status bar, both sensors): green ≥ 40 dB (error of one sweep ≲ 2 %), yellow 30–40 dB (~2–7 %),
+  red below (was 25/15 dB, set with the old cell). The error of a sweep follows ~3·10^(−SNR/20).
+- Saved settings are moved to these defaults once (adaptive on, ascending, 1 repetition, PWM start ≥ 30 %).
+- Measurement Series: new sweep steps default to 4–2440 Hz, 40 points, adaptive τ 1 s, warm-up 120 s, 1 repetition;
+  PWM steps start at 30 %. Saved series files keep what they say.
+
+### Changed: Dual Mode end-of-measurement box and repetitions plot (2026-11-27, requested by Marcos)
+- The status box shows only the file name after "Finished:" / "Saved again:" (the full path is in the tooltip), so it no
+  longer gets cut off on 1366×768. The "Last (…)" fluctuation text now breaks only between the heading and the values,
+  and between S and Δφ, instead of splitting "Δφ ±1.5°".
+- In repeated sweeps, each repetition is drawn in its own colour (Marcos' palette, faded and lighter, thin line) behind
+  the highlighted median, instead of all in grey.
+- The time axis of the oscilloscope and of the Average mode (average waveform) now switches by itself between s, ms
+  and µs according to the visible span (the axis label follows); the Lock-In plot also gets µs.
+- **Calibration refused sweeps measured in this version** ("this sweep was made in cell None…", *Generate calibration*
+  disabled): the CSV header was written as `# Celula = None` when the (hidden) cell combo had no item. The header now
+  always says `Camara`, the combo is reset to the Câmara at start-up, and the *Open…* check accepts the files already
+  saved with `None` (so the Al and Inox sweeps of 2026-11-27 open normally).
+
+### Removed (requested by Marcos, 2026-11-25)
+- **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
+  opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB
+  drop does not turn into simulated data), and the headless mode still simulates only with `--simulado`.
+- **Cell selector (OPC / Chamber) and the OPC mode:** everything is the Chamber cell. Files still write
+  `# Celula = Camara`, and old OPC files still open. `--celula` accepts only `Camara`.
+- **Setup drawings** (cell schematic in the Signal vs f and Calibration panels) and the **explanatory texts of the
+  Calibration panel** (sample descriptions, expected curve, mounting steps); the pair check and thickness warnings stay.
+- **Resolution test** (button, window and analysis).
+- **60 Hz filter** (OPT101 and INMP441): the mains notches are always off. The "avoid multiples of 60 Hz" option of the
+  sweeps stays.
+- **"Allow averages × N"** of adaptive τ: repeat separate sweeps instead (Repetitions). `--medias` (headless and old
+  series files) is ignored with a notice.
+
 ## [2.4.0] - 2026-11-18
 
 Minor version: only the interface changes. The firmware is still 2.0.0 and the USB protocol is the same.

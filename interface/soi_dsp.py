@@ -137,6 +137,11 @@ class PyLockIn(_MainsFilterMixin):
         self.edge_count = 0
         self._unlock()
 
+    def reset_filters(self):
+        '''Zera os dois passa-baixas (troca de frequência numa varredura): sem resto do ponto anterior.'''
+        self.lp1 = 0j
+        self.lp2 = 0j
+
     def _nominal_step(self):
         return TWO_PI * self.ref_freq / self.fs
 
@@ -297,10 +302,15 @@ class AudioLockIn(_MainsFilterMixin):
         self.phase_origin = 0     # nº da amostra I2S da borda de subida do laser (marcador do firmware)
 
     def update_params(self, ref_freq, cutoff_lp, cutoff_hp):
-        # Os estados dos filtros são mantidos: ao trocar a frequência a saída transita até estabilizar
+        # Os estados dos filtros são mantidos aqui; apply_frequency os zera (reset_filters) quando a frequência muda
         self.ref_freq = actual_mod_freq(ref_freq)
         self.alpha_lp = TWO_PI * cutoff_lp / self.fs
         self.alpha_hp = TWO_PI * cutoff_hp / self.fs
+
+    def reset_filters(self):
+        '''Zera os dois passa-baixas (troca de frequência numa varredura): sem resto do ponto anterior.'''
+        self.lp1 = 0j
+        self.lp2 = 0j
 
     def process(self, sequence, samples, decimation, theta=None):
         '''samples: int32 (PCM 24 bits). Devolve (r, fase em graus), uma saída a cada 'decimation'
@@ -839,92 +849,6 @@ class AverageAccumulator:
             self.is_open = False
             self.chunks, self.chunks_len = [], 0
         return ready
-
-
-def resolution_analysis(raw, osr_list=None, min_blocks=64):
-    '''Teste de resolução da sobreamostragem a partir das palavras cruas do firmware 2.0.0 (uint16:
-    bits 0-11 = ADC, bit 15 = laser), com sinal estável.
-
-    Para cada N (amostras por média) calcula o ruído das médias pelo desvio de Allan
-    σ(N) = sqrt(½·⟨(m[k+1] - m[k])²⟩), em LSB do ADC de 12 bits. Para ruído branco σ(N) = σ(1)/√N; o
-    desvio de Allan ignora uma deriva linear lenta, mas sobe com ruído 1/f, interferência e deriva
-    curva, que são justamente o que limita o ganho real. Devolve um dicionário com as curvas, o
-    histograma dos códigos crus e os diagnósticos (dither, laser modulando, OSR até onde o ganho é real).'''
-    w = np.asarray(raw, dtype=np.uint16)
-    codes = (w & 0x0FFF).astype(np.float64)
-    ref = (w >> 15).astype(np.uint8)
-    n = codes.size
-    if n < 1024:
-        raise ValueError('poucas amostras para o teste (mínimo 1024)')
-    if osr_list is None:
-        osr_list = [1 << k for k in range(0, 20) if n // (1 << k) >= min_blocks]
-    osr_list = [int(k) for k in osr_list if n // int(k) >= 8]
-    sig, sig_std = [], []
-    for k in osr_list:
-        m = n // k
-        means = codes[:m * k].reshape(m, k).mean(axis=1)
-        d = np.diff(means)
-        sig.append(float(np.sqrt(0.5 * np.mean(d * d))) if d.size else float('nan'))
-        sig_std.append(float(np.std(means)))
-    osr = np.asarray(osr_list, dtype=np.float64)
-    sig = np.asarray(sig)
-    sig_std = np.asarray(sig_std)
-    s1 = sig[0]
-    floor = 1e-6
-    ideal = s1 / np.sqrt(osr)
-    gain_bits = np.log2(np.maximum(s1, floor) / np.maximum(sig, floor))
-    ideal_bits = 0.5 * np.log2(osr)
-    # Bits efetivos: resolução de um conversor ideal com o mesmo ruído (σ = LSB/√12) em 12 bits de faixa
-    enob = 12.0 - np.log2(np.maximum(sig, floor) * np.sqrt(12.0))
-    # OSR até onde o ganho segue o ideal (perde no máximo 0,25 bit)
-    ok = gain_bits >= ideal_bits - 0.25
-    limit = 1
-    for k, good in zip(osr_list, ok):
-        if not good:
-            break
-        limit = k
-    if s1 < 0.3:
-        # Sem dither o ruído das médias cai, mas a média converge para o código errado (viés de quantização
-        # de até ~0,5 LSB): não há resolução nova, mesmo com a curva parecendo ideal.
-        limit = 1
-    vals, counts = np.unique(w & 0x0FFF, return_counts=True)
-    toggles = int(np.count_nonzero(np.diff(ref)))
-    return {'n': n, 'osr': osr, 'sigma': sig, 'sigma_std': sig_std, 'ideal': ideal,
-            'gain_bits': gain_bits, 'ideal_bits': ideal_bits, 'enob': enob, 'limit_osr': limit,
-            'sigma_raw': float(np.std(codes)), 'mean': float(codes.mean()),
-            'hist_codes': vals.astype(np.int64), 'hist_counts': counts.astype(np.int64),
-            'distinct_codes': int(vals.size), 'ref_toggles': toggles, 'ref_on_frac': float(ref.mean())}
-
-
-def resolution_verdict(res, laser_power=None):
-    '''Texto curto (HTML) com a conclusão do teste de resolução.'''
-    s1 = res['sigma'][0]
-    lines = []
-    if res['ref_toggles'] > 2 and (laser_power is None or laser_power > 0):
-        lines.append('<b style="color:#d00000;">O laser estava modulando durante a medida.</b> O sinal entra '
-                     'como "ruído" e o resultado não vale; repita com PWM 0 % ou luz constante.')
-    if s1 < 0.3:
-        lines.append(f'<b style="color:#d00000;">Sem dither:</b> σ = {s1:.2f} LSB, quase todas as amostras caem no '
-                     f'mesmo código ({res["distinct_codes"]} códigos distintos). O ruído das médias até cai, mas '
-                     'a média converge para o código errado (viés de até ~½ LSB): não há resolução nova. '
-                     'A sobreamostragem precisa de ruído de ~0,5 LSB ou mais (ganho maior no OPT101 ajuda).')
-        return '<br>'.join(lines)
-    elif s1 < 0.5:
-        lines.append(f'<b style="color:#e07000;">Dither marginal:</b> σ = {s1:.2f} LSB. O ganho pode ficar '
-                     'abaixo do ideal; ruído um pouco maior (ou ganho maior no OPT101) ajudaria.')
-    else:
-        lines.append(f'Dither suficiente: σ = {s1:.2f} LSB por amostra ({res["distinct_codes"]} códigos distintos).')
-    lim = res['limit_osr']
-    i = int(np.flatnonzero(res['osr'] == lim)[0])
-    rate = RAW_FS / lim
-    rate_txt = f'{rate / 1000:.4g} kS/s' if rate >= 1000 else f'{rate:.4g} S/s'
-    lines.append(f'O ruído cai como 1/√N até <b>N = {lim}</b> ({rate_txt}): '
-                 f'ganho de {res["gain_bits"][i]:.2f} bit (ideal {res["ideal_bits"][i]:.2f}), '
-                 f'{res["enob"][i]:.1f} bits efetivos.')
-    if lim < OSR_CHOICES[-1] and res['osr'][-1] > lim:
-        lines.append('Acima disso a curva se afasta do ideal: ruído 1/f, interferência ou deriva dominam e '
-                     'aumentar o OSR quase não melhora a resolução (o lock-in continua filtrando pela banda do τ).')
-    return '<br>'.join(lines)
 
 
 class AudioRecorder:

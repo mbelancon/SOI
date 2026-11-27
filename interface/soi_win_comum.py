@@ -230,7 +230,7 @@ class CommonMixin:
     def warming_up(self):
         return getattr(self, 'warm_state', None) is not None
 
-    def _make_sweep_box(self, title, fields, on_click, extra=(), more=(), warm_pwm=None):
+    def _make_sweep_box(self, title, fields, on_click, extra=(), more=(), warm_pwm=None, warm_default=None):
         '''Quadro de varredura padrão (mesmo em todas as abas): campos na 1ª linha (e os de 'extra'
         numa linha própria); botão, tempo e barra de progresso na última. Retorna (quadro, botão,
         rótulo do tempo, barra).'''
@@ -252,12 +252,15 @@ class CommonMixin:
                     g.addWidget(QtWidgets.QLabel(label))
                 g.addWidget(w)
             lay.addLayout(row1)
-        row2 = QtWidgets.QHBoxLayout()
+        # 2.5.0: botão e warm-up numa linha que quebra (painel lateral estreito); tempo e barra na linha de baixo
+        row2 = soi_layout.FlowBar(hspace=6, vspace=3, last_right=False)
+        row3 = QtWidgets.QHBoxLayout()
         btn = QtWidgets.QPushButton('▶ Varredura')
         btn.setStyleSheet('background:#cfe2ff;')
         btn.setMinimumWidth(110)
         btn.clicked.connect(lambda _=False, b=btn, f=on_click: self._warm_click(b, f))
         row2.addWidget(btn)
+        g_w = row2.group()
         eta = QtWidgets.QLabel('Tempo estimado: --:--')
         # O tempo fica no fim da linha (depois do warm-up): quando o texto muda, nada mais se move; com pouco
         # espaço ele quebra a linha em vez de alargar a janela. O botão tem largura para "⏹ Warm-up 0:00:00".
@@ -270,14 +273,14 @@ class CommonMixin:
         chk_w.setToolTip('Antes do 1º ponto, liga o laser (no PWM da medida) e espera o tempo indicado: depois que o laser\n'
                          'liga, o sinal fotoacústico cai alguns % até a amostra e a célula aquecerem (campanha de 16-17/11:\n'
                          '−14 % com constante de ~4,4 min a 10 Hz). Clicar no botão durante a espera cancela.')
-        sp_w = self._dspin(10.0, 7200.0, WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
+        sp_w = self._dspin(10.0, 7200.0, warm_default or WARMUP_DEF_S, 0, 30.0, None, 85, ' s')
         sp_w.setVisible(False)
         chk_w.toggled.connect(sp_w.setVisible)
         chk_w.toggled.connect(lambda _=False, e=eta: self._eta_render(e))
         sp_w.valueChanged.connect(lambda _=0.0, e=eta: self._eta_render(e))
-        row2.addWidget(chk_w)
-        row2.addWidget(sp_w)
-        row2.addWidget(eta, 4)
+        g_w.addWidget(chk_w)
+        g_w.addWidget(sp_w)
+        row3.addWidget(eta, 4)
         if not hasattr(self, 'warm_w'):
             self.warm_w = {}
         self.warm_w[btn] = (chk_w, sp_w, warm_pwm, eta)
@@ -286,8 +289,9 @@ class CommonMixin:
         bar.setTextVisible(False)
         bar.setFixedHeight(12)
         bar.setVisible(False)
-        row2.addWidget(bar, 3)
+        row3.addWidget(bar, 3)
         lay.addLayout(row2)
+        lay.addLayout(row3)
         return box, btn, eta, bar
 
     def flash(self, text, seconds=3.0):
@@ -302,13 +306,15 @@ class CommonMixin:
             conn = f"<span style='color:#1a7f1a;'>●</span> STM32 conectado ({self.link.port})"
             tip = ''
         elif self.simulating:
-            conn = "<span style='color:#1f5fbf;'>●</span> Simulação (sem STM32)"
+            conn = "<span style='color:#d07000;font-weight:bold;'>● SIMULAÇÃO (sem STM32)</span>"
             tip = ''
         else:
             conn = "<span style='color:#d07000;'>●</span> STM32 desconectado, procurando..."
             tip = self.link.last_error or 'Nenhuma porta do STM32 (USB VID 0x0483) encontrada.'
         task = ''
-        if self.sweep_active:
+        if self.sweep_active and self.sweep_kind == 'T':
+            task = f'Sinal x t {"OPT101" if self.sweep_target == "OPT" else "INMP441"}: {len(self.sweep_results)} pontos, {self._fmt_time(time.perf_counter() - self.ot_t0)}'
+        elif self.sweep_active:
             alvo = 'OPT101' if self.sweep_target == 'OPT' else 'INMP441'
             tipo = 'frequência' if self.sweep_kind == 'F' else 'PWM'
             task = (f'Varredura {alvo} em {tipo}: ponto {self.sweep_idx + 1}/{len(self.sweep_freqs)}, '
@@ -345,6 +351,10 @@ class CommonMixin:
     def apply_frequency(self, val, command=True):
         '''Nova frequência de modulação: cortes automáticos dos dois lock-ins e, com command, envia F ao STM32
         (command=False: modulação óptica, a frequência é a detectada no OPT101).'''
+        # Frequência nova (enviada ao STM32): zera os filtros dos dois lock-ins. Mantidos, o ponto anterior deixava um
+        # resto que, depois de um ponto forte, pesava num ponto fraco (bateria de 26/11: 2-3 % acima de 700 Hz na
+        # ordem embaralhada, 0,08 % na crescente). Do zero, o resto é uma fração fixa do próprio ponto (0,3 % em 7τ).
+        new_f = command and abs(val - getattr(self, 'ref_freq', val)) > 1e-6 * max(abs(val), 1e-9)
         self.ref_freq = val
         tau = auto_tau(val)
         self.cutoff_hp = get_effective_cutoffs(val)[1]
@@ -354,11 +364,15 @@ class CommonMixin:
         self.update_raw_window()
         with self.dsp_lock:
             self.dsp.update_params(val, self.cutoff_lp, self.cutoff_hp)
+            if new_f:
+                self.dsp.reset_filters()
         # O lock-in do INMP441 segue a frequência de excitação comum
         with self.audio_lock:
             self.audio_freq = val
             self.audio_cutoff_lp, self.audio_cutoff_hp = tau_cutoff(tau, AUDIO_FS_REAL), self.cutoff_hp
             self.audio_li.update_params(val, self.audio_cutoff_lp, self.audio_cutoff_hp)
+            if new_f:
+                self.audio_li.reset_filters()
         self._set_spin(self.sp_audio_tau, tau)
         self._set_spin(self.sp_audio_hp, self.audio_cutoff_hp)
         self._set_spin(self.sp_tau, tau)
@@ -387,6 +401,30 @@ class CommonMixin:
         if not self.ext_mode:
             self.link.write(f"P{val}\n")
 
+    def _beam_off_after_sweep(self):
+        """Fim de qualquer varredura (concluída, parada ou interrompida): PWM 0, feixe desligado (Marcos, 26/11).
+        Dentro de Medidas em Série não desliga: a série decide no fim (fim = laser_parado ou manter)."""
+        if getattr(self, 'series_active', False) or self.ext_mode:
+            return
+        for rp in (getattr(self, 'dual_rep', None), getattr(self, 'opt_rep', None)):
+            if rp and rp['k'] < rp['n']:      # entre repetições da mesma varredura: o feixe continua ligado
+                return
+        if self.sp_power.value() > 0 or self.laser_power > 0:
+            self.pwm_before_off = float(self.sp_power.value() or self.laser_power)
+            self.sp_power.setValue(0.0)
+            self.on_power(0.0)
+            self.flash('Fim da varredura: PWM 0, feixe desligado.', 5.0)
+
+    def _beam_on_for_sweep(self):
+        """Início de varredura em frequência com o feixe desligado (PWM 0 deixado pela varredura anterior): volta ao
+        PWM de antes do desligamento, para não medir no escuro."""
+        pwm = getattr(self, 'pwm_before_off', None)
+        if self.ext_mode or self.sp_power.value() > 0 or not pwm:
+            return
+        self.sp_power.setValue(pwm)
+        self.on_power(self.sp_power.value())
+        self.flash(f'PWM {pwm:g} % religado para a varredura.', 5.0)
+
     def _link_params(self):
         '''(F, P) enviados ao STM32 na conexão: no modo óptico, o farol (1 Hz, PWM 0).'''
         return (EXT_BEACON_HZ, 0.0) if self.ext_mode else (self.ref_freq, self.laser_power)
@@ -401,18 +439,13 @@ class CommonMixin:
             self.chk_dual_nb.setChecked(False)
 
     def open_settings(self):
-        '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101 e Finalizar experimento.'''
+        '''Janela Configurações: trigger dos lock-ins, alimentação do OPT101, varreduras e desempenho. Compacta (2.5.1):
+        as explicações ficam nas dicas (balão) de cada opção.'''
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle('Configurações')
-        dlg.setMinimumWidth(620)
+        dlg.setMinimumWidth(440)
         lay = QtWidgets.QVBoxLayout(dlg)
-
-        def info(text):
-            lbl = QtWidgets.QLabel(text)
-            lbl.setWordWrap(True)
-            lbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
-            lbl.setStyleSheet('color:#404040;margin-left:22px;margin-bottom:4px;')
-            return lbl
+        lay.setSpacing(6)
 
         busy = self.sweep_active or self.dual_active
         box = self._group('Trigger (referência dos lock-ins)')
@@ -420,20 +453,24 @@ class CommonMixin:
         r_el = QtWidgets.QRadioButton('Eletrônico (STM32)')
         r_op = QtWidgets.QRadioButton('Óptico (OPT101, chopper)')
         (r_op if self.ext_mode else r_el).setChecked(True)
-        bl.addWidget(r_el)
-        bl.addWidget(info('O STM32 modula o laser pelo PWM em PA8 na frequência do campo <b>Freq</b>, e o instante de '
-                          'cada borda vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.'))
-        bl.addWidget(r_op)
-        bl.addWidget(info('A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI '
-                          'acha a frequência no sinal do OPT101, que precisa ver a luz <b>já modulada</b>, e usa a fase '
-                          'dele como referência do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de '
-                          '1 Hz no bit de referência, que alinha o microfone ao OPT101: <b>não ligue nada em PA8</b>. '
-                          'A faixa de busca da frequência fica na aba OPT101; no Modo Duplo a varredura em frequência '
-                          'vira manual (você muda o chopper).'))
+        r_el.setToolTip('O STM32 modula o laser pelo PWM em PA8 na frequência do campo Freq, e o instante de cada borda\n'
+                        'vai junto com as amostras. É o modo normal, com o laser ligado ao driver do SOI.')
+        r_op.setToolTip('A luz é modulada fora do SOI (chopper, ventilador) e a fonte tem alimentação própria. O SOI acha a\n'
+                        'frequência no sinal do OPT101, que precisa ver a luz já modulada, e usa a fase dele como referência\n'
+                        'do OPT101 e do microfone. O STM32 fica com PWM 0 e só gera um "farol" de 1 Hz no bit de referência,\n'
+                        'que alinha o microfone ao OPT101: não ligue nada em PA8. A faixa de busca da frequência fica na aba\n'
+                        'OPT101; no Modo Duplo a varredura em frequência vira manual (você muda o chopper).')
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(r_el)
+        row.addWidget(r_op)
+        row.addStretch(1)
+        bl.addLayout(row)
         if busy:
             for r in (r_el, r_op):
                 r.setEnabled(False)
-            bl.addWidget(info('<i>Termine ou cancele a varredura em andamento para trocar o trigger.</i>'))
+            note = QtWidgets.QLabel('<i>Termine ou cancele a varredura para trocar o trigger.</i>')
+            note.setTextFormat(QtCore.Qt.TextFormat.RichText)
+            bl.addWidget(note)
         lay.addWidget(box)
 
         box = self._group('Alimentação do OPT101')
@@ -441,43 +478,51 @@ class CommonMixin:
         r33 = QtWidgets.QRadioButton('3,3 V (padrão)')
         r50 = QtWidgets.QRadioButton('5 V')
         (r50 if self.opt_supply > 4 else r33).setChecked(True)
-        bl.addWidget(r33)
-        bl.addWidget(info('A saída do OPT101 vai de ~7,5 mV até V<sub>s</sub> − 1,3 V ≈ <b>2,0 V</b>: nunca passa do limite '
-                          'do ADC do STM32 (3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. '
-                          'Linha "Max OPT101 output" em 2,0 V.'))
-        bl.addWidget(r50)
-        bl.addWidget(info('A saída chega a ≈ <b>3,7 V</b>, acima do limite do ADC. Ajuste o ganho (resistor de '
-                          'realimentação) ou a luz para o pico ficar abaixo de ~2,9 V (vermelho a partir de 90 % = 3,0 V): usa quase toda '
-                          'a faixa do ADC. Linha "Max OPT101 output" em 3,3 V (limite do ADC, antes do OPT101 saturar).'))
-        warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: resistor de 1 kΩ em série entre a saída do '
-                                'OPT101 e o PA0 e diodo Schottky BAT54 do PA0 para os 3,3 V. Sem isso o STM32 pode queimar.')
+        r33.setToolTip('A saída do OPT101 vai de ~7,5 mV até Vs − 1,3 V ≈ 2,0 V: nunca passa do limite do ADC do STM32\n'
+                       '(3,3 V), então não precisa de proteção. Usa ~60 % da faixa do ADC. Linha "Max OPT101 output" em 2,0 V.')
+        r50.setToolTip('A saída chega a ≈ 3,7 V, acima do limite do ADC. Ajuste o ganho (resistor de realimentação) ou a luz\n'
+                       'para o pico ficar abaixo de ~2,9 V (vermelho a partir de 90 % = 3,0 V): usa quase toda a faixa do ADC.\n'
+                       'Linha "Max OPT101 output" em 3,3 V (limite do ADC, antes do OPT101 saturar).\n'
+                       'ATENÇÃO: com 5 V o PA0 precisa de proteção (1 kΩ em série + Schottky BAT54 do PA0 para 3,3 V).')
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(r33)
+        row.addWidget(r50)
+        row.addStretch(1)
+        bl.addLayout(row)
+        warn = QtWidgets.QLabel('⚠ Com 5 V o PA0 <b>precisa de proteção</b>: 1 kΩ em série + Schottky BAT54 para 3,3 V. '
+                                'Sem isso o STM32 pode queimar.')
         warn.setWordWrap(True)
         warn.setTextFormat(QtCore.Qt.TextFormat.RichText)
         warn.setStyleSheet('color:#b00000;background:#fdecea;border:1px solid #e0a0a0;border-radius:4px;padding:4px;')
         bl.addWidget(warn)
         warn.setVisible(self.opt_supply > 4)
-        bl.addWidget(self.chk_scope_fixed)
-        self.chk_scope_fixed.show()
-        lay.addWidget(box)
+        lay.addWidget(box)                          # 2.5.0: a escala fixa do osciloscópio foi para a seção da aba OPT101
 
-        box = self._group('Varreduras')
+        box = self._group('Varreduras e desempenho')
         bl = QtWidgets.QVBoxLayout(box)
-        chk_nb = QtWidgets.QCheckBox('Mostrar "Descartar trechos com som da sala" na varredura em frequência')
+        chk_nb = QtWidgets.QCheckBox('Mostrar "Descartar trechos com som da sala"')
         chk_nb.setChecked(self.show_nb)
+        chk_nb.setToolTip('Mostra, na varredura em frequência do Modo Duplo, a caixa que descarta trechos com som da sala.\n'
+                          'A cada 1 s o SOI compara o sinal do microfone nas frequências vizinhas (f ± 7 %) com o sinal em f;\n'
+                          'o segundo em que um som da sala sobe as vizinhas sai da média, e o ponto é refeito se mais de 30 %\n'
+                          'for descartado. Com τ = 1 s não trouxe ganho (testes de 18–19/11); pode valer com τ maior.\n'
+                          'Desligada, a caixa some da interface e o descarte fica desligado.')
         bl.addWidget(chk_nb)
-        bl.addWidget(info('A cada 1 s o SOI compara o sinal do microfone nas frequências vizinhas (f ± 7 %) com o sinal '
-                          'em f; o segundo em que um som da sala sobe as vizinhas sai da média, e o ponto é refeito se '
-                          'mais de 30 % for descartado. Com τ = 1 s não trouxe ganho (testes de 18–19/11); pode valer '
-                          'com τ maior. Desligada, a caixa some da interface e o descarte fica desligado.'))
         chk_nb.toggled.connect(self.set_show_nb)
+        chk_light = QtWidgets.QCheckBox('Modo leve (computadores lentos)')
+        chk_light.setChecked(self.light_mode)
+        chk_light.setToolTip('Desenha a tela 10 vezes por segundo (em vez de 25), com menos pontos no osciloscópio, e não\n'
+                             'processa o INMP441 enquanto você não está na aba dele nem em medida ou Modo Duplo (ao voltar,\n'
+                             'o lock-in dele recomeça e leva ~3τ para estabilizar). Os dados medidos e salvos são os mesmos.\n'
+                             'Use se a interface engasgar ou houver perdas de USB.')
+        bl.addWidget(chk_light)
+        chk_light.toggled.connect(self.set_light_mode)
         lay.addWidget(box)
+        hint = QtWidgets.QLabel('Passe o mouse sobre uma opção para ver os detalhes.')
+        hint.setStyleSheet('color:#707070;')
+        lay.addWidget(hint)
 
-        box = self._group('Experimento')
-        bl = QtWidgets.QHBoxLayout(box)
-        bl.addWidget(self.btn_finish)
-        self.btn_finish.show()
-        bl.addWidget(info('ZIP com os arquivos salvos nesta sessão e a calibração em uso.'), 1)
-        lay.addWidget(box)
+        # 2.5.0: "Finalizar experimento" fica à vista, na seção Experimento do painel lateral
 
         def on_trigger(checked):
             if not checked:
@@ -509,15 +554,21 @@ class CommonMixin:
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         btns.rejected.connect(dlg.reject)
         btns.accepted.connect(dlg.accept)
+        soi_layout.scroll_dialog(dlg)                          # 2.5.0: rola em telas baixas (125 % em 1366×768)
         lay.addWidget(btns)
         for lbl in dlg.findChildren(QtWidgets.QLabel):        # rótulos com quebra de linha: altura certa
             if lbl.wordWrap():
-                lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 60))
+                lbl.setMinimumHeight(lbl.heightForWidth(dlg.minimumWidth() - 40))
+        dlg.fit_scroll()
         dlg.adjustSize()
+        soi_layout.fit_to_screen(dlg)
         dlg.exec()
-        # o botão Finalizar volta para fora da janela (sem pai visível) para não ser destruído com ela
-        self.btn_finish.setParent(None)
-        self.chk_scope_fixed.setParent(None)
+
+    def set_light_mode(self, on):
+        '''Modo leve (Configurações): salvo na hora, vale já e na próxima abertura.'''
+        self.light_mode = bool(on)
+        self.timer.setInterval(LIGHT_GUI_INTERVAL_MS if self.light_mode else GUI_INTERVAL_MS)
+        QtCore.QSettings('LCTM', 'SOI Controller').setValue('light_mode', self.light_mode)
 
     def set_opt_supply(self, v):
         self.opt_supply = 5.0 if v > 4 else 3.3
@@ -645,17 +696,17 @@ class CommonMixin:
         self.ext_range_w.setVisible(ext)
         self.plot_raw.getPlotItem().setTitle(
             'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do PLL óptico '
-            '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0) - osciloscópio em tempo real' if ext else
+            '(<span style="color:#009600;">verde tracejado</span>, cos θ ≥ 0)' if ext else
             'Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '
-            '(<span style="color:#009600;">verde tracejado</span>, 0/1) - osciloscópio em tempo real')
+            '(<span style="color:#009600;">verde tracejado</span>, 0/1)')
         for b in list(self.btn_sweeps.values()) + list(getattr(self, 'btn_sweeps_aud', {}).values()):
             b.setEnabled(not ext and not busy)
             b.setToolTip('Use o Modo Duplo (varredura manual) na modulação óptica.' if ext else '')
         if hasattr(self, 'dual_manual_box'):
             self.dual_manual_box.setVisible(ext)
             self.dual_box_f.setVisible(not ext)
-            for b in (self.btn_dual_p_panel, self.btn_dual_t_panel):     # PWM e tempo: modulação eletrônica
-                b.setVisible(not ext)
+            for b, key in ((self.btn_dual_p_panel, 'dual_p'), (self.btn_dual_t_panel, 'dual_t')):   # só modulação eletrônica
+                self.side_sections[key].setVisible(not ext)
                 if ext:
                     b.setChecked(False)
         self._update_ext_label()
@@ -751,4 +802,3 @@ class CommonMixin:
         with self.dsp_lock:
             self.dsp.set_mains_filter(checked)
 
-    # ------------------------------------------------------------ Teste de resolução

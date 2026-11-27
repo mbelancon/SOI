@@ -18,7 +18,7 @@ Principais diferenças em relação à versão com Matplotlib:
   * Modo Valor Médio vetorizado;
   * sem tkinter/matplotlib (executável PyInstaller menor).
 '''
-__version__ = '2.4.0'      # versão do SOI Controller (ver CHANGELOG.md)
+__version__ = '2.5.1'      # versão do SOI Controller (ver CHANGELOG.md)
 
 import binascii
 import bisect
@@ -50,11 +50,12 @@ from soi_win_dual_sweep import DualSweepMixin
 from soi_win_comum import CommonMixin
 from soi_win_dual_fit import DualPanelsMixin
 from soi_win_opt import OptMixin
+from soi_win_opt_sweep import OptSweepMixin
 from soi_win_series import SeriesMixin
 from soi_win_audio import AudioMixin
 
 
-class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, CommonMixin, DualPanelsMixin, OptMixin, SeriesMixin, AudioMixin,
+class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, CommonMixin, DualPanelsMixin, OptMixin, OptSweepMixin, SeriesMixin, AudioMixin,
                    QtWidgets.QMainWindow):
     version = __version__
     def __init__(self):
@@ -73,7 +74,6 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
 
         # --- DSP do OPT101 (PyLockIn, definido neste arquivo) ---
         self.osr = OSR_DEFAULT                # sobreamostragem feita na interface (FS = RAW_FS / osr)
-        self.res_capture = None               # Teste de resolução: bytes crus capturados (None = parado)
         self.dsp = PyLockIn(RATE.FS, self.ref_freq, self.cutoff_lp, self.cutoff_hp)
         self.rx_bytes = bytearray()
         self.rx_pos = 0                       # índice no fluxo óptico da primeira palavra de rx_bytes
@@ -183,6 +183,7 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         self.simulator = SignalSimulator()
         self.audio_sim = AudioSimulator()
         self.simulating = False
+        self._sim_auto_t0 = time.perf_counter()   # o simulado automático espera a placa conectar por SIM_AUTO_DELAY_S
         self._pll_bad_since = None            # desde quando o PLL do OPT101 não trava (conectado)
         self.session_files = []               # arquivos salvos nesta sessão (ZIP do "Finalizar experimento")
 
@@ -194,12 +195,16 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.tick)
-        # Medida em curso (varreduras, Modo Duplo, Teste de resolução): o Windows não suspende por inatividade
+        # Medida em curso (varreduras, Modo Duplo, Medidas em Série): o Windows não suspende por inatividade
         self.keep_awake = False
         self.awake_timer = QtCore.QTimer(self)
         self.awake_timer.timeout.connect(self._update_keep_awake)
         self.awake_timer.start(2000)
-        self.timer.start(GUI_INTERVAL_MS)
+        # Modo leve (Configurações): menos quadros por segundo, osciloscópio com menos pontos e o lock-in do INMP441
+        # parado enquanto nada o usa. Só afeta o desenho e o consumo de CPU, não os dados medidos.
+        v = QtCore.QSettings('LCTM', 'SOI Controller').value('light_mode')
+        self.light_mode = str(v).lower() in ('true', '1')
+        self.timer.start(LIGHT_GUI_INTERVAL_MS if self.light_mode else GUI_INTERVAL_MS)
 
         self._start_audio_rec()
         self.opt_thread = StepThread(self._optical_step)
@@ -267,10 +272,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             self._clear_audio_wave()
             self.curve_audio_fft.setData([], [])
         self._check_modulation_sync(now, connected)
+        # Modo simulado automático (2.5.0, sem a caixa "Simular amostragem"): sem STM32 a interface simula; com a
+        # placa, usa a placa. Não entra no simulado durante uma medida (uma queda da USB não vira dado simulado) nem
+        # no modo sem janela (lá só com --simulado).
         if connected and self.chk_sim.isChecked():
             self.chk_sim.setChecked(False)
-        if self.chk_sim.isHidden() != connected:
-            self.chk_sim.setVisible(not connected)
+        elif (not connected and not self.chk_sim.isChecked() and not getattr(self, 'headless', False)
+              and now - self._sim_auto_t0 >= SIM_AUTO_DELAY_S and not self._measuring()):
+            self.chk_sim.setChecked(True)
         if self.simulating and not connected:
             chop = self.chopper_sim if self.ext_mode else None
             with self.dsp_lock:
@@ -289,12 +298,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             text = getattr(self, 'audio_noise_text', None)
             if text and self.lbl_audio_noise.text() != soi_i18n.tr(text):
                 self.lbl_audio_noise.setText(text)
+            # 2.5.0 (Marcos, 25/11): sem o quadro de valores do fit nas FFTs do INMP441 e do OPT101 (o SNR pico/piso dele não é o
+            # do lock-in e confundia); ficam a curva do fit e o aviso de pico ausente
             self._show_fft_fit(self.txt_audio_fft_fit, self.lbl_audio_fft_missing,
                                self.audio_fft_enabled and self.chk_audio_fft_fit.isChecked(),
-                               self.audio_fft_fit_html, self.audio_fft_missing)
+                               None, self.audio_fft_missing)
             self._show_fft_fit(self.txt_opt_fft_fit, self.lbl_opt_fft_missing,
                                self.opt_fft_enabled and self.chk_opt_fft_fit.isChecked(),
-                               self.opt_fft_fit_html, self.opt_fft_missing)
+                               None, self.opt_fft_missing)      # 2.5.0: sem o quadro de valores (como no INMP441)
 
         # 2. Resultados do lock-in do OPT101 e atualização dos buffers
         raw_dirty = False
@@ -351,6 +362,14 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         if raw_dirty:
             ring = self.raw
             sa, sb = ring.segments()
+            if self.light_mode:
+                # Só o desenho: um ponto a cada 'k' (a referência 0/1 e o sinal usam o mesmo passo)
+                def cut(s):
+                    k = max(1, (s.stop - s.start) // LIGHT_SCOPE_POINTS)
+                    return slice(s.start, s.stop, k)
+                sa = cut(sa)
+                if sb is not None:
+                    sb = cut(sb)
             self.c_adc_a.setData(ring.t[sa], ring.adc[sa])
             self.c_ref_a.setData(ring.t[sa], ring.ref[sa])
             if sb is not None:
@@ -508,17 +527,19 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                  'sp_dual_tau_p', 'sp_dual_flat_tol', 'sp_dual_tau_sensor',
                  'sp_dual_thick', 'sp_dual_model_f0', 'sp_dual_model_f1', 'sp_dual_model_n',
                  'sp_cal_L', 'sp_cal_alpha', 'sp_cal_n', 'sp_dual_std_fmax', 'sp_dual_std_fmin',
-                 'sp_cal_a_L', 'sp_cal_b_L', 'sp_dual_adapt_tol', 'sp_dual_blocks', 'sp_dual_reps', 'sp_dt_f', 'sp_dt_pwm', 'sp_dt_tau', 'sp_dt_dt',
-                 'sp_dt_dur')
-        checks = ('chk_mains', 'chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
-                  'chk_audio_fft_full', 'chk_audio_mains', 'btn_audio_sweeps',
+                 'sp_cal_a_L', 'sp_cal_b_L', 'sp_dual_adapt_tol', 'sp_dual_reps', 'sp_dt_f', 'sp_dt_pwm', 'sp_dt_tau', 'sp_dt_dt',
+                 'sp_dt_dur', 'sp_opt_tau', 'sp_opt_tol', 'sp_opt_reps', 'sp_ot_f', 'sp_ot_pwm', 'sp_ot_tau', 'sp_ot_dt',
+                 'sp_ot_dur',
+                 'sp_aud_tau', 'sp_aud_tol', 'sp_aud_reps', 'sp_at_f', 'sp_at_pwm', 'sp_at_tau', 'sp_at_dt', 'sp_at_dur')
+        checks = ('chk_audio_lockin', 'chk_audio_noise', 'chk_audio_fft', 'chk_audio_fft_fit',
+                  'chk_audio_fft_full', 'btn_audio_sweeps',
                   'chk_opt_fft', 'chk_opt_fft_fit', 'chk_opt_fft_full', 'btn_opt_sweeps', 'btn_dual_sweeps_panel', 'btn_dual_pwm_panel', 'btn_dual_p_panel', 'btn_dual_t_panel', 'chk_dual_std_phase',
-                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_dual_adapt40', 'chk_dual_blocks',
+                  'chk_dual_norm', 'chk_dual_sensors', 'chk_dual_adapt', 'chk_opt_adapt', 'chk_aud_adapt',
                   'chk_dual_cal_err', 'chk_dual_out_red', 'chk_dual_nb', 'chk_dual_warm_noise')
         # cmb_cal_ref antes de cmb_cell: a referência escolhe a célula, e a célula salva prevalece
         combos = ('cmb_osr', 'cmb_dual_mode_p', 'cmb_dual_m_fspace', 'cmb_dual_model', 'cmb_dual_model_target',
-                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order',
-                  'cmb_cal_ref', 'cmb_cell', 'cmb_cal_a', 'cmb_cal_b')
+                  'cmb_dual_p_deg', 'cmb_dual_p_target', 'cmb_dual_order', 'cmb_opt_fspace', 'cmb_opt_order', 'cmb_aud_fspace', 'cmb_aud_order',
+                  'cmb_cal_ref', 'cmb_cal_a', 'cmb_cal_b')   # cmb_cell fora (2.5.0: só a Câmara)
         return spins, checks, combos
 
     def _fit_to_screen(self):
@@ -561,7 +582,8 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                     w = getattr(self, name)
                     w.setValue(int(v) if isinstance(w, QtWidgets.QSpinBox) else v)
             # Filtros por último: a frequência redefine os cortes automáticos
-            for name in ('sp_tau', 'sp_hp', 'sp_audio_tau', 'sp_audio_hp'):
+            # 2.5.0: passa-altas sem campo na tela; fica no automático da frequência (um valor manual antigo não volta)
+            for name in ('sp_tau', 'sp_audio_tau'):
                 v = num(name)
                 if v is not None:
                     getattr(self, name).setValue(v)
@@ -579,9 +601,19 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                 self.chk_dual_adapt.setChecked(False)
                 tau0 = SWEEP_TAU_DEF
                 st.setValue('sweep_defaults_20261119', 1)
-            if st.value('sweep_f0_1hz_20261125') is None:     # início padrão em 1 Hz (célula nova, Marcos 25/11; uma vez)
-                self.sp_dual_f0.setValue(SWEEP_F0_DEF)
+            if st.value('sweep_defaults_20261126') is None:   # padrões da célula nova (bateria de 26/11; uma vez)
+                self.chk_dual_adapt.setChecked(True)
+                self.cmb_dual_order.setCurrentIndex(0)        # crescente
+                self.sp_dual_reps.setValue(SWEEP_REPS_DEF)
+                for sp in (self.sp_dual_p0, self.sp_p0, self.sp_aud_p0):
+                    sp.setValue(max(sp.value(), PWM_SWEEP_START_DEF))
+                tau0 = ADAPT_TAU0_DEF
+                st.setValue('sweep_defaults_20261126', 1)
+            if st.value('sweep_f0_4hz_20261126') is None:     # início padrão em 4 Hz (Marcos 26/11; uma vez)
+                for sp in (self.sp_dual_f0, self.sp_dual_m_f0, self.sp_f0, self.sp_aud_f0):
+                    sp.setValue(SWEEP_F0_DEF)
                 st.setValue('sweep_f0_1hz_20261125', 1)
+                st.setValue('sweep_f0_4hz_20261126', 1)
             if st.value('nb_default_off_20261119') is None:   # descarte por vizinhas: desligado por padrão (uma vez)
                 self.chk_dual_nb.setChecked(False)
                 st.setValue('nb_default_off_20261119', 1)
@@ -597,6 +629,39 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
             v = st.value('dual_avoid')
             if v is not None:
                 self.ed_dual_avoid.setText(str(v))
+            v = st.value('opt_avoid')
+            if v is not None:
+                self.ed_opt_avoid.setText(str(v))
+            v = st.value('aud_avoid')
+            if v is not None:
+                self.ed_aud_avoid.setText(str(v))
+            if st.value('aud_sweeps_20261127') is None:       # varreduras do INMP441 no padrão do OPT101 (uma vez)
+                self.cmb_aud_fspace.setCurrentIndex(0)
+                self.sp_aud_df.setValue(float(CAL_SWEEP_N))
+                self.sp_aud_f0.setValue(SWEEP_F0_DEF)
+                self.sp_aud_f1.setValue(CAL_SWEEP_F1)
+                self.cmb_aud_order.setCurrentIndex(0)
+                self.chk_aud_adapt.setChecked(True)
+                self.sp_aud_tau.setValue(ADAPT_TAU_CAP)
+                self.sp_aud_reps.setValue(SWEEP_REPS_DEF)
+                st.setValue('aud_sweeps_20261127', 1)
+            if st.value('opt_sweeps_20261127') is None:       # varreduras do OPT101 no padrão do Modo Duplo (uma vez)
+                self.cmb_opt_fspace.setCurrentIndex(0)
+                self.sp_df.setValue(float(CAL_SWEEP_N))
+                self.sp_f0.setValue(SWEEP_F0_DEF)
+                self.sp_f1.setValue(CAL_SWEEP_F1)
+                self.cmb_opt_order.setCurrentIndex(0)
+                self.chk_opt_adapt.setChecked(True)
+                self.sp_opt_tau.setValue(ADAPT_TAU_CAP)
+                self.sp_opt_reps.setValue(SWEEP_REPS_DEF)
+                st.setValue('opt_sweeps_20261127', 1)
+            if st.value('pwm_start_40_20261127') is None:     # início padrão 30 -> 40 %; valores editados ficam (uma vez)
+                for sp in (self.sp_dual_p0, self.sp_p0, self.sp_aud_p0):
+                    if abs(sp.value() - 30.0) < 1e-6:
+                        sp.setValue(PWM_SWEEP_START_DEF)
+                st.setValue('pwm_start_40_20261127', 1)
+            self._on_sw_adapt('OPT', self.chk_opt_adapt.isChecked())
+            self._on_sw_adapt('AUDIO', self.chk_aud_adapt.isChecked())
             v = st.value('sample_name')
             if v is not None:
                 self.ed_sample.setText(str(v))
@@ -617,6 +682,17 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
                 self.dual_float.rel = (min(max(fx, 0.0), 1.0), min(max(fy, 0.0), 1.0))
             except (TypeError, ValueError):
                 pass
+            for key, sec in self.side_sections.items():
+                v = st.value('sec_' + key)
+                if v is not None:
+                    sec.set_open(str(v).lower() in ('1', 'true'))
+            for name in ('main_split', 'opt_split'):
+                v = st.value(name)
+                if v is not None:
+                    getattr(self, name).restoreState(v)
+            v = st.value('scope_open')
+            if v is not None:
+                self.btn_scope.setChecked(str(v).lower() in ('1', 'true'))
             geo = st.value('geometry')
             if geo is not None:
                 self.restoreGeometry(geo)
@@ -648,6 +724,8 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st.setValue('dual_sweep_tau', float(self.sp_dual_tau_f.value()))
         st.setValue('sample_name', self.ed_sample.text())
         st.setValue('dual_avoid', self.ed_dual_avoid.text())
+        st.setValue('opt_avoid', self.ed_opt_avoid.text())
+        st.setValue('aud_avoid', self.ed_aud_avoid.text())
         st.setValue('show_nb', int(self.show_nb))
         st.setValue('opt_supply', self.opt_supply)
         st.setValue('scope_fixed_33v', bool(self.chk_scope_fixed.isChecked()))
@@ -655,15 +733,22 @@ class LockInWindow(UiMixin, DualUiMixin, CalMixin, DualMixin, DualSweepMixin, Co
         st.setValue('dual_layout', self.dual_layout)
         st.setValue('dual_float_rel', '%.4f,%.4f' % self.dual_float.rel)
         st.setValue('tab', self.tabs.currentIndex())
+        # 2.5.0: seções do painel lateral, osciloscópio recolhido, largura do painel e divisão da aba OPT101
+        for key, sec in self.side_sections.items():
+            st.setValue('sec_' + key, int(sec.is_open()))
+        st.setValue('scope_open', int(self.btn_scope.isChecked()))
+        st.setValue('main_split', self.main_split.saveState())
+        if self.btn_scope.isChecked():
+            st.setValue('opt_split', self.opt_split.saveState())
 
     def _measuring(self):
         '''Há uma medida em curso que a suspensão do PC interromperia?'''
         st = getattr(self, 'series_tab', None)
         return bool(getattr(self, 'sweep_active', False) or getattr(self, 'dual_active', False)
                     or getattr(self, 'dual_rep', None)                    # entre duas repetições
+                    or getattr(self, 'opt_rep', None)
                     or getattr(self, 'warm_state', None) is not None      # warm-up antes da varredura
-                    or (st is not None and st.runner.active)              # Medidas em Série (também entre etapas)
-                    or getattr(self, 'res_capture', None) is not None)
+                    or (st is not None and st.runner.active))             # Medidas em Série (também entre etapas)
 
     def _update_keep_awake(self):
         busy = self._measuring()

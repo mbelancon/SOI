@@ -57,6 +57,8 @@ class DualSweepMixin:
             self._dual_draw_reps()
         if not self.chk_audio_lockin.isChecked() and not self.chk_audio_noise.isChecked():
             self.chk_audio_lockin.setChecked(True)     # o lock-in do INMP441 precisa estar rodando
+        if kind in ('F', 'M') and not _rep:
+            self._beam_on_for_sweep()
         self.dual_restore = self._excitation_snapshot() if kind != 'P' else None
         long_tau = self.dual_mode_w[kind].currentIndex() == 1
         if long_tau:
@@ -212,6 +214,7 @@ class DualSweepMixin:
         self.btn_dual_cal.setEnabled(self.dual_std is not None and self.dual_cal is None)
         self._on_cal_samples(fill=False)
         self._apply_mod_ui()
+        self._beam_off_after_sweep()
 
     def dual_step(self, now):
         if self.dual_src == 'X':
@@ -411,6 +414,9 @@ class DualSweepMixin:
         self.dual_results = [(x[i], ro_med[i], 0.0, s_med[i] * ro_med[i],
                               s_med[i] * ro_med[i] * np.nan_to_num(u_s[i]) / 100.0,
                               pa_med[i], np.nan_to_num(u_p[i]), po_med[i], 0.0) for i in range(m)]
+        # Sem normalização o gráfico usa o R do INMP441 e a incerteza dele (DP entre repetições), não a de S:
+        # se o R do OPT101 varia entre repetições (laser instável), u de S fica enorme sem o INMP441 ter variado
+        self.dual_raw_u = (self.dual_results, ra_med.copy(), MEDIAN_EFF * ra_sd / sq)
         self.dual_pinfo = []
         self.dual_nb = []
         self.dual_excluded = set()
@@ -438,24 +444,35 @@ class DualSweepMixin:
               flush=True)
 
     def _dual_draw_reps(self, x=None, s=None, ok=None):
-        """Repetições em cinza claro atrás da mediana (gráfico principal da varredura em frequência)."""
+        """Repetições esmaecidas, cada uma numa cor da paleta do Marcos, atrás da mediana destacada (gráfico
+        principal da varredura em frequência)."""
         if not hasattr(self, 'pw_dual_a'):
             return
-        if getattr(self, 'c_dual_reps', None) is None:
-            self.c_dual_reps = self.pw_dual_a.plot([], [], pen=None, symbol='o', symbolSize=5,
-                                                   symbolBrush=pg.mkBrush(150, 150, 150, 120), symbolPen=None)
-            self.c_dual_reps.setZValue(-5)
+        items = getattr(self, 'c_dual_reps', None) or []
         med = getattr(self, 'dual_median', None)
         if med is None or x is None or self.dual_kind != 'F' or med['S'].shape[1] != len(x):
-            self.c_dual_reps.setData([], [])
+            for it in items:
+                it.setData([], [])
             return
         src = med['S'] if self.chk_dual_norm.isChecked() else med['ra']
         with np.errstate(divide='ignore', invalid='ignore'):
             rel = src / np.nanmedian(src, axis=0)          # cada repetição relativa à mediana, na escala do gráfico
             ys = rel * s[None, :]
-        xs = np.broadcast_to(x, ys.shape)
-        mk = np.broadcast_to(ok, ys.shape) & np.isfinite(ys) & (ys > 0)
-        self.c_dual_reps.setData(xs[mk], ys[mk])
+        n = ys.shape[0]
+        while len(items) < n:
+            r, g, b = REP_COLORS[len(items) % len(REP_COLORS)]
+            it = self.pw_dual_a.plot([], [], pen=pg.mkPen(r, g, b, 70, width=1), symbol='o', symbolSize=5,
+                                     symbolBrush=pg.mkBrush(r, g, b, 120), symbolPen=None)
+            it.setZValue(-5)
+            items.append(it)
+        self.c_dual_reps = items
+        xa = np.asarray(x, float)
+        for i, it in enumerate(items):
+            if i >= n:
+                it.setData([], [])
+                continue
+            mk = np.asarray(ok, bool) & np.isfinite(ys[i]) & (ys[i] > 0)
+            it.setData(xa[mk], ys[i][mk])
 
     @staticmethod
     def _fmt_tau(t):
@@ -472,6 +489,7 @@ class DualSweepMixin:
         e do último ponto na 2ª; cor pela flutuação (verde dentro da Precisão, amarelo até 2×, vermelho acima).'''
         info = getattr(self, 'adapt_info', '') if 'refazendo' in getattr(self, 'adapt_info', '') else ''
         self.lbl_dual_status.setText(text + info)
+        self.lbl_dual_status.setToolTip('')
         tol = self.sp_dual_adapt_tol.value()
         now = getattr(self, 'fluct_now', '')
         self.lbl_dual_now.setText(now + (f' &nbsp;(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°)'.replace('.', ',')
@@ -496,10 +514,13 @@ class DualSweepMixin:
             tau = (self.adapt_taus[-1] if final and self.adapt_taus else self._adapt_tau_at(self.dual_src, f))
         else:
             tau = self.sp_audio_tau.value()
-        txt = f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span>".replace('.', ',')
+        # espaços não separáveis: se faltar largura, quebra só entre S e Δφ, nunca no meio de "Δφ ±1,5°"
+        txt = (f"<span style='color:{color};'>S&nbsp;±{s_s:.2g}&nbsp;%,</span> "
+               f"<span style='color:{color};white-space:nowrap;'>Δφ&nbsp;±{s_p:.2g}°</span>").replace('.', ',')
         if final:
             fv = head.split('] ')[-1]
-            self.fluct_last = f'Último ({fv}, τ = {self._fmt_tau(tau)}): {txt}'
+            head_nb = f'Último ({fv}, τ = {self._fmt_tau(tau)}):'.replace(' Hz,', '&nbsp;Hz, ').replace(' ', '&nbsp;')
+            self.fluct_last = (head_nb.replace('Hz,&nbsp;', 'Hz, ') + '<br>' + txt).replace('.', ',')
             self.fluct_now = ''
         else:
             self.fluct_now = f'Agora ({elapsed:.0f} s): {txt}'
@@ -628,9 +649,9 @@ class DualSweepMixin:
         return False
 
     def _adapt_blocks_max(self):
-        """Número máximo de medidas por ponto (1 sem "Permitir médias")."""
-        chk = getattr(self, 'chk_dual_blocks', None)
-        return self.sp_dual_blocks.value() if chk is not None and chk.isChecked() else 1
+        """Número máximo de medidas por ponto. Desde a 2.5.0 sempre 1: "Permitir médias" saiu (Marcos, 25/11); quando
+        for preciso, repetem-se varreduras separadas (Repetições)."""
+        return 1
 
     def _blocks_reset(self):
         self.adapt_blocks, self.adapt_block_len = 1, None
@@ -836,7 +857,6 @@ class DualSweepMixin:
             return
         if self.dual_kind == 'P':
             self._fit_dual_model(np.empty(0), np.empty(0), np.empty(0), np.empty(0), np.empty(0))
-            self._dual_diagnose(None, None, None)
             if self.btn_dual_model_panel.isChecked() and self.cmb_dual_model.currentData() is not None:
                 self.lbl_dual_model.setText('O ajuste com modelos vale só para a varredura em frequência.')
             self._set_dual_points(ro, ra, np.arange(x.size), keep)
@@ -909,6 +929,10 @@ class DualSweepMixin:
         self._set_dual_f_titles()
         if not norm:
             # Só o INMP441: R e fase brutos (a luz não é descontada); sem calibração nem fit do padrão
+            raw = getattr(self, 'dual_raw_u', None)
+            if raw is not None and raw[0] is self.dual_results and raw[1].size == ra.size:
+                ra = raw[1]                          # mediana das repetições: R do INMP441 e u = 1,25·DP/√N dele
+                ra_e = np.nan_to_num(raw[2])
             ok = ra > 0
             s = np.where(ok, ra, np.nan)
             s_rel = ra_e / np.maximum(ra, 1e-30)
@@ -961,11 +985,7 @@ class DualSweepMixin:
                                 + ' a correção pelo τ do sensor, e esta varredura está '
                                 + ('com' if self.dual_tau_sensor > 0 else 'sem')
                                 + ' ela: S e a fase do sistema ficam inconsistentes.</span>')
-                cell = self.cmb_cell.currentData()
-                if c['cell'] != cell:
-                    cal_txt += (f'<br><span style="color:#d00000;">⚠ A calibração foi feita na configuração '
-                                f'{CELLS.get(c["cell"], c["cell"])} e a célula escolhida é {CELLS.get(cell, cell)}: '
-                                'a acústica muda e a correção não vale. Gere uma calibração nesta configuração.</span>')
+                # 2.5.0: sem aviso de célula diferente da calibração (só existe a Câmara desde a remoção do modo OPC)
                 # Ressonância da célula: muda com o volume livre (altura da amostra). Longe da f0 da calibração,
                 # a correção perto do pico não vale
                 sh = resonance_shift(x[ok & inside & keep], s_raw[ok & inside & keep], c)
@@ -1006,7 +1026,6 @@ class DualSweepMixin:
         self.c_dual_a_theory.setData([], [])
         m = ok & keep                                     # pontos que entram no ajuste
         self._fit_dual_model(x[m], s[m], s_rel[m], dphi[m], dphi_e[m])
-        self._dual_diagnose(x[m], s[m], dphi[m])
         # Calibração (painel aberto): M(f) = S(f)·fⁿ da referência, sem ajuste de modelo; a faixa plana de M é onde
         # o sistema não distorce (lá S segue f⁻ⁿ). Pronta para "Gerar curva de calibração".
         cal_on = self.btn_dual_cal_panel.isChecked()
@@ -1206,13 +1225,10 @@ class DualSweepMixin:
             blk = (f", permitir médias: até {q['blocks']} medidas com o mesmo tau" if q.get('blocks', 1) > 1 else '')
             tau = (f"tau adaptativo (precisão {q['adapt'][0]:g} %, tau max {q['adapt'][1]:g} s{rng}; "
                    f"espera 7tau, média por max(1 s, 3tau){low}{blk})")
-        elif q['tau'] and q['kind'] == 'F' and min(v) < LOWF_FMAX:
-            tau += (f"; abaixo de {LOWF_FMAX:g} Hz tau = {max(q['tau'], LOWF_TAU_FIXED):g} s "
-                    f"(espera 7tau, média por 3tau)")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
-                        f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
+                        f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData() or 'Camara'}\n")
                 ext_cols = q.get('mod') == 'optica' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
                 if not resave and q.get('t_start') and not q.get('t_end'):
                     q['t_end'] = now_dt
@@ -1307,8 +1323,6 @@ class DualSweepMixin:
                     f.write(f'# {self.dual_fit}\n')
                 if q['kind'] == 'F' and self.dual_model_txt:
                     f.write(f'# Ajuste com modelo: {self.dual_model_txt}\n')
-                if q['kind'] == 'F' and self.dual_diag_txt:
-                    f.write(f'# Diagnostico: {self.dual_diag_txt}\n')
                 if self.dual_excluded:
                     f.write(f'# Pontos excluídos do ajuste com clique ({col}): '
                             + ', '.join(f'{self.dual_results[i][0]:g}' for i in sorted(self.dual_excluded))
@@ -1351,11 +1365,13 @@ class DualSweepMixin:
                 self._session_add(*self._calibration_files(self.dual_cal['path']))
             if resave:
                 self.flash(f'Varredura do Modo Duplo salva de novo: {csv_path}', 6.0)
-                self.lbl_dual_status.setText(f'Salva de novo: {csv_path}')
+                self.lbl_dual_status.setText(f'Salva de novo: {os.path.basename(csv_path)}')
+                self.lbl_dual_status.setToolTip(csv_path)
             else:
                 self.dual_last_csv = csv_path
                 self.flash(f'Varredura do Modo Duplo concluída: {csv_path}', 6.0)
-                self.lbl_dual_status.setText(f'Concluída: {csv_path}')
+                self.lbl_dual_status.setText(f'Concluída: {os.path.basename(csv_path)}')
+                self.lbl_dual_status.setToolTip(csv_path)       # caminho completo só no balão (cabia cortado)
         except Exception as e:
             print(f'Erro ao salvar a varredura do Modo Duplo: {e}')
 
