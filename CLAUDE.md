@@ -31,14 +31,14 @@ medidas em andamento) fica no CONTEXTO.md, importado abaixo.
   listado no CONTEXTO.md como "aguardando aprovação".
 - Não manter cópias de versões anteriores ("estrela"): o histórico fica no git (decisão do Marcos, 17/11).
 - PR só quando o Marcos pedir. Release (tag + executável) também só a pedido dele.
-- Pasta local de trabalho e testes: `C:\Users\mbelancon\ownCloud\Projetos\Claude\SOI` (roda o script Python,
+- Pasta local de trabalho e testes: `C:\Users\marco\Desktop\Claude\SOI` (roda o script Python,
   não o executável; a interface grava em `interface\Medidas`). Mudanças testadas lá voltam ao repositório por
   PR antes de cada release.
 - A pasta local se atualiza só por git (`git fetch` + checkout da branch em teste, ou `git pull`), nunca copiando
   arquivos. Antes, anotar o commit anterior (é o backup: voltar = checkout dele). Nunca atualizar durante medidas.
-- PC padrão do projeto: sbook2. Na pasta SOI dele nunca usar `git push --tags` nem `--mirror` (tags antigas
+- PC oficial do projeto: Ideapad (`C:\Users\marco\Desktop\Claude\SOI`). Na pasta SOI dele nunca usar `git push --tags` nem `--mirror` (tags antigas
   apagadas voltariam ao GitHub): empurrar só branches ou tags específicas.
-- No sbook2, cada atualização da pasta SOI é feita só a pedido do Marcos e com a interface fechada.
+- No Ideapad, a pasta SOI só é atualizada com a interface fechada e fora de medidas.
 
 ## Medidas
 - Grade de frequências: evitar múltiplos de 60 Hz e a série da ventoinha do laser (170 Hz × k).

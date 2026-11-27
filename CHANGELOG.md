@@ -10,7 +10,7 @@ The interface and the firmware share the same version number. It appears in `__v
 
 ## [Unreleased]
 
-## [2.5.1] - in development
+## [2.5.1] - 2026-11-27
 
 Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same USB protocol). Requested by Marcos on
 2026-11-27: the OPT101 and INMP441 tabs adopt the same sweep pattern as Dual Mode, and the Settings window gets more compact.
@@ -58,7 +58,7 @@ Patch/minor on top of 2.5.0: only the interface changes (firmware 2.0.0, same US
   checkboxes merged into one *Sweeps and performance* group. The 5 V warning (PA0 needs 1 kΩ + BAT54) stays visible
   when 5 V is selected.
 
-## [2.5.0] - in development
+## [2.5.0] - 2026-11-26 (never published separately; shipped in 2.5.1)
 
 Minor version: only the interface changes (firmware 2.0.0, same USB protocol). Goal: a cleaner window that fits
 1366×768 screens (also at 125 % Windows scaling). Plan approved by Marcos on 2026-11-24/25.

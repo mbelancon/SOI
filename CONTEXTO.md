@@ -22,8 +22,8 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
 - A ventoinha do laser gera 170,2 Hz + harmônicos (340, 510, 681, 851, 1021 Hz; f0 varia 169,6–171,8 Hz), que
   chegam ao INMP441 também pela bancada.
 - 2º SOI montado (em uso desde 24/11); o 1º foi para teste de um amigo.
-- PC do lab (fica com o SOI): laptop Windows 10, tela 1366×768 (Ubuntu descartado em 23/11). PC padrão de
-  desenvolvimento e testes: sbook2.
+- PC do lab (fica com o SOI): laptop Windows 10, tela 1366×768 (Ubuntu descartado em 23/11). PC oficial de
+  desenvolvimento e testes (desde 26/11): "Ideapad" (i3-6100U), `C:\Users\marco\Desktop\Claude\SOI`.
 
 ## Estrutura
 - `firmware/` — STM32Cube (HAL + USB Device da ST em `src/usb`), PlatformIO com `framework = stm32cube`.
@@ -35,57 +35,51 @@ diodo baratos, sem lock-in nem chopper comerciais. Meta: sistema pequeno e port�
   `soi_serie.py` (aba Medidas em Série), `soi_ruido.py` (detectar ruídos de fundo), `soi_layout.py` (2.5.0:
   painel lateral com seções recolhíveis, ajuste à tela). `docs/tests/check_window_size.py` confere 1366×768 a 125 %.
 - `rodar_interface.bat`, `varredura.bat`, `campanha_deriva.bat` — atalhos (miniconda).
-- Pasta local do PC padrão (sbook2, `Projetos\Claude\SOI`) é um clone git e se atualiza só por git (checkout da
+- Pasta local do PC oficial (Ideapad, `Desktop\Claude\SOI`) é um clone git e se atualiza só por git (checkout da
   branch em teste ou `git pull`), sem cópias de arquivos. Medidas e dados ficam fora do git.
 - `docs/01..08` (inglês; 07 = calibração, 08 = exemplos com medidas reais), `examples/` (CSVs + script das
   figuras), `docs/tests/`, `packaging/` + `.github/workflows` (executável nas Releases).
 
 ## Versões
-- `main`: interface 2.4.0 (PR #8, 25/11; inclui a divisão em módulos), firmware 2.0.0. Releases publicadas:
-  v1.0.0 (27/10) e v2.3.0 (17/11). A 2.4.0 não terá release.
-- Em desenvolvimento: interface 2.5.0 (firmware intacto) na branch `claude/project-thread-2v4sgr`, sem PR;
-  no sbook2 desde 25/11. Testada no modo simulado; teste com experimentos em 26/11. Se passar, vira a próxima
-  release (pulando a 2.4); release e PR só a pedido.
+- `main`: interface 2.4.0 (PR #8, 25/11), firmware 2.0.0. Releases publicadas: v1.0.0 (27/10) e v2.3.0 (17/11).
+  A 2.4.0 e a 2.5.0 não terão release própria.
+- Release 2.5.1 (27/11, firmware 2.0.0 intacto): branch `claude/project-thread-8d8oy5` (inclui a 2.5.0: janela para
+  1366×768, simulado automático, remoções; e a 2.5.1: varreduras da aba OPT101/INMP441 no padrão do Modo Duplo,
+  warm-up 600 s, Configurações enxuta). PR para main; tag v2.5.1 e executável Windows só depois do OK do Marcos.
 - Versões de firmware e interface são independentes (ver CLAUDE.md).
 
-## Próximo PR (só quando o Marcos pedir)
-Interface 2.5.0, branch `claude/project-thread-2v4sgr` (lista no CHANGELOG, seção 2.5.0): janela para 1366×768
-(painel lateral com seções, osciloscópio recolhível, cabe a 125 %); simulado automático sem STM32; saem Célula/modo
-OPC, imagens, Teste de resolução, Filtro 60 Hz, Refinar ressonância, Diagnóstico, quadros de fit nas FFTs,
-passa-altas manual; τ adaptativo e τ fixo iguais em toda a faixa; varredura começa em 1 Hz.
-
 ## Descobertas principais (detalhes em NOTAS_MEDIDAS.md)
-- Até 23/11, < 30–40 Hz dominava o ruído acústico (fundo diurno 3–5× o noturno); com a célula nova a baixa
-  frequência mede bem (rever com a bateria de 26/11). Dados até 23/11 não confiáveis (arquivados).
-- Deriva de S ao ligar o laser: aquecimento local sob o feixe (não a T média da peça); some após ~11 min. Warm-up 10–15 min.
-- Evitar múltiplos de 60 Hz e a série da ventoinha (170,2 Hz + harmônicos).
-- Varredura recomendada: τ 1 s, 3 repetições, mediana, ordem embaralhada.
+- Dados até 23/11 não confiáveis (arquivados). Com a célula nova a baixa frequência mede bem.
+- Campanha noturna 26–27/11 (48/48 medidas): 1 repetição basta; warm-up de 120 s basta para o S normalizado
+  (Modo Duplo), mas 600 s por sensor isolado (OPT101 leva 600–1200 s); τ adaptativo = precisão do fixo em metade do
+  tempo; PWM a partir de 40 %; o limite é a deriva entre horas → referência no mesmo bloco de tempo; zerar filtros
+  funciona nas varreduras embaralhadas.
+- Deriva de S ao ligar o laser: aquecimento local sob o feixe. Evitar múltiplos de 60 Hz e a série da ventoinha (170,2 Hz).
 - SNR do ponto: verde ≥ 25 dB (erro ≲ 10 %), amarelo 15–25, vermelho < 15 dB.
-- Calibração por duas amostras (Al + Inox, sempre a mesma face); conferir f0 da célula (estados ~1,05/1,54/1,79 kHz) antes de aplicar.
+- Calibração por duas amostras (Al + Inox, sempre a mesma face); conferir f0 da célula antes de aplicar.
+  Trocar a amostra altera o alinhamento: não comparar intensidades entre amostras, só forma e fase.
 
 ## Planos próximos
-- 26/11: teste da 2.5.0 com experimentos; bateria consolidada (ruído, parâmetros do lock-in, τ adaptativo);
-  fixar a reflexão da lamínula do OPT101. A otimização de parâmetros espera esses dados.
-- Avaliar offline a correção de deriva entre blocos com os dados novos; medir o disco pequeno.
-- Laptop do lab (Windows 10, 1366×768): validar a 2.5.0 nele.
-- Medir o trimpot de ganho do OPT101 (500k em paralelo com o 1M interno).
+- Próximo passo: chopper mecânico com cooler PC de 4 fios controlado pelo STM32 (PWM do cooler no firmware,
+  varredura automática; referência óptica pelo OPT101 já existe em Config → Trigger → Óptico). Cuidado com o ruído do
+  cooler coerente com a modulação. Entra no mesmo firmware (2.1.0) que o desligamento automático do laser.
+- Obter medidas experimentais válidas nos próximos dias para um artigo (Marcos pedirá ajuda com dados e gráficos).
+- Laptop do lab (Windows 10, 1366×768): validar a 2.5.1. Medir o trimpot de ganho do OPT101 (500k // 1M interno).
+- PCB do SOI em standby.
 
 ## Pendências / ideias
 - LEMBRETE: medida de 24 h do ruído acústico (fundo com PWM 0, Sinal x t em ~10, 30 e 100 Hz) para ver a
   variação com o horário (aulas, rodovia).
 - Segundo INMP441 de referência fora da célula (L/R no mesmo I2S): subtração no PC com H calibrado ou LMS;
   calibrar com chirp numa caixa de som em várias posições. Verificar banda USB para 2 canais a 48 kHz.
-- Sensor NTC na parede da célula lido pelo ADC1 (canal injetado no PA1, sem perder amostras) — proposta,
-  aguarda aprovação (muda firmware e interface).
 - Célula diferencial (tipo Miklós) para cancelar ruído ambiente — ideia futura.
-- Regra do τ com blocos e incerteza u (proposta no relatório da campanha), se aprovada.
 - Subtração do fundo do ventilador no modo óptico (feixe bloqueado); firmware opcional com entrada TTL no bit 14.
 - Itens ⚠ em docs/01 e docs/02: driver do laser, alimentação do OPT101, descrição da célula.
 - Entrada limitada a 0–3,3 V (avaliar condicionamento de sinal).
 - Aba HP 34401A (RS-232/SCPI) — ideia, não iniciada.
 - Lâmpada flash Hamamatsu L9456-01 (trigger pelo STM32), pulsos lidos pelo OPT101 a ~200 kS/s.
-- Aguardam OK: firmware 2.0.1 com desligamento automático do laser; chopper mecânico com cooler 4 pinos;
-  célula com espaçador; célula de volume mínimo (resina); duas camadas de eletrodos; requisitos da PCB.
+- Abandonadas em 27/11 (a célula nova melhorou muito o sistema): sensor NTC na câmara, célula com espaçador,
+  célula de volume mínimo, modelo de duas camadas, correção de deriva entre blocos.
+- Aguardam OK / firmware 2.1.0 (junto com o chopper): desligamento automático do laser.
 - Separar ruído da sala × vibração por coerência entre dois INMP441 (Marcos testará).
-- Atualização de firmware pela interface (liberada depois do PR da 2.4.x).
 - Esta interface é a referência de estilo para QuadPV e TipGas.
