@@ -104,6 +104,19 @@ and τ 1 s, τ 0.5 s, adaptive τ and ascending order agreed within ±0.3 %.
 - Measurement Series: new sweep steps default to 4–2440 Hz, 40 points, adaptive τ 1 s, warm-up 120 s, 1 repetition;
   PWM steps start at 30 %. Saved series files keep what they say.
 
+### Changed: Dual Mode end-of-measurement box and repetitions plot (2026-11-27, requested by Marcos)
+- The status box shows only the file name after "Finished:" / "Saved again:" (the full path is in the tooltip), so it no
+  longer gets cut off on 1366×768. The "Last (…)" fluctuation text now breaks only between the heading and the values,
+  and between S and Δφ, instead of splitting "Δφ ±1.5°".
+- In repeated sweeps, each repetition is drawn in its own colour (Marcos' palette, faded and lighter, thin line) behind
+  the highlighted median, instead of all in grey.
+- The time axis of the oscilloscope and of the Average mode (average waveform) now switches by itself between s, ms
+  and µs according to the visible span (the axis label follows); the Lock-In plot also gets µs.
+- **Calibration refused sweeps measured in this version** ("this sweep was made in cell None…", *Generate calibration*
+  disabled): the CSV header was written as `# Celula = None` when the (hidden) cell combo had no item. The header now
+  always says `Camara`, the combo is reset to the Câmara at start-up, and the *Open…* check accepts the files already
+  saved with `None` (so the Al and Inox sweeps of 2026-11-27 open normally).
+
 ### Removed (requested by Marcos, 2026-11-25)
 - **"Simular amostragem" box:** without the STM32 the interface now enters simulated mode by itself (2 s after
   opening) and goes back to the board when it connects. It never switches to simulation during a measurement (a USB

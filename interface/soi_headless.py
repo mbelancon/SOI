@@ -203,7 +203,7 @@ def _headless_noise(win, a, pump):
            f"gravacao; INMP441 a {fs:.0f} S/s (media de 4 amostras)" + ('; SIMULADO' if a.simulado else ''),
            f'Welch Hann {soi_ruido.SEG_S:g} s; fundo = mediana movel +-{soi_ruido.BG_HALF_HZ:g} Hz; limiar {thr:g} dB'
            + (f'; com a fonte >= {soi_ruido.CMP_DB:g} dB acima' if a.comparar else ''),
-           f'Celula = {win.cmb_cell.currentData()}']
+           f'Celula = {win.cmb_cell.currentData() or "Camara"}']
     path = os.path.join(folder, stem + '.csv')
     soi_ruido.save_csv(path, res, hdr)
     soi_ruido.save_bin(os.path.join(folder, stem + '.bin'), x)

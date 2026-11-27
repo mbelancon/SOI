@@ -170,7 +170,8 @@ class CalMixin:
             return
         m = re.search(r'#\s*Celula\s*=\s*(\w+)', head)
         cell = self.cmb_cell.currentData() or 'Camara'
-        if m and m.group(1) != cell:
+        # arquivos gravados pela 2.5.0 em desenvolvimento têm "# Celula = None" (combo sem item): a célula é a Câmara
+        if m and m.group(1) not in (cell, 'None'):
             QtWidgets.QMessageBox.warning(
                 self, 'Abrir varredura', f'Esta varredura foi feita na célula {CELLS.get(m.group(1), m.group(1))}, e a '
                 f'escolhida é {CELLS.get(cell, cell)}. A calibração vale para uma célula só: troque a célula no topo ou '

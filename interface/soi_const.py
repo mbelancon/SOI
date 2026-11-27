@@ -319,5 +319,11 @@ def hann_kernel(d):
     return np.abs(np.sinc(d) + 0.5 * (np.sinc(d - 1.0) + np.sinc(d + 1.0)))
 
 
+# Cores (RGB) das repetições no gráfico: paleta pessoal do Marcos (dodgerblue, coral, palegreen, gold, violet e a
+# extensão lightseagreen, sandybrown, skyblue, hotpink, yellowgreen); a mediana fica em destaque por cima.
+REP_COLORS = [(30, 144, 255), (255, 127, 80), (152, 251, 152), (255, 215, 0), (238, 130, 238),
+              (32, 178, 170), (244, 164, 96), (135, 206, 235), (255, 105, 180), (154, 205, 50)]
+
 # Exporta tudo (inclusive nomes com _) para os módulos que fazem import *
 __all__ = [_n for _n in dir() if not _n.startswith('__')]
+

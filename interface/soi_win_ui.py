@@ -114,6 +114,7 @@ class UiMixin:
         # "None" no aviso da calibração e nos CSV): qualquer índice inválido volta para a Câmara
         self.cmb_cell.currentIndexChanged.connect(
             lambda i: self.cmb_cell.setCurrentIndex(0) if i < 0 and self.cmb_cell.count() else None)
+        self.cmb_cell.setCurrentIndex(0)
         # SNR dos dois lock-ins, a cada segundo: |média de Z| / σ por quadratura de Z = X + jY nos últimos
         # SNR_TOP_WINDOW_S (o mesmo critério do gráfico Ruído/SNR do INMP441)
         self.lbl_snr_top = QtWidgets.QLabel('SNR OPT/INMP: — / — dB')
@@ -252,7 +253,9 @@ class UiMixin:
         sec_scope.add(self.ext_range_w)
 
         # Osciloscópio
-        self.plot_raw = pg.PlotWidget()
+        ax_raw = TimeAxis(orientation='bottom')
+        ax_raw.base_label = 'Tempo'
+        self.plot_raw = pg.PlotWidget(axisItems={'bottom': ax_raw})
         pi = self.plot_raw.getPlotItem()
         # Legenda no título: dentro do gráfico ela ficava em cima do traço
         pi.setTitle('Sinal bruto do ADC (PA0, <span style="color:#000;">preto</span>) e referência do laser '

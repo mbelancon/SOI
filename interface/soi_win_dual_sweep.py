@@ -441,24 +441,35 @@ class DualSweepMixin:
               flush=True)
 
     def _dual_draw_reps(self, x=None, s=None, ok=None):
-        """Repetições em cinza claro atrás da mediana (gráfico principal da varredura em frequência)."""
+        """Repetições esmaecidas, cada uma numa cor da paleta do Marcos, atrás da mediana destacada (gráfico
+        principal da varredura em frequência)."""
         if not hasattr(self, 'pw_dual_a'):
             return
-        if getattr(self, 'c_dual_reps', None) is None:
-            self.c_dual_reps = self.pw_dual_a.plot([], [], pen=None, symbol='o', symbolSize=5,
-                                                   symbolBrush=pg.mkBrush(150, 150, 150, 120), symbolPen=None)
-            self.c_dual_reps.setZValue(-5)
+        items = getattr(self, 'c_dual_reps', None) or []
         med = getattr(self, 'dual_median', None)
         if med is None or x is None or self.dual_kind != 'F' or med['S'].shape[1] != len(x):
-            self.c_dual_reps.setData([], [])
+            for it in items:
+                it.setData([], [])
             return
         src = med['S'] if self.chk_dual_norm.isChecked() else med['ra']
         with np.errstate(divide='ignore', invalid='ignore'):
             rel = src / np.nanmedian(src, axis=0)          # cada repetição relativa à mediana, na escala do gráfico
             ys = rel * s[None, :]
-        xs = np.broadcast_to(x, ys.shape)
-        mk = np.broadcast_to(ok, ys.shape) & np.isfinite(ys) & (ys > 0)
-        self.c_dual_reps.setData(xs[mk], ys[mk])
+        n = ys.shape[0]
+        while len(items) < n:
+            r, g, b = REP_COLORS[len(items) % len(REP_COLORS)]
+            it = self.pw_dual_a.plot([], [], pen=pg.mkPen(r, g, b, 70, width=1), symbol='o', symbolSize=5,
+                                     symbolBrush=pg.mkBrush(r, g, b, 120), symbolPen=None)
+            it.setZValue(-5)
+            items.append(it)
+        self.c_dual_reps = items
+        xa = np.asarray(x, float)
+        for i, it in enumerate(items):
+            if i >= n:
+                it.setData([], [])
+                continue
+            mk = np.asarray(ok, bool) & np.isfinite(ys[i]) & (ys[i] > 0)
+            it.setData(xa[mk], ys[i][mk])
 
     @staticmethod
     def _fmt_tau(t):
@@ -475,6 +486,7 @@ class DualSweepMixin:
         e do último ponto na 2ª; cor pela flutuação (verde dentro da Precisão, amarelo até 2×, vermelho acima).'''
         info = getattr(self, 'adapt_info', '') if 'refazendo' in getattr(self, 'adapt_info', '') else ''
         self.lbl_dual_status.setText(text + info)
+        self.lbl_dual_status.setToolTip('')
         tol = self.sp_dual_adapt_tol.value()
         now = getattr(self, 'fluct_now', '')
         self.lbl_dual_now.setText(now + (f' &nbsp;(alvo {tol:g} % / {np.degrees(tol / 100.0):.2g}°)'.replace('.', ',')
@@ -499,10 +511,13 @@ class DualSweepMixin:
             tau = (self.adapt_taus[-1] if final and self.adapt_taus else self._adapt_tau_at(self.dual_src, f))
         else:
             tau = self.sp_audio_tau.value()
-        txt = f"<span style='color:{color};'>S ±{s_s:.2g} %, Δφ ±{s_p:.2g}°</span>".replace('.', ',')
+        # espaços não separáveis: se faltar largura, quebra só entre S e Δφ, nunca no meio de "Δφ ±1,5°"
+        txt = (f"<span style='color:{color};'>S&nbsp;±{s_s:.2g}&nbsp;%,</span> "
+               f"<span style='color:{color};white-space:nowrap;'>Δφ&nbsp;±{s_p:.2g}°</span>").replace('.', ',')
         if final:
             fv = head.split('] ')[-1]
-            self.fluct_last = f'Último ({fv}, τ = {self._fmt_tau(tau)}): {txt}'
+            head_nb = f'Último ({fv}, τ = {self._fmt_tau(tau)}):'.replace(' Hz,', '&nbsp;Hz, ').replace(' ', '&nbsp;')
+            self.fluct_last = (head_nb.replace('Hz,&nbsp;', 'Hz, ') + '<br>' + txt).replace('.', ',')
             self.fluct_now = ''
         else:
             self.fluct_now = f'Agora ({elapsed:.0f} s): {txt}'
@@ -1206,7 +1221,7 @@ class DualSweepMixin:
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 f.write(f"# Modo Duplo - {now_dt.strftime('%Y-%m-%d %H:%M:%S')}\n# {what}\n"
-                        f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData()}\n")
+                        f"# Medida: {q['mode']}; {tau}\n# Celula = {self.cmb_cell.currentData() or 'Camara'}\n")
                 ext_cols = q.get('mod') == 'optica' and len(getattr(self, 'dual_fstd', [])) == len(self.dual_results)
                 if not resave and q.get('t_start') and not q.get('t_end'):
                     q['t_end'] = now_dt
@@ -1343,11 +1358,13 @@ class DualSweepMixin:
                 self._session_add(*self._calibration_files(self.dual_cal['path']))
             if resave:
                 self.flash(f'Varredura do Modo Duplo salva de novo: {csv_path}', 6.0)
-                self.lbl_dual_status.setText(f'Salva de novo: {csv_path}')
+                self.lbl_dual_status.setText(f'Salva de novo: {os.path.basename(csv_path)}')
+                self.lbl_dual_status.setToolTip(csv_path)
             else:
                 self.dual_last_csv = csv_path
                 self.flash(f'Varredura do Modo Duplo concluída: {csv_path}', 6.0)
-                self.lbl_dual_status.setText(f'Concluída: {csv_path}')
+                self.lbl_dual_status.setText(f'Concluída: {os.path.basename(csv_path)}')
+                self.lbl_dual_status.setToolTip(csv_path)       # caminho completo só no balão (cabia cortado)
         except Exception as e:
             print(f'Erro ao salvar a varredura do Modo Duplo: {e}')
 

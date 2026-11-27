@@ -301,11 +301,13 @@ class OptMixin:
             self.phase_vb.setYRange(-0.05, 1.25, padding=0)
             self.update_avg_ref_line()
             p1.hideAxis('right')
-            p1.getAxis('bottom').lockin_time = False
+            ax = p1.getAxis('bottom')
+            ax.base_label, ax._unit = 'Tempo desde o início do pulso', 's'
             self.line_r.setData([], [])
             self.line_r.setSymbol(None)
             p1.setLabel('left', 'ADC médio')
             p1.setLabel('bottom', 'Tempo desde o início do pulso (s)')
+            p1.getAxis('bottom').lockin_time = True
             p1.setTitle('Forma de Onda Média do ADC')
             p1.setXRange(-self.average_pretrigger_sec, 1.0 / max(self.ref_freq, 0.1), padding=0)
         else:
@@ -314,6 +316,7 @@ class OptMixin:
             self.phase_vb.setYRange(-180, 180, padding=0)
             p1.showAxis('right')
             p1.getAxis('bottom').lockin_time = True
+            p1.getAxis('bottom').base_label = TimeAxis.base_label
             self.line_r.setSymbol('o')
             self.line_r.setSymbolSize(4)
             self.line_r.setSymbolBrush('b')

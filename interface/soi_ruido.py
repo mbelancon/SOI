@@ -483,7 +483,7 @@ def make_dialog(win):
                    f'Welch Hann {SEG_S:g} s (resolucao {1 / SEG_S:g} Hz); fundo = mediana movel +-{BG_HALF_HZ:g} Hz; '
                    f'limiar {self.sp_thr.value():g} dB' + (f'; com a fonte >= {self.sp_cmp.value():g} dB acima'
                                                            if mode == 'com' else ''),
-                   f'Celula = {win.cmb_cell.currentData()}']
+                   f'Celula = {win.cmb_cell.currentData() or "Camara"}']
             try:
                 save_csv(os.path.join(folder, stem + '.csv'), res, hdr)
                 save_bin(os.path.join(folder, stem + '.bin'), x)

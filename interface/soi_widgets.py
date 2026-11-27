@@ -55,20 +55,27 @@ pg.AxisItem.logTickStrings = _log_tick_strings
 
 
 class TimeAxis(pg.AxisItem):
-    '''Eixo de tempo com unidade nos rótulos (s ou ms).'''
+    '''Eixo de tempo que troca sozinho entre s, ms e µs conforme o espaçamento dos rótulos; o rótulo do eixo
+    ("<base_label> (unidade)") acompanha. A unidade em uso fica em `_unit`.'''
     lockin_time = True
     base_label = 'Tempo antes do instante atual'
     _unit = None
 
+    @staticmethod
+    def unit_for(span):
+        '''Unidade pela largura visível (e não pelo espaçamento de cada nível de ticks, que difere entre os
+        principais e os secundários e misturava unidades).'''
+        sp = abs(span)
+        return ('µs', 1e6) if sp < 1.5e-3 else (('ms', 1e3) if sp < 0.5 else ('s', 1.0))
+
     def tickStrings(self, values, scale, spacing):
         if not self.lockin_time:
             return super().tickStrings(values, scale, spacing)
-        ms = abs(spacing) < 0.1
-        unit = 'ms' if ms else 's'
+        unit, k = self.unit_for(self.range[1] - self.range[0])
         if unit != self._unit:
             self._unit = unit
             QtCore.QTimer.singleShot(0, lambda: self.lockin_time and self.setLabel(f'{self.base_label} ({self._unit})'))
-        return [f'{v * 1000:g}' if ms else f'{v:g}' for v in values]
+        return [f'{v * k:g}' for v in values]
 
 
 class ModeSwitch(QtWidgets.QAbstractButton):
